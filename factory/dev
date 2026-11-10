@@ -55,6 +55,10 @@ move() { # id from to
   mv "$F/tasks/$2/$1.md" "$F/tasks/$3/$1.md" 2>/dev/null
 }
 
+# Builders, the integrator and after-checks share one set of remote-tracking
+# refs, and concurrent fetches into it fail with "cannot lock ref".
+fetch() { flock "$F/locks/fetch" git -C "$ROOT" fetch -q origin; }
+
 new_id() {
   local n=1
   until mkdir "$F/ids/$(printf 'b%04d' $n)" 2>/dev/null; do n=$((n + 1)); done
@@ -117,7 +121,7 @@ claim() { # builder -> id. Order: own unfinished build, own ready, unowned ready
 trusted_checks() {
   CHECKS=$(mktemp)
   trap 'rm -f "$CHECKS"' EXIT
-  git -C "$ROOT" fetch -q origin
+  fetch
   git -C "$ROOT" show origin/main:factory/checks.sh >"$CHECKS"
 }
 
@@ -236,7 +240,7 @@ cmd_submit() { # id
 
 land() { # id, in the integrator worktree
   local id=$1 sha files out
-  git fetch -q origin
+  fetch
   git checkout -q --detach origin/main
   git reset -q --hard
   git clean -qfd
@@ -292,7 +296,7 @@ cmd_after() { # sha [task-id]
   else
     parent=$(git rev-parse "$sha^1")
     [ ! -e "$F/locks/after-$parent" ] || flock "$F/locks/after-$parent" true
-    git fetch -q origin
+    fetch
     exec 6>"$F/locks/red"
     flock 6
     if grep -lqs '^culprit: ' "$F"/tasks/{ready,building,submitted,stuck}/*.md; then
@@ -318,7 +322,7 @@ EOF
 }
 
 cmd_gate() { # the scheduled full gate: check whatever main is now
-  git -C "$ROOT" fetch -q origin
+  fetch
   cmd_after "$(git -C "$ROOT" rev-parse origin/main)"
 }
 
@@ -355,7 +359,7 @@ cmd_scout() {
   local have wt=$F/wt/_scout
   have=$(find "$F/tasks/ready" -name '*.md' | wc -l)
   [ "$have" -lt "$FACTORY_QUEUE" ] || return 0
-  git -C "$ROOT" fetch -q origin
+  fetch
   git -C "$ROOT" worktree add -q --detach "$wt" origin/main
   (
     cd "$wt"
@@ -384,7 +388,7 @@ cmd_drain() { # wait for every after and review run still in flight
 
 cmd_status() {
   local s f
-  git -C "$ROOT" fetch -q origin
+  fetch
   echo "main       $(git -C "$ROOT" rev-parse --short origin/main)"
   echo "main-green $(git -C "$ROOT" rev-parse --short -q --verify origin/main-green || echo none)"
   for s in ready building submitted stuck landed; do
