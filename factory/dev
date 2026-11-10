@@ -59,6 +59,11 @@ move() { # id from to
 # refs, and concurrent fetches into it fail with "cannot lock ref".
 fetch() { flock "$F/locks/fetch" git -C "$ROOT" fetch -q origin; }
 
+fresh_wt() { # path ref -> a detached worktree, replacing one a killed run left
+  git -C "$ROOT" worktree remove --force "$1" 2>/dev/null || true
+  git -C "$ROOT" worktree add -q --detach "$1" "$2"
+}
+
 new_id() {
   local n=1
   until mkdir "$F/ids/$(printf 'b%04d' $n)" 2>/dev/null; do n=$((n + 1)); done
@@ -241,9 +246,9 @@ cmd_submit() { # id
 land() { # id, in the integrator worktree
   local id=$1 sha files out
   fetch
-  git checkout -q --detach origin/main
-  git reset -q --hard
+  git reset -q --hard # first: a crash mid-merge leaves an index checkout refuses
   git clean -qfd
+  git checkout -q --detach origin/main
   if ! git merge-base --is-ancestor "task/$id" HEAD; then # else: pushed before a crash
     if ! git merge -q --no-ff -m "merge task/$id: $(meta "$id" title)" "task/$id" >/dev/null 2>&1; then
       files=$(git diff --name-only --diff-filter=U | tr '\n' ' ')
@@ -287,7 +292,7 @@ cmd_integrate() {
 # Red files one task naming the culprit and never blocks a landing.
 cmd_after() { # sha [task-id]
   local sha=$1 id=${2:-} wt=$F/wt/_after-$1 out parent culprit owner=""
-  git -C "$ROOT" worktree add -q --detach "$wt" "$sha"
+  fresh_wt "$wt" "$sha"
   cd "$wt"
   if out=$(bash factory/checks.sh full 2>&1); then
     # No force: the push is fast-forward only, so main-green never moves back.
@@ -360,7 +365,7 @@ cmd_scout() {
   have=$(find "$F/tasks/ready" -name '*.md' | wc -l)
   [ "$have" -lt "$FACTORY_QUEUE" ] || return 0
   fetch
-  git -C "$ROOT" worktree add -q --detach "$wt" origin/main
+  fresh_wt "$wt" origin/main
   (
     cd "$wt"
     $AGENT "You are the scout of a software factory. Propose $((FACTORY_QUEUE - have)) tasks for this repository.
