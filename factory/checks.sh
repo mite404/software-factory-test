@@ -16,7 +16,7 @@ guard() {
 touched_tests() { # base-ref -> test paths, one per line
   git diff --name-only "$1"...HEAD -- 'src/*.ts' |
     sed -E 's/(\.test)?\.ts$/.test.ts/' | sort -u |
-    while read -r f; do [ -f "$f" ] && echo "./$f"; done
+    while read -r f; do [ ! -f "$f" ] || echo "./$f"; done
 }
 
 bun install --frozen-lockfile --silent
