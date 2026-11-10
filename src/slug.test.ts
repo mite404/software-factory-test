@@ -46,6 +46,22 @@ test("turns every dash back into a space", () => {
   expect(unslugify("hello-world-again")).toBe("hello world again");
 });
 
+test("reject unicode lookalikes", () => {
+  for (const { input, valid } of [
+    { input: "ａｂｃ", valid: false },
+    { input: "a-٠", valid: false },
+    { input: "a-０", valid: false },
+    { input: "а-с", valid: false },
+    { input: "e\u0301", valid: false },
+    { input: "a-😀", valid: false },
+    { input: "a–b", valid: false },
+    { input: "a-0", valid: true },
+    { input: "abc-123", valid: true },
+  ]) {
+    expect(isSlug(input)).toBe(valid);
+  }
+});
+
 test("recognizes only already-valid slugs", () => {
   for (const s of ["a", "0", "a-b", "abc-123", "a".repeat(40)]) {
     expect(isSlug(s)).toBe(true);
