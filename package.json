@@ -1,0 +1,10 @@
+{
+  "name": "software-factory",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@types/bun": "^1.1.0",
+    "prettier": "^3.3.0",
+    "typescript": "^5.5.0"
+  }
+}
