@@ -62,6 +62,20 @@ test("reject unicode lookalikes", () => {
   }
 });
 
+test("unslugify edge inputs", () => {
+  for (const [input, expected] of [
+    ["", ""],
+    ["Crème 日本語", "Crème 日本語"],
+    ["-a", " a"],
+    ["a-", "a "],
+    ["a--b", "a  b"],
+    ["-a--b-", " a  b "],
+    ["a–b", "a–b"],
+  ]) {
+    expect(unslugify(input)).toBe(expected);
+  }
+});
+
 test("recognizes only already-valid slugs", () => {
   for (const s of ["a", "0", "a-b", "abc-123", "a".repeat(40)]) {
     expect(isSlug(s)).toBe(true);
