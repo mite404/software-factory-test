@@ -1,6 +1,21 @@
 import { expect, test } from "bun:test";
 import { isSlug, slugify, unslugify } from "./slug";
 
+test("empty slug inputs", () => {
+  for (const input of [
+    "",
+    "   ",
+    "\t",
+    "\n",
+    " \t\n ",
+    "!.,?",
+    "---",
+    " -\t!\n-- ",
+  ]) {
+    expect(slugify(input)).toBe("");
+  }
+});
+
 test("replaces runs of non-alphanumerics with one dash", () => {
   expect(slugify("  Hello,  World! ")).toBe("hello-world");
 });
