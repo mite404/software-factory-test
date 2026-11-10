@@ -17,6 +17,7 @@ SELF=$(readlink -f "$0")
 : "${FACTORY_QUEUE:=5}"                     # ready tasks the scout tops up to
 : "${FACTORY_FAST:=(\.md$|^docs/)}"         # a diff of only these paths takes the fast lane
 : "${FACTORY_RISKY:=^(factory/|\.github/)}" # a diff touching these paths is reviewed
+: "${FACTORY_EVERY:=21600}"                 # seconds between loop runs; 4 runs a day
 
 declare -A STAGES=(
   [normal]="compile fmt guard test"
@@ -414,9 +415,19 @@ cmd_run() { # one loop: scout, build in parallel, land serially, check, report
   cmd_status
 }
 
+# The schedule: a run, then the full gate, every FACTORY_EVERY seconds. Keep it
+# under a supervisor, e.g. `amp orb service start factory --command 'factory/dev loop'`.
+cmd_loop() {
+  while :; do
+    "$SELF" run || log "run failed"
+    "$SELF" gate || log "gate failed"
+    sleep "$FACTORY_EVERY"
+  done
+}
+
 cmd=${1:-status}
 shift || true
 case "$cmd" in
-  task | build | submit | integrate | after | gate | review | scout | drain | status | run) "cmd_$cmd" "$@" ;;
+  task | build | submit | integrate | after | gate | review | scout | drain | status | run | loop) "cmd_$cmd" "$@" ;;
   *) die "unknown command: $cmd" ;;
 esac
