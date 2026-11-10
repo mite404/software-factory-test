@@ -10,3 +10,8 @@ export function slugify(input: string): string {
     .replace(/^-+|-+$/g, "")
     .slice(0, MAX_SLUG);
 }
+
+/** Turns every dash into a space. */
+export function unslugify(s: string): string {
+  return s.replaceAll("-", " ");
+}
