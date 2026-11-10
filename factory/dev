@@ -371,13 +371,13 @@ cmd_scout() {
     $AGENT "You are the scout of a software factory. Propose $((FACTORY_QUEUE - have)) tasks for this repository.
 Read factory/sources.md for where to look. Each task must fit in one commit and have a
 '## Done when' section with a command that fails today. Do not edit any file.
-Create each task by running:
-  $SELF task add '<title>' <<'TASK'
-  <what to do and why>
+Create each task by running this, with every line starting in column 1:
+$SELF task add '<title>' <<'TASK'
+<what to do and why>
 
-  ## Done when
-  \`<command>\` passes.
-  TASK
+## Done when
+\`<command>\` passes.
+TASK
 Skip anything already tracked:
 $(grep -hs '^title: ' "$F"/tasks/*/*.md)" >>"$F/log/scout.log" 2>&1 || true
   )
