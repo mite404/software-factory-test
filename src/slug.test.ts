@@ -13,6 +13,20 @@ test("truncates to 40 characters", () => {
   expect(slugify("a".repeat(50))).toBe("a".repeat(40));
 });
 
+test("truncated slug stays valid", () => {
+  const truncated = slugify("a".repeat(39) + " b");
+  expect(truncated).toBe("a".repeat(39));
+  expect(isSlug(truncated)).toBe(true);
+
+  const beforeCutoff = slugify("a".repeat(38) + " bc");
+  expect(beforeCutoff).toBe("a".repeat(38) + "-b");
+  expect(isSlug(beforeCutoff)).toBe(true);
+
+  const afterCutoff = slugify("a".repeat(40) + " b");
+  expect(afterCutoff).toBe("a".repeat(40));
+  expect(isSlug(afterCutoff)).toBe(true);
+});
+
 test("turns every dash back into a space", () => {
   expect(unslugify("hello-world-again")).toBe("hello world again");
 });
