@@ -28,6 +28,22 @@ test("truncates to 40 characters", () => {
   expect(slugify("a".repeat(50))).toBe("a".repeat(40));
 });
 
+test("slugify is idempotent", () => {
+  for (const [input, expected] of [
+    ["hello-world", "hello-world"],
+    ["abc-123", "abc-123"],
+    ["Hello WORLD 123", "hello-world-123"],
+    ["Crème Brûlée", "creme-brulee"],
+    ["", ""],
+    ["a".repeat(50), "a".repeat(40)],
+    ["a".repeat(39) + " bc", "a".repeat(39)],
+  ]) {
+    const slug = slugify(input);
+    expect(slug).toBe(expected);
+    expect(slugify(slug)).toBe(slug);
+  }
+});
+
 test("truncated slug stays valid", () => {
   const truncated = slugify("a".repeat(39) + " b");
   expect(truncated).toBe("a".repeat(39));
