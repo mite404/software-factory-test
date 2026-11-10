@@ -328,8 +328,12 @@ EOF
 }
 
 cmd_gate() { # the scheduled full gate: check whatever main is now
+  local sha
   fetch
-  cmd_after "$(git -C "$ROOT" rev-parse origin/main)"
+  sha=$(git -C "$ROOT" rev-parse origin/main)
+  exec 8>"$F/locks/after-$sha" # the lock a spawned after holds: never two on one sha
+  flock 8
+  cmd_after "$sha"
 }
 
 # Review after landing, only for a risky or retried change. Findings become a
@@ -365,6 +369,8 @@ cmd_scout() {
   local have wt=$F/wt/_scout
   have=$(find "$F/tasks/ready" -name '*.md' | wc -l)
   [ "$have" -lt "$FACTORY_QUEUE" ] || return 0
+  exec 5>"$F/locks/scout"
+  flock -n 5 || return 0 # another scout is filling the same queue
   fetch
   fresh_wt "$wt" origin/main
   (
@@ -380,9 +386,10 @@ $SELF task add '<title>' <<'TASK'
 \`<command>\` passes.
 TASK
 Skip anything already tracked:
-$(grep -hs '^title: ' "$F"/tasks/*/*.md)" >>"$F/log/scout.log" 2>&1 || true
+$(grep -hs '^title: ' "$F"/tasks/*/*.md)" >>"$F/log/scout.log" 2>&1 5>&- || true
   )
   git -C "$ROOT" worktree remove --force "$wt"
+  exec 5>&- # builders started after the scout must not hold its lock
 }
 
 cmd_drain() { # wait for every after and review run still in flight
