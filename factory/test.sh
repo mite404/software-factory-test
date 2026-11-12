@@ -81,8 +81,8 @@ green() { git -C "$R" rev-parse origin/main-green; }
 logged() { grep -q "$1" "$F/log/factory.log"; }
 sessions_of() { sed -n "s/^$1 //p" "$tmp/sessions"; }
 last_prompt() { cat "$(ls -v "$tmp"/prompt-"$1"-* | tail -1)"; }
-task() { # title stub-script -> id
-  printf 'Test task.\n\n## Done when\n`true` passes.\n\n## Stub\n%s\n' "$2" | dev task add "$1"
+task() { # title stub-script [task add flags] -> id
+  printf 'Test task.\n\n## Done when\n`true` passes.\n\n## Stub\n%s\n' "$2" | dev task add "$1" "${@:3}"
 }
 
 git init -q --bare -b main "$tmp/origin.git"
@@ -152,8 +152,11 @@ ok "the task's record holds the verified facts" \
   "$F/tasks/landed/$stale.md" "$(meta "$stale" landed)"
 
 idle=$(task 'do nothing' 'true')
-for _ in 1 2 3; do dev build b1; done
+waiter=$(task 'add VERSION2' 'echo "export const V2 = 2;" >src/v2.ts' --after "$idle")
+for _ in 1 2 3 4; do dev build b1; done
 ok "three bounces park a task in stuck" [ "$(state "$idle") $(meta "$idle" bounces)" = "stuck 3" ]
+ok "a task waits while its dependency has not landed" [ "$(state "$waiter")" = ready ]
+ok "status shows what a task waits on" bash -c "'$R/factory/dev' status 2>/dev/null | grep '$waiter' | grep -q 'waits on $idle'"
 
 red=$(task 'shrink MAX_SLUG' 'sed -i "s/= 40/= 30/" src/limits.ts')
 dev build b1
@@ -170,8 +173,9 @@ dev drain
 ok "the fix landed through the fix lane" logged "$fix lane=fix"
 ok "the fix turned main green" [ "$(state "$fix")" = landed ] && ok "main-green caught up" [ "$(green)" = "$(main)" ]
 
-crash=$(task 'add VERSION' 'echo "export const VERSION = 1;" >src/version.ts')
+crash=$(task 'add VERSION' 'echo "export const VERSION = 1;" >src/version.ts' --after "$fix")
 dev build b1
+ok "a task whose dependency landed is built past a blocked one" [ "$(state "$crash")" = submitted ]
 wt=$F/wt/_integrator
 git -C "$wt" fetch -q origin
 git -C "$wt" checkout -q --detach origin/main

@@ -96,7 +96,14 @@ summarize() { # full output on stdin -> the few lines a reader needs first
   grep -m12 -E 'error|Error|FAIL|\(fail\)|✗|Expected|Received|Conflict|failed at stage' <<<"$all" || tail -12 <<<"$all"
 }
 
-add_task() { # title owner culprit < body -> id
+waiting_on() { # task-file -> dependencies that have not landed, space separated
+  local d
+  for d in $(sed -n '1,/^---$/s/^after: //p' "$1" 2>/dev/null); do
+    [ -e "$F/tasks/landed/$d.md" ] || printf '%s ' "$d"
+  done
+}
+
+add_task() { # title owner culprit after < body -> id
   local id body
   body=$(cat)
   grep -q '^## Done when' <<<"$body" || die "task '$1' has no '## Done when' section"
@@ -105,6 +112,7 @@ add_task() { # title owner culprit < body -> id
     echo "title: $1"
     [ -z "$2" ] || echo "owner: $2"
     [ -z "$3" ] || echo "culprit: $3"
+    [ -z "${4:-}" ] || echo "after: $4"
     echo "bounces: 0"
     echo "---"
     echo "$body"
@@ -138,6 +146,7 @@ claim() { # builder -> id. Order: own unfinished build, own ready, unowned ready
       id=$(basename "$f" .md)
       owner=$(sed -n '1,/^---$/s/^owner: //p' "$f" 2>/dev/null) || continue
       [ "$owner" = "$want" ] || continue
+      [ -z "$(waiting_on "$f")" ] || continue
       move "$id" ready building || continue # lost the race
       set_meta "$id" owner "$1"
       record "$id" "claimed by $1"
@@ -266,19 +275,20 @@ spawn() { # cmd sha [args]
 
 # --- commands --------------------------------------------------------------
 
-cmd_task() { # add <title> [--owner b] [--culprit sha] < body
-  [ "${1:-}" = add ] && [ -n "${2:-}" ] || die "usage: dev task add <title> [--owner b] [--culprit sha] < body"
-  local title=$2 owner="" culprit=""
+cmd_task() { # add <title> [--owner b] [--culprit sha] [--after id,id] < body
+  [ "${1:-}" = add ] && [ -n "${2:-}" ] || die "usage: dev task add <title> [--owner b] [--culprit sha] [--after id,id] < body"
+  local title=$2 owner="" culprit="" after=""
   shift 2
   while [ $# -gt 0 ]; do
     case "$1" in
       --owner) owner=$2 ;;
       --culprit) culprit=$2 ;;
+      --after) after=${2//,/ } ;;
       *) die "unknown flag $1" ;;
     esac
     shift 2
   done
-  add_task "$title" "$owner" "$culprit"
+  add_task "$title" "$owner" "$culprit" "$after"
 }
 
 cmd_build() { # builder
@@ -491,17 +501,33 @@ cmd_drain() { # wait for every after and review run still in flight
   done
 }
 
+# What a coordinator needs and nothing more: outcomes, dependencies and where
+# to look. Landings older than a day are only counted.
 cmd_status() {
-  local s f
+  local s f id extra recent old=0
   fetch
+  recent=$(git -C "$ROOT" log --since=24.hours --merges --format=%H origin/main)
   echo "main       $(git -C "$ROOT" rev-parse --short origin/main)"
   echo "main-green $(git -C "$ROOT" rev-parse --short -q --verify origin/main-green || echo none)"
   for s in ready building submitted stuck landed; do
     for f in "$F/tasks/$s"/*.md; do
       [ -e "$f" ] || continue
-      printf '%-10s %s  %s\n' "$s" "$(basename "$f" .md)" "$(sed -n '1s/^title: //p' "$f")"
+      id=$(basename "$f" .md)
+      extra=""
+      if [ "$s" = landed ]; then
+        grep -q "$(meta "$id" landed)" <<<"$recent" || {
+          old=$((old + 1))
+          continue
+        }
+        extra=" | $(meta "$id" landed | cut -c1-9)"
+      fi
+      [ -z "$(waiting_on "$f")" ] || extra+=" | waits on $(waiting_on "$f")"
+      [ "$(meta "$id" bounces)" = 0 ] || extra+=" | bounces $(meta "$id" bounces), last log $(latest_fail "$id")"
+      [ -z "$(meta "$id" culprit)" ] || extra+=" | culprit $(meta "$id" culprit | cut -c1-9)"
+      printf '%-10s %s  %s%s\n' "$s" "$id" "$(sed -n '1s/^title: //p' "$f")" "$extra"
     done
   done
+  echo "landed     $old more before the last 24 hours; details in $F/tasks/<state>/<id>.md"
 }
 
 cmd_run() { # one loop: scout, build in parallel, land serially, check, report
