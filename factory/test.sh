@@ -7,7 +7,16 @@ set -euo pipefail
 
 SELF=$(readlink -f "$0")
 
+if [ "${1:-}" = session ]; then
+  echo "s-$(date +%s%N)"
+  exit 0
+fi
 if [ "${1:-}" = agent ]; then
+  if [ -n "${FACTORY_TASK_FILE:-}" ]; then # a builder, called as: agent <session> <prompt>
+    t=$(basename "$FACTORY_TASK_FILE" .md) d=$(dirname "$TRACE")
+    echo "$t $2" >>"$d/sessions"
+    printf '%s' "$3" >"$d/prompt-$t-$(grep -c "^$t " "$d/sessions")"
+  fi
   if [ -z "${FACTORY_TASK_FILE:-}" ]; then # the scout
     factory/dev task add 'add countWords' <<'TASK' >/dev/null
 Count the words in a string.
@@ -36,7 +45,7 @@ TASK
   exit 0
 fi
 if [ "${1:-}" = review ]; then
-  if grep -q BUG <<<"$2"; then echo "factory/sources.md: a line says BUG."; else echo LGTM; fi
+  if grep -q BUG <<<"${*: -1}"; then echo "factory/sources.md: a line says BUG."; else echo LGTM; fi
   exit 0
 fi
 
@@ -48,6 +57,8 @@ R=$tmp/repo
 F=$R.factory
 unset FACTORY_HOME
 export AGENT="bash $SELF agent" REVIEWER="bash $SELF review" TRACE=$tmp/trace
+export AGENT_NEW_SESSION="bash $SELF session" AGENT_RESUME="bash $SELF agent {}"
+export REVIEWER_RESUME="bash $SELF review {}"
 export FACTORY_ATTEMPTS=1 FACTORY_BUILDERS=2 FACTORY_QUEUE=2
 export GIT_AUTHOR_NAME=factory GIT_AUTHOR_EMAIL=factory@test GIT_COMMITTER_NAME=factory GIT_COMMITTER_EMAIL=factory@test
 
@@ -68,6 +79,8 @@ id_of() { grep -l "^title: $1\$" "$F"/tasks/*/*.md | xargs -n1 basename | sed 's
 main() { git -C "$R" fetch -q origin && git -C "$R" rev-parse origin/main; }
 green() { git -C "$R" rev-parse origin/main-green; }
 logged() { grep -q "$1" "$F/log/factory.log"; }
+sessions_of() { sed -n "s/^$1 //p" "$tmp/sessions"; }
+last_prompt() { cat "$(ls -v "$tmp"/prompt-"$1"-* | tail -1)"; }
 task() { # title stub-script -> id
   printf 'Test task.\n\n## Done when\n`true` passes.\n\n## Stub\n%s\n' "$2" | dev task add "$1"
 }
@@ -126,6 +139,17 @@ ok "the builder resolved the conflict and it landed" [ "$(state "$clash")" = lan
 ok "the builder fixed the semantic break and it landed" [ "$(state "$stale")" = landed ]
 ok "retried changes were reviewed" logged "$clash review clean"
 ok "main is green after the bounces" [ "$(green)" = "$(main)" ]
+ok "a bounced task kept one agent session across its attempts" \
+  [ "$(sessions_of "$clash" | wc -l) $(sessions_of "$clash" | sort -u | wc -l)" = "2 1" ]
+ok "every task got its own session" [ "$(sort -u "$tmp/sessions" | cut -d' ' -f2 | sort | uniq -d)" = "" ]
+ok "the resumed session got the failure summary, not the task again" \
+  bash -c '[[ $0 == *"error TS"* && $0 == *"Full output: "* && $0 != *"## Done when"* ]]' "$(last_prompt "$stale")"
+failure=$(grep -o "log: [^)]*" "$F/tasks/landed/$stale.md" | tail -1 | cut -c6-)
+ok "the task file records a log path, not the failure output" \
+  bash -c '! grep -q "error TS" "$0" && grep -q "error TS" "$1"' "$F/tasks/landed/$stale.md" "$failure"
+ok "the task's record holds the verified facts" \
+  bash -c 'grep -q "claimed by b1" "$0" && grep -q "proof passed" "$0" && grep -q "landed $1" "$0"' \
+  "$F/tasks/landed/$stale.md" "$(meta "$stale" landed)"
 
 idle=$(task 'do nothing' 'true')
 for _ in 1 2 3; do dev build b1; done
@@ -178,5 +202,9 @@ git -C "$wt" commit -qm "break main outside the factory"
 git -C "$wt" push -q origin HEAD:main
 dev gate
 ok "the scheduled gate files a red main with its culprit" [ "$(meta "$(id_of "main red after $(main | cut -c1-9)")" culprit)" = "$(main)" ]
+
+ok "every session the factory opened is listed for nesting" bash -c '
+  for s in $(cut -d" " -f2 "$0" | sort -u); do grep -q "^$s " "$1" || exit 1; done
+  grep -q " scout$" "$1" && grep -q " review " "$1"' "$tmp/sessions" "$F/sessions"
 
 echo "ENGINE OK"

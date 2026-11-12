@@ -71,6 +71,31 @@ new_id() {
   printf 'b%04d' $n
 }
 
+# The task file is the handoff between attempts and sessions. Its "## Record"
+# section stays last and holds one line per fact the engine verified; full
+# output lives in a log the line points to.
+record() { # id line
+  local f
+  f=$(task_file "$1")
+  grep -qx '## Record' "$f" || printf '\n## Record\n' >>"$f"
+  echo "- $(date -u +%m-%dT%H:%MZ) $2" >>"$f"
+}
+
+save_fail() { # id output -> path of a new log holding the full output
+  local n
+  n=$(($(find "$F/log" -name "$1-fail*.log" | wc -l) + 1))
+  printf '%s\n' "$2" >"$F/log/$1-fail$n.log"
+  echo "$F/log/$1-fail$n.log"
+}
+
+latest_fail() { ls -v "$F/log/$1"-fail*.log 2>/dev/null | tail -1; } # id -> path
+
+summarize() { # full output on stdin -> the few lines a reader needs first
+  local all
+  all=$(cat)
+  grep -m12 -E 'error|Error|FAIL|\(fail\)|✗|Expected|Received|Conflict|failed at stage' <<<"$all" || tail -12 <<<"$all"
+}
+
 add_task() { # title owner culprit < body -> id
   local id body
   body=$(cat)
@@ -89,13 +114,13 @@ add_task() { # title owner culprit < body -> id
   echo "$id"
 }
 
-bounce() { # id from reason -> back to its builder, or stuck after too many
+bounce() { # id from reason fail-log -> back to its builder, or stuck after too many
   local n=$(($(meta "$1" bounces) + 1)) to=ready
   set_meta "$1" bounces "$n"
-  printf '\n## Bounce %s\n%s\n' "$n" "$3" >>"$(task_file "$1")"
   [ "$n" -lt "$FACTORY_MAX_BOUNCES" ] || to=stuck
+  record "$1" "bounce $n to $to: $3 (log: $4)"
   move "$1" "$2" "$to"
-  log "$1 bounced to $to ($n): $(head -1 <<<"$3")"
+  log "$1 bounced to $to ($n): $3"
 }
 
 # ponytail: a crash between the claiming mv and set_meta leaves an ownerless
@@ -115,6 +140,7 @@ claim() { # builder -> id. Order: own unfinished build, own ready, unowned ready
       [ "$owner" = "$want" ] || continue
       move "$id" ready building || continue # lost the race
       set_meta "$id" owner "$1"
+      record "$id" "claimed by $1"
       echo "$id"
       return
     done
@@ -146,7 +172,10 @@ gate() { # id -> runs the lane's stages in cwd; fmt is applied and folded into H
   l=$(lane "$1")
   log "$1 lane=$l stages=${STAGES[$l]}"
   for stage in ${STAGES[$l]}; do
-    bash "$CHECKS" "$stage" origin/main || return 1
+    bash "$CHECKS" "$stage" origin/main || {
+      echo "failed at stage $stage"
+      return 1
+    }
     if [ "$stage" = fmt ]; then
       git add -A
       git diff --cached --quiet || git commit -q --amend --no-edit || return 1
@@ -154,7 +183,14 @@ gate() { # id -> runs the lane's stages in cwd; fmt is applied and folded into H
   done
 }
 
-builder_prompt() { # id builder feedback
+news() { # fail-log -> what changed since the agent last looked, for any prompt
+  [ ! -e "$(git rev-parse --git-dir)/MERGE_HEAD" ] ||
+    echo "A merge of origin/main is in progress with conflicts. Resolve them and keep both intents."
+  [ -z "$1" ] || printf 'The factory rejected your last attempt. Key lines:\n%s\nFull output: %s (search it; do not print it whole)\n' \
+    "$(summarize <"$1")" "$1"
+}
+
+builder_prompt() { # id builder fail-log -> everything a fresh session needs
   cat <<EOF
 You are builder $2 in a software factory. Do exactly one task in this git worktree.
 
@@ -166,9 +202,57 @@ Rules:
 - Change only what the task needs.
 - Run the task's "Done when" command and make it pass.
 - Commit on the current branch. Do not push. Do not switch branches.
-$([ ! -e "$(git rev-parse --git-dir)/MERGE_HEAD" ] || echo "- A merge of origin/main is in progress with conflicts. Resolve them and keep both intents.")
-$([ -z "$3" ] || printf 'The factory rejected your last attempt:\n%s\n' "$3")
+- Put each decision you made and why in the commit message body, one line each. Earlier
+  attempts' decisions are in \`git log origin/main..HEAD\`.
+- Read logs and code with targeted searches and line ranges, not whole files.
+$(news "$3")
 EOF
+}
+
+# Sessions, when AGENT_NEW_SESSION (prints a session ref) and AGENT_RESUME ({}
+# is the ref) are set. Every session the factory opens is appended to
+# $F/sessions as "<ref> <label>", so a coordinator with thread tools can nest
+# it under itself; the CLI cannot. Sessions are never closed here: a ticket's
+# thread stays as its visible record until a person archives it.
+new_session() { # label -> ref
+  local s
+  s=$($AGENT_NEW_SESSION | tail -1)
+  [ -n "$s" ] || die "AGENT_NEW_SESSION printed no session for $1"
+  echo "$s $1" >>"$F/sessions"
+  echo "$s"
+}
+
+one_shot() { # label resume-template cold-command prompt -> the agent's reply
+  local s
+  if [ -z "$2" ]; then
+    $3 "$4"
+  else
+    s=$(new_session "$1")
+    ${2//\{\}/$s} "$4"
+  fi
+}
+
+# One agent session per task, from first claim until it lands or sticks;
+# without sessions every attempt starts cold with $AGENT. A resumed session
+# already holds the task, so it gets only the news.
+run_agent() { # id builder fail-log attempt
+  local s prompt
+  if [ -z "${AGENT_RESUME:-}" ]; then
+    set -- "$@" $AGENT
+    prompt=$(builder_prompt "$1" "$2" "$3")
+  else
+    s=$(meta "$1" session)
+    if [ -z "$s" ]; then
+      s=$(new_session "$1")
+      set_meta "$1" session "$s"
+      prompt=$(builder_prompt "$1" "$2" "$3")
+    else
+      prompt="Task $1 again, same worktree. $(news "$3")
+Fix it, run Done when, and commit."
+    fi
+    set -- "$@" ${AGENT_RESUME//\{\}/$s}
+  fi
+  FACTORY_TASK_FILE=$(task_file "$1") FACTORY_ATTEMPT=$4 "${@:5}" "$prompt"
 }
 
 # Start `dev <cmd> <sha> ...` in the background holding a lock that `drain`
@@ -198,7 +282,7 @@ cmd_task() { # add <title> [--owner b] [--culprit sha] < body
 }
 
 cmd_build() { # builder
-  local b=${1:?usage: dev build <builder>} id wt base attempt out=""
+  local b=${1:?usage: dev build <builder>} id wt base attempt out fail=""
   : "${AGENT:?set AGENT to your agent command, e.g. AGENT='amp -x'}"
   exec 7>"$F/locks/builder-$b"
   flock -n 7 || die "builder $b is already running"
@@ -218,11 +302,13 @@ cmd_build() { # builder
     git -C "$ROOT" worktree add -q -B "task/$id" "$wt" "$base"
   fi
   cd "$wt"
-  [ "$(meta "$id" bounces)" = 0 ] || git merge -q --no-edit origin/main >/dev/null 2>&1 || true
+  if [ "$(meta "$id" bounces)" != 0 ]; then
+    git merge -q --no-edit origin/main >/dev/null 2>&1 || true
+    fail=$(latest_fail "$id")
+  fi
   for attempt in $(seq "$FACTORY_ATTEMPTS"); do
     log "$id $b: agent attempt $attempt"
-    FACTORY_TASK_FILE=$(task_file "$id") FACTORY_ATTEMPT=$attempt \
-      $AGENT "$(builder_prompt "$id" "$b" "$out")" >>"$F/log/$id.log" 2>&1 7>&- || true
+    run_agent "$id" "$b" "$fail" "$attempt" >>"$F/log/$id.log" 2>&1 7>&- || true
     git add -A
     git diff --cached --quiet || git commit -qm "$id: $(meta "$id" title)"
     if [ "$(git rev-list --count origin/main..HEAD)" = 0 ]; then
@@ -231,14 +317,15 @@ cmd_build() { # builder
       cmd_submit "$id"
       return 0
     fi
-    out=$(tail -40 <<<"$out")
+    fail=$(save_fail "$id" "$out")
+    record "$id" "attempt $attempt by $b failed: $(summarize <"$fail" | head -1) (log: $fail)"
     log "$id $b: proof failed (attempt $attempt)"
   done
-  bounce "$id" building "Builder proof failed:
-$out"
+  bounce "$id" building "builder proof failed" "$fail"
 }
 
 cmd_submit() { # id
+  record "$1" "proof passed at $(git rev-parse --short HEAD)"
   touch "$(task_file "$1")" # submit time orders the integrator queue
   move "$1" building submitted || die "$1 is not building"
   log "$1 submitted"
@@ -254,17 +341,18 @@ land() { # id, in the integrator worktree
     if ! git merge -q --no-ff -m "merge task/$id: $(meta "$id" title)" "task/$id" >/dev/null 2>&1; then
       files=$(git diff --name-only --diff-filter=U | tr '\n' ' ')
       git merge --abort
-      bounce "$id" submitted "Conflict with origin/main in: $files"
+      bounce "$id" submitted "Conflict with origin/main in: ${files% }" \
+        "$(save_fail "$id" "Conflict with origin/main in: $files")"
       return 0
     fi
     if ! out=$(gate "$id" 2>&1); then
-      bounce "$id" submitted "Integrator gate failed after merging origin/main:
-$(tail -40 <<<"$out")"
+      bounce "$id" submitted "Integrator gate failed after merging origin/main" "$(save_fail "$id" "$out")"
       return 0
     fi
     git push -q origin HEAD:main || die "push to origin/main failed; $id stays submitted"
   fi
   sha=$(git rev-parse HEAD)
+  record "$id" "landed $sha"
   set_meta "$id" landed "$sha"
   move "$id" submitted landed
   git -C "$ROOT" worktree remove --force "$F/wt/$id" 2>/dev/null || true
@@ -344,15 +432,17 @@ cmd_review() { # sha task-id
   [ "$(meta "$id" bounces)" != 0 ] ||
     git -C "$ROOT" diff --name-only "$sha^1" "$sha" | grep -qE "$FACTORY_RISKY" || return 0
   log "$id review of $sha"
-  out=$($REVIEWER "Review this landed change as a skeptic. Report only real bugs, each with a failing case.
+  out=$(one_shot "review $id" "${REVIEWER_RESUME:-}" "$REVIEWER" "Review this landed change as a skeptic. Report only real bugs, each with a failing case.
 If there are none, reply with exactly LGTM on its own line.
 
 $(git -C "$ROOT" diff "$sha^1" "$sha" | head -c 60000)")
   if grep -qx 'LGTM' <<<"$out"; then
+    record "$id" "review of ${sha:0:9} clean"
     log "$id review clean"
     return 0
   fi
-  add_task "review findings for $id" "$(meta "$id" owner)" "" <<EOF >/dev/null
+  local fix
+  fix=$(add_task "review findings for $id" "$(meta "$id" owner)" "" <<EOF
 Review of ${sha:0:9} (task $id: $(meta "$id" title)) found problems. Fix them on a new branch.
 
 $out
@@ -360,6 +450,8 @@ $out
 ## Done when
 Each finding above has a test that fails before your fix and passes after.
 EOF
+  )
+  record "$id" "review of ${sha:0:9} found problems: $fix"
 }
 
 # Top the ready queue up to FACTORY_QUEUE. The agent proposes; `task add`
@@ -375,7 +467,7 @@ cmd_scout() {
   fresh_wt "$wt" origin/main
   (
     cd "$wt"
-    $AGENT "You are the scout of a software factory. Propose $((FACTORY_QUEUE - have)) tasks for this repository.
+    one_shot scout "${AGENT_RESUME:-}" "$AGENT" "You are the scout of a software factory. Propose $((FACTORY_QUEUE - have)) tasks for this repository.
 Read factory/sources.md for where to look. Each task must fit in one commit and have a
 '## Done when' section with a command that fails today. Do not edit any file.
 Create each task by running this, with every line starting in column 1:
