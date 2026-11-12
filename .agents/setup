@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# One-time orb setup: Bun toolchain and locked dependencies.
+# Runs once per fresh orb snapshot; must be fast, non-interactive, and idempotent.
+set -euo pipefail
+
+log() { echo "[$(date -u +%H:%M:%S)] $*"; }
+
+log "checking bun"
+if ! command -v bun >/dev/null 2>&1; then
+  log "bun missing, installing"
+  curl -fsSL https://bun.sh/install | bash
+  # The installer cannot update this running script's environment.
+  export PATH="$HOME/.bun/bin:$PATH"
+fi
+log "bun $(bun --version)"
+
+log "installing dependencies from bun.lock"
+time bun install --frozen-lockfile
+log "setup complete"

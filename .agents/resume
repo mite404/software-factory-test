@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Fast wake-up repair (10s budget): restore dependencies if a wake lost them.
+set -euo pipefail
+
+if ! command -v bun >/dev/null 2>&1; then
+  export PATH="$HOME/.bun/bin:$PATH"
+fi
+if [ ! -d node_modules ]; then
+  bun install --frozen-lockfile
+fi
