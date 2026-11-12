@@ -1,0 +1,535 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Factory That Writes Code While You Sleep</title>
+<style>
+  :root {
+    --ink: #161616; --muted: #666; --rule: #e3e3e3; --paper: #fff; --tint: #f6f5f2;
+    --red: #e4002b; --green: #0a8a4a; --amber: #c77700;
+    --serif: Georgia, "Times New Roman", serif;
+    --sans: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 19px/1.65 var(--serif); }
+  header.mast { border-bottom: 1px solid var(--ink); padding: 14px 20px; font: 700 13px var(--sans);
+    letter-spacing: .18em; text-transform: uppercase; }
+  header.mast span { color: var(--red); }
+  main { max-width: 700px; margin: 0 auto; padding: 0 20px 80px; }
+  .kicker { font: 700 13px var(--sans); letter-spacing: .12em; text-transform: uppercase;
+    color: var(--red); margin: 48px 0 10px; }
+  h1 { font: 800 clamp(34px, 7vw, 54px)/1.05 var(--sans); letter-spacing: -.02em; margin: 0 0 18px; }
+  .dek { font: 400 22px/1.45 var(--serif); color: #333; margin: 0 0 28px; }
+  .byline { font: 13px var(--sans); color: var(--muted); border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule); padding: 10px 0; margin-bottom: 36px; }
+  h2 { font: 800 28px/1.2 var(--sans); letter-spacing: -.01em; margin: 56px 0 14px; }
+  h3 { font: 700 20px/1.3 var(--sans); margin: 36px 0 8px; }
+  p { margin: 0 0 20px; }
+  .lede::first-letter { float: left; font: 800 76px/.8 var(--sans); padding: 8px 10px 0 0; color: var(--red); }
+  .why { border-left: 3px solid var(--red); padding-left: 16px; }
+  .why b { font-family: var(--sans); font-size: 15px; text-transform: uppercase; letter-spacing: .08em; }
+  blockquote.pull { font: 700 26px/1.3 var(--sans); margin: 40px 0; padding: 18px 0;
+    border-top: 3px solid var(--ink); border-bottom: 1px solid var(--ink); }
+  code { font: 15px var(--mono); background: var(--tint); padding: 1px 5px; border-radius: 3px; }
+  ol.steps li { margin-bottom: 8px; }
+  details { border-top: 1px solid var(--rule); padding: 12px 0; }
+  details:last-of-type { border-bottom: 1px solid var(--rule); }
+  summary { font: 700 18px var(--sans); cursor: pointer; }
+  summary small { font-weight: 400; color: var(--muted); }
+  details p { margin: 10px 0 0; }
+
+  /* interactive figures */
+  figure.toy { margin: 36px -12px; padding: 20px; background: var(--tint); border-radius: 10px;
+    font: 15px/1.5 var(--sans); }
+  figure.toy figcaption { font: 700 12px var(--sans); letter-spacing: .14em; text-transform: uppercase;
+    color: var(--red); margin-bottom: 4px; }
+  figure.toy h4 { font: 700 19px var(--sans); margin: 0 0 12px; }
+  button { font: 600 14px var(--sans); border: 1px solid var(--ink); background: var(--paper);
+    color: var(--ink); padding: 8px 14px; border-radius: 999px; cursor: pointer; }
+  button:hover { background: var(--ink); color: var(--paper); }
+  button.on { background: var(--ink); color: var(--paper); }
+  button:disabled { opacity: .35; cursor: default; background: var(--paper); color: var(--ink); }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+  .note { background: var(--paper); border-radius: 8px; padding: 12px 14px; min-height: 48px; }
+  .good { color: var(--green); font-weight: 700; }
+  .bad { color: var(--red); font-weight: 700; }
+
+  .quiz-card { background: var(--paper); border-radius: 8px; padding: 14px; margin-bottom: 10px; }
+  .quiz-card .task { font-family: var(--mono); font-size: 14px; white-space: pre-wrap; margin-bottom: 8px; }
+  .quiz-card .verdict { margin-top: 8px; }
+
+  .line { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin: 14px 0; }
+  .station { background: var(--paper); border: 2px solid var(--rule); border-radius: 8px;
+    padding: 8px 4px; text-align: center; font-size: 12px; font-weight: 600; min-height: 74px;
+    display: flex; flex-direction: column; justify-content: space-between; align-items: center;
+    transition: border-color .2s; }
+  .station .dot { width: 18px; height: 18px; border-radius: 50%; background: transparent; }
+  .station.at { border-color: var(--ink); }
+  .station.at.ok .dot { background: var(--green); }
+  .station.at.fail .dot { background: var(--red); }
+  .station.at.back .dot { background: var(--amber); }
+  .station.at.go .dot { background: var(--ink); }
+  .station.flag { box-shadow: inset 0 -4px 0 var(--green); }
+  .progress { color: var(--muted); font-size: 13px; }
+
+  .code2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .code2 pre { margin: 0; background: var(--paper); border-radius: 8px; padding: 10px; font: 13px/1.5 var(--mono);
+    white-space: pre-wrap; }
+  .code2 pre b { font-family: var(--sans); display: block; margin-bottom: 4px; }
+
+  .slider label { display: block; font-weight: 600; margin-top: 10px; }
+  .slider input { width: 100%; }
+  .bar { height: 26px; border-radius: 4px; background: var(--ink); color: var(--paper); font-size: 13px;
+    font-weight: 700; padding: 4px 8px; white-space: nowrap; transition: width .25s; min-width: max-content; }
+  .bar.alt { background: var(--red); }
+  .barlabel { font-size: 13px; margin: 12px 0 4px; }
+
+  footer { font: 13px var(--sans); color: var(--muted); border-top: 1px solid var(--rule); margin-top: 60px;
+    padding-top: 16px; }
+  @media (max-width: 560px) {
+    body { font-size: 18px; }
+    .line { grid-template-columns: repeat(3, 1fr); }
+    .code2 { grid-template-columns: 1fr; }
+    figure.toy { margin: 32px -8px; padding: 16px; }
+  }
+</style>
+</head>
+<body>
+<header class="mast">Backchannel <span>/</span> Software</header>
+<main>
+
+<div class="kicker">Artificial Intelligence</div>
+<h1>The Factory That Writes Code While You Sleep</h1>
+<p class="dek">AI agents can now write software faster than anyone can review it. The people
+getting the most out of them have stopped asking agents to code and started building factories
+around them.</p>
+<div class="byline">A plain-language guide, with a small working factory as the example.
+November 2026.</div>
+
+<p class="lede">On a Tuesday afternoon in November, two AI agents started work on the same small
+codebase at the same second. One was asked to add a function that checks whether a piece of text
+is a valid web address slug. The other was asked to add a function that turns a slug back into
+words. Neither knew the other existed.</p>
+
+<p>Both did what a person would do. They added their new function to the bottom of the same file,
+and their test to the bottom of the same test file. The second agent finished first, and its work
+went straight into the main copy of the project. When the first agent finished a minute later,
+its work no longer fit. The two changes had collided.</p>
+
+<p>What happened next is the interesting part. Nobody was paged. A script noticed the collision,
+refused to merge the work, and sent it back to the agent that wrote it with a one-line note:
+<em>conflict in these two files</em>. On its next pass, that agent pulled in the other agent's
+change, kept both functions, and tried again. This time it went in. Seconds later a second script
+ran the full test suite on the result, and a third AI read the change looking for bugs. It found
+none.</p>
+
+<p>Total human involvement after writing the two task descriptions: zero.</p>
+
+<p>That is a software factory, in miniature. It is also the clearest way to understand why people
+who build software with AI are talking less about prompts and more about plumbing.</p>
+
+<h2>The problem nobody expected</h2>
+
+<p>For the last couple of years, the story of AI coding has been about the writing. Can the model
+write a function? A feature? A whole app? That question is mostly settled. Current agents write
+plausible code quickly and cheaply, and you can run several at once.</p>
+
+<p>Which creates a new problem. If five agents each produce a change every few minutes, someone has
+to decide which of those changes are safe to keep, in what order, and what happens when two of
+them disagree. If that someone is you, you have not hired a team of tireless engineers. You have
+pointed a firehose at your inbox.</p>
+
+<p>Kit Langton, who works on the open-source coding agent opencode, posted a short video in
+November 2026 of the system he built to cope. It was labelled "LIVE - RUNNING TONIGHT". It had
+landed 50 changes that day. And almost none of it was about getting the AI to write code. It was
+about what happens <em>after</em> the AI says it is done.</p>
+
+<blockquote class="pull">Once machines write the code, the hard part moves to getting their work
+into one place without breaking it.</blockquote>
+
+<h2>So what is a software factory?</h2>
+
+<p>The simplest definition: <strong>a software factory is a codebase where people stop writing the
+changes and start writing the rules for which changes are allowed in.</strong></p>
+
+<p>Agents do the typing. Humans write three things instead: the tasks, the checks that prove a task
+is finished, and the order of operations for getting finished work into the project.</p>
+
+<p>There is an easy test for whether you have one. Close your laptop tonight. If a working, tested
+change still lands in your project by morning, and the project still works, you have a factory. If
+nothing happens until you come back and click things, you have a very fast tool. Running five agent
+windows side by side is not a factory. It is a busy person.</p>
+
+<h2>What is inside one</h2>
+
+<p>Every factory has the same handful of parts. The easiest way to picture them is a restaurant
+kitchen during dinner service, because a kitchen already solved this problem: many people working in
+parallel, one pass where finished plates leave, and no tolerance for sending out something
+wrong.</p>
+
+<h3>The ticket: a task with a finish line</h3>
+
+<p>Nobody in a kitchen cooks without a ticket. In a factory, no agent works without a task, and the
+most important line on the task is how you will know it is done. Not "improve the signup page."
+Something a machine can check.</p>
+
+<p class="why"><b>Why</b><br>An agent with no finish line will tell you it finished. It is not
+lying, exactly. It just has nothing to measure against. A command that fails today and passes
+tomorrow is the only kind of "done" you can trust from something that never tires of saying
+yes.</p>
+
+<figure class="toy" id="quiz">
+  <figcaption>Try it</figcaption>
+  <h4>Would you let an agent start on this task?</h4>
+  <div id="quiz-cards"></div>
+</figure>
+
+<h3>The cooks: one agent, one task, one workspace</h3>
+
+<p>Each agent, called a builder, gets one task and its own private copy of the project. It cannot
+see what the others are doing and cannot overwrite their files.</p>
+
+<p class="why"><b>Why</b><br>Two cooks sharing one cutting board will eventually chop each other's
+onions. It is far easier to give everyone their own board than to make them coordinate. The whole
+design leans on this idea: remove the sharing instead of managing it.</p>
+
+<h3>The quick taste: a check before anything is accepted</h3>
+
+<p>Before a builder hands its work in, the factory runs a short set of checks. Does the code still
+make sense to the computer? Do the tests nearest the change pass? Is anything obviously broken left
+behind? Formatting, the dull rules about spacing, is never a reason to reject work. The factory just
+fixes it and moves on.</p>
+
+<p class="why"><b>Why</b><br>The check has to be quick, because everything waits on it. And it has
+to be a script, not a line in the prompt. Tell an agent "don't leave debugging code behind" and it
+usually won't. Write a script that rejects any change containing it, and it never will. A rule in a
+prompt is a suggestion. A rule in a script is a law.</p>
+
+<h3>The pass: one person decides what leaves the kitchen</h3>
+
+<p>This is the heart of the factory, and the part most people skip. In a restaurant, every plate
+goes past one person at the pass. In a factory, that person is a script called the integrator, and
+it is the only thing allowed to change the main copy of the project. It takes finished work one
+piece at a time: merge it with the latest version, run the quick checks again on the combined
+result, and only then save it. Kit's takes one to seven minutes per change.</p>
+
+<figure class="toy" id="turns">
+  <figcaption>Try it</figcaption>
+  <h4>Why take turns?</h4>
+  <p style="margin:0 0 10px">Two agents work at the same time. Each change passes its own checks.</p>
+  <div class="code2">
+    <pre><b>Change A: rename a setting</b>- MAX_SLUG = 40
++ SLUG_MAX = 40</pre>
+    <pre><b>Change B: new code</b>+ if (s.length &lt;= MAX_SLUG)</pre>
+  </div>
+  <div class="row">
+    <button data-mode="both">Accept both at once</button>
+    <button data-mode="turns">Take turns</button>
+  </div>
+  <div class="note" id="turns-out">Pick a strategy.</div>
+</figure>
+
+<p class="why"><b>Why one at a time</b><br>Taking turns sounds slow, but it means every version of
+the project that ever existed was actually tested. We built exactly this trap into our own
+factory's test, and the integrator caught it.</p>
+
+<p class="why"><b>Why rejected work goes back to its author</b><br>When two changes collide, the
+agent that wrote the second one is the only thing that knows what it was trying to do. An
+integrator that "fixes" the clash itself is guessing at someone else's intent, and a wrong guess
+goes in silently. That is the story at the top of this article.</p>
+
+<h3>The health inspector: slow checks that never block the line</h3>
+
+<p>Some checks are slow: the full test suite, a complete build. A kitchen does not stop service so
+the inspector can walk through. A factory does not either. Slow checks run right <em>after</em> a
+change is saved, in the background, while the next change goes through the pass.</p>
+
+<p>If they pass, the factory moves a bookmark called "last known good" up to this version. If they
+fail, it files a new task that names the exact change that caused the problem and hands it to the
+agent that wrote it. New work always starts from "last known good", so one bad change does not
+infect every task after it.</p>
+
+<figure class="toy slider" id="calc">
+  <figcaption>Try it</figcaption>
+  <h4>What waiting on slow tests costs you</h4>
+  <label>Quick checks at the pass: <span id="q-val"></span> min</label>
+  <input type="range" id="q" min="1" max="10" value="3">
+  <label>Full test suite: <span id="s-val"></span> min</label>
+  <input type="range" id="s" min="1" max="60" value="10">
+  <div class="barlabel">Most changes a day if the line waits for the full suite</div>
+  <div class="bar alt" id="bar-block"></div>
+  <div class="barlabel">Most changes a day if the full suite runs after</div>
+  <div class="bar" id="bar-after"></div>
+  <p class="note" id="calc-note" style="margin-top:12px"></p>
+</figure>
+
+<p class="why"><b>Why this is a good trade</b><br>The project might be broken for a few minutes. In
+exchange, nobody waits on a slow test run. And because changes went in one at a time, there is no
+detective work about who broke it. It was the last one through.</p>
+
+<h3>The second opinion: review, but only where it pays</h3>
+
+<p>After a change is saved, a different AI model can read it as a skeptic. But only for changes
+that touch sensitive areas, or that were rejected and retried along the way.</p>
+
+<p class="why"><b>Why</b><br>Review is slow and expensive, and most changes are fine. A change that
+bounced twice is where the bugs live. Spend your most expensive attention there.</p>
+
+<h3>The scout: someone keeps the tickets coming</h3>
+
+<p>A factory with no tasks is a timer that does nothing. A scout is an agent whose only job is to
+keep the queue topped up. It looks where you tell it to, like failing tests or notes that say "fix
+this later", and writes new tasks. Each still needs a finish line that fails today, or it is turned
+away at the door.</p>
+
+<h3>The whole line, end to end</h3>
+
+<figure class="toy" id="line">
+  <figcaption>Step through it</figcaption>
+  <h4>Follow one change through the factory</h4>
+  <div class="row" id="scenarios">
+    <button data-s="clean" class="on">A clean change</button>
+    <button data-s="clash">Two agents collide</button>
+    <button data-s="red">It breaks a slow test</button>
+  </div>
+  <div class="line" id="stations"></div>
+  <div class="note" id="line-note"></div>
+  <div class="row">
+    <button id="prev">Back</button>
+    <button id="next">Next step</button>
+    <span class="progress" id="line-step"></span>
+  </div>
+</figure>
+
+<h2>What you actually get out of it</h2>
+
+<p><strong>Work that happens without you.</strong> The obvious benefit, and the reason anyone
+bothers. A small factory on a daily schedule can land a tested change every day for months. Kit's
+lands dozens.</p>
+
+<p><strong>Failure turns into work, not alarms.</strong> In most teams a broken build means a person
+stops what they are doing. In a factory it means a new task with an owner and a name attached. The
+system's own mistakes become one of its most reliable sources of work.</p>
+
+<p><strong>Rules that stick.</strong> Every time an agent makes the same mistake twice, you add one
+line to a check script. The factory gets stricter exactly where it was weak, and never forgets.</p>
+
+<p><strong>A complete paper trail.</strong> Every change traces back to a task, a finish line, a log
+of what the agent tried, and every check result. When something goes wrong three weeks later, you
+can see why it went in.</p>
+
+<p><strong>Your job changes.</strong> You stop deciding <em>how</em> to make each change, and spend
+your time on <em>what</em> should change next, which is the part that needed you all along.</p>
+
+<h2>What it costs</h2>
+
+<p><strong>It is only as good as its checks.</strong> Tell an agent to make a weak test pass and it
+will make a weak test pass. Every shortcut in your checks becomes a shortcut in your code, made at
+machine speed.</p>
+
+<p><strong>The plumbing breaks in boring ways.</strong> When we built and tested our own small
+factory, the agents were rarely the problem. The bugs were in the scaffolding. Two agents fetching
+updates at the same instant tripped over each other. A script killed halfway through a merge left a
+mess that blocked everything after it. None of it glamorous. All of it would have stopped the
+factory overnight.</p>
+
+<p><strong>It will happily do busywork.</strong> Left alone, our scout proposed tasks like "add a test
+for this edge case." Its proof that each was needed: the test did not exist yet. Technically true,
+practically worthless. A factory optimizes for what you measure, so measure the right things.</p>
+
+<p><strong>It costs real money.</strong> Every agent run is billed. A scout, two builders and a
+reviewer running every few hours adds up.</p>
+
+<h2>Who is steering?</h2>
+
+<p>If agents write the tasks, build them, check them and fix them, it is fair to ask whether anyone
+decides where the project is going.</p>
+
+<p>As far as anyone can tell from outside, yes, and it is a person. Nothing in Kit's diagram decides
+what to build. Every arrow that creates new work points back to an existing change: a failed check, a
+review finding, a collision. His other projects show where direction comes from. One is a tool for
+talking and drawing over his screen to hand ideas to an agent, which he describes as optimizing "the
+feedback loop between me + the robots." Another is a programming language he has given himself six
+months to move his company onto. Those are human decisions. The factory carries them out.</p>
+
+<p>Warp's commercial factory product puts the human somewhere more visible. A lead agent, the
+"Factory Foreman", asks product questions, writes a plan, and waits for a person to approve it before
+any code is written. Afterwards a person still reviews the result.</p>
+
+<p>The two disagree on one thing: whether a human approves each change before it goes in. Warp says
+yes. Kit says the checks are the approval. Both agree a human picks the direction. An agent that sets
+its own goals is possible, but it is the riskiest part to automate, for a simple reason.</p>
+
+<blockquote class="pull">A wrong direction passes every check.</blockquote>
+
+<h2>How to set one up</h2>
+
+<p>You do not build Kit's factory on day one. His diagram is what a factory looks like at 50 changes
+a day. At one a day, most of it solves problems you do not have yet. Build in this order, and stop
+when the next step does not fix a problem you actually have.</p>
+
+<details open><summary>1. Write the check first <small>day one</small></summary>
+<p>One command that says yes or no about your project, and make your project pass it today. If you
+cannot trust this, nothing after it can be trusted either.</p></details>
+<details><summary>2. Write five tasks by hand <small>day one</small></summary>
+<p>Each with a finish line a machine can run, and that fails today. If you cannot write the finish
+line, the task is too big. Make it smaller.</p></details>
+<details><summary>3. One agent, one task, by hand <small>until one lands untouched</small></summary>
+<p>Give it its own copy of the project. Repeat until a task lands without you touching it. This is
+the minimum factory, and it already meets "one change a day".</p></details>
+<details><summary>4. Put it on a schedule <small>once that works</small></summary>
+<p>Once a day is plenty to start. The schedule, not your attention, is what makes it a
+factory.</p></details>
+<details><summary>5. Move slow checks after landing <small>when you notice waiting</small></summary>
+<p>Add the health inspector and the "last known good" bookmark once the full test suite is slow
+enough that you feel it.</p></details>
+<details><summary>6. Add a second agent, and the pass <small>the moment there are two cooks</small></summary>
+<p>Two builders means changes can collide. That is when you need the integrator that takes
+turns.</p></details>
+<details><summary>7. Add the scout last, and give it a direction <small>when the queue runs dry</small></summary>
+<p>Tell it what you are trying to achieve, not just where the loose ends are, or it will find you
+busywork forever.</p></details>
+
+<p style="margin-top:28px">Our version of all this, built and tested on a small project, is about
+400 lines of shell script. It took six tasks from description to saved, tested and verified change,
+most in one to two minutes, including a collision it sorted out on its own. A separate script tests
+the factory itself, with a fake agent, in about 40 seconds. That matters more than it sounds. If you
+are going to trust a machine to change your code while you sleep, the machine needs tests too.</p>
+
+<h2>The new job</h2>
+
+<p>The pitch for AI coding was that you would write less code. The reality, for the people furthest
+along, is that you write different code. Less of the product, more of the process that produces it.
+The checks. The rules. The order things happen in.</p>
+
+<p>And every morning, a few minutes reading the queue: closing tasks that are not worth doing,
+writing two that are, and looking at whatever got stuck overnight to see what it is trying to tell
+you.</p>
+
+<p>The factory decides how. You still decide what. That turns out to be the job.</p>
+
+<footer>Sources: Kit Langton's merge-process video (Nov 9, 2026), Warp's Factory platform demo, and
+a small factory built and run for this piece. Kit has not published his code; descriptions of his
+setup come from the labels in his video.</footer>
+</main>
+
+<script>
+// Quiz: is this a good task?
+const tasks = [
+  { text: "Improve the signup page.", good: false,
+    why: "No finish line. The agent decides when it is done, so it will be done immediately." },
+  { text: "Add a test for empty input.\nDone when: the file signup.test.ts exists.", good: false,
+    why: "It has a finish line, but a useless one. Creating any file passes it. This is the busywork our own scout proposed." },
+  { text: "Reject passwords under 12 characters at signup.\nDone when: `pnpm test signup` passes and includes an 11-character case.", good: true,
+    why: "Fails today, passes when the behaviour exists, and names an exact case. A machine can check it." },
+];
+const cards = document.getElementById("quiz-cards");
+tasks.forEach(t => {
+  const el = document.createElement("div");
+  el.className = "quiz-card";
+  el.innerHTML = `<div class="task"></div><div class="row"><button>Let it start</button><button>Send it back</button></div><div class="verdict"></div>`;
+  el.querySelector(".task").textContent = t.text;
+  const [yes, no] = el.querySelectorAll("button");
+  const answer = pickedGood => {
+    const right = pickedGood === t.good;
+    el.querySelector(".verdict").innerHTML = `<span class="${right ? "good" : "bad"}">${right ? "Right." : "Not quite."}</span> ${t.why}`;
+    yes.classList.toggle("on", pickedGood); no.classList.toggle("on", !pickedGood);
+  };
+  yes.onclick = () => answer(true);
+  no.onclick = () => answer(false);
+  cards.appendChild(el);
+});
+
+// Why take turns
+const turnsOut = {
+  both: `<span class="bad">Broken.</span> Each change was tested against the old project, so both passed. Together, B uses a name A just removed. Nothing that was tested failed, and the project no longer builds.`,
+  turns: `<span class="good">Caught.</span> A goes in first. B is then merged on top of A and re-checked, the check fails, and B goes back to its agent with the error. It switches to the new name and lands on the next pass.`,
+};
+document.querySelectorAll("#turns button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("#turns button").forEach(x => x.classList.toggle("on", x === b));
+  document.getElementById("turns-out").innerHTML = turnsOut[b.dataset.mode];
+});
+
+// Calculator
+const day = 24 * 60;
+function calc() {
+  const q = +document.getElementById("q").value, s = +document.getElementById("s").value;
+  document.getElementById("q-val").textContent = q;
+  document.getElementById("s-val").textContent = s;
+  const block = Math.floor(day / (q + s)), after = Math.floor(day / q);
+  const bb = document.getElementById("bar-block"), ba = document.getElementById("bar-after");
+  bb.style.width = (100 * block / after) + "%"; bb.textContent = block + " a day";
+  ba.style.width = "100%"; ba.textContent = after + " a day";
+  document.getElementById("calc-note").textContent =
+    `Waiting on a ${s}-minute suite costs ${after - block} changes a day, ${Math.round(100 * (1 - block / after))}% of the line, and that is on a perfect day with no rejections. Running it after means the project may be broken for ${s} minutes after a bad change, and that change is named automatically.`;
+}
+document.getElementById("q").oninput = calc;
+document.getElementById("s").oninput = calc;
+calc();
+
+// The whole line
+const stations = ["Ticket", "Builder", "Quick check", "The pass", "Inspector", "Last known good"];
+const scenarios = {
+  clean: [
+    [0, "go", "A task is written. Its finish line is a command that fails today."],
+    [1, "go", "A builder claims it and works in its own copy of the project."],
+    [2, "ok", "The quick check passes, so the builder hands the work in."],
+    [3, "ok", "The integrator merges it with the latest version, checks again, and saves it."],
+    [4, "ok", "The full suite runs in the background. The next change is already moving through the pass."],
+    [5, "ok", "Everything passed. \"Last known good\" moves up to this version, and new work starts from here.", true],
+  ],
+  clash: [
+    [0, "go", "A task is written: add a function to the end of slug.ts."],
+    [1, "go", "A builder writes it in its own copy. Meanwhile, another builder edits the same lines."],
+    [2, "ok", "The quick check passes on its own copy. It hands the work in."],
+    [3, "fail", "The other change got through the pass first. These two no longer fit together. Rejected: \"conflict in slug.ts\"."],
+    [1, "back", "Back to the same builder, which knows what the change was for. It pulls in the other change and keeps both."],
+    [2, "ok", "Quick check passes again."],
+    [3, "ok", "This time the merge is clean. Checked and saved."],
+    [4, "ok", "Full suite passes."],
+    [5, "ok", "\"Last known good\" moves up. No human was involved.", true],
+  ],
+  red: [
+    [0, "go", "A task is written: shrink the maximum slug length."],
+    [1, "go", "A builder makes the change."],
+    [2, "ok", "The quick check only runs tests next to the changed file. They pass."],
+    [3, "ok", "The pass checks it and saves it. The line keeps moving."],
+    [4, "fail", "The full suite fails: a test elsewhere expected the old length. A new task is filed naming this exact change as the culprit."],
+    [5, "back", "\"Last known good\" stays on the previous version. Other agents start from there, unaffected."],
+    [0, "go", "The fix task goes to the builder that caused it, which still has the context."],
+    [1, "go", "It fixes forward on top of the broken version."],
+    [3, "ok", "Fixes run the full suite before saving, so a fix cannot land while things stay broken."],
+    [4, "ok", "Full suite passes."],
+    [5, "ok", "\"Last known good\" catches up. Broken for a few minutes, and nobody was paged.", true],
+  ],
+};
+const stationsEl = document.getElementById("stations");
+stations.forEach(n => {
+  const d = document.createElement("div");
+  d.className = "station";
+  d.innerHTML = `<span>${n}</span><span class="dot"></span>`;
+  stationsEl.appendChild(d);
+});
+let scen = "clean", step = 0;
+function draw() {
+  const steps = scenarios[scen], [at, state, text, flag] = steps[step];
+  [...stationsEl.children].forEach((el, i) => {
+    el.className = "station" + (i === at ? ` at ${state}` : "") + (flag && i === 5 ? " flag" : "");
+  });
+  document.getElementById("line-note").textContent = text;
+  document.getElementById("line-step").textContent = `Step ${step + 1} of ${steps.length}`;
+  document.getElementById("prev").disabled = step === 0;
+  document.getElementById("next").disabled = step === steps.length - 1;
+}
+document.getElementById("next").onclick = () => { step++; draw(); };
+document.getElementById("prev").onclick = () => { step--; draw(); };
+document.querySelectorAll("#scenarios button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("#scenarios button").forEach(x => x.classList.toggle("on", x === b));
+  scen = b.dataset.s; step = 0; draw();
+});
+draw();
+</script>
+</body>
+</html>
