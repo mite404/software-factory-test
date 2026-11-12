@@ -27,13 +27,13 @@ case "$1" in
   guard) guard ;;
   test)
     tests=$(touched_tests "$2")
-    [ -z "$tests" ] || bun test $tests
+    [ -z "$tests" ] || bun test --only-failures $tests
     ;;
   full)
     bunx tsc --noEmit
     bunx prettier --check --log-level warn .
     guard
-    bun test
+    bun test --only-failures
     ;;
   *)
     echo "unknown stage: $1" >&2
