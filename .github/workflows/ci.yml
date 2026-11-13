@@ -23,15 +23,12 @@ jobs:
         with:
           bun-version: 1.4.4
       - run: bun install --frozen-lockfile
+      - name: Reject focused tests and conflict markers
+        run: bash factory/checks.sh guard
       - run: bun run format:check
       - run: bun run lint:ci
-      - run: bun run typecheck
+      - name: TypeScript compiler (tsc)
+        run: bun run typecheck
       - run: bun run test
-      - name: Audit changed code
-        env:
-          BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: |
-          if [[ -z "$BASE_REF" || "$BASE_REF" =~ ^0+$ ]]; then
-            BASE_REF=origin/main
-          fi
-          bun run fallow:ci --base "$BASE_REF"
+      - name: Check whole-project structure and complexity
+        run: bun run fallow:ci

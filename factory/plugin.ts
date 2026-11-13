@@ -23,6 +23,38 @@ function activity(value: unknown): Awaited<ReturnType<NativeHost["state"]>> {
   }
 }
 
+function record(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" ? { ...value } : undefined;
+}
+
+function reportedActivity(value: unknown, id: string) {
+  const result = record(value);
+  const metadata = record(result?.metadata);
+  const agentState = record(result?.agentState);
+  return metadata?.threadID === id ? activity(agentState?.state) : "unknown";
+}
+
+const runStatuses = {
+  creating: "unknown",
+  running: "unknown",
+  blocked: "blocked",
+  uncertain: "blocked",
+  done: "accepted",
+} satisfies Record<
+  import("./persistence").Run["kind"],
+  DashboardSnapshot["tasks"][number]["status"]
+>;
+const activityStatuses = {
+  running: "working",
+  idle: "idle",
+  unknown: "unknown",
+  "awaiting-approval": "blocked",
+  error: "blocked",
+} satisfies Record<
+  Awaited<ReturnType<NativeHost["state"]>>,
+  DashboardSnapshot["tasks"][number]["status"]
+>;
+
 /** Register the repository-local native dispatch adapter. Setup supplies the unchanged store. */
 export default function registerFactory(
   amp: PluginAPI,
@@ -44,24 +76,7 @@ export default function registerFactory(
     }
     try {
       const result = await tools.call("amp.get_thread_status", { thread: id });
-      if (
-        result &&
-        typeof result === "object" &&
-        "metadata" in result &&
-        "agentState" in result
-      ) {
-        const { metadata, agentState } = result;
-        if (
-          metadata &&
-          typeof metadata === "object" &&
-          "threadID" in metadata &&
-          metadata.threadID === id &&
-          agentState &&
-          typeof agentState === "object" &&
-          "state" in agentState
-        )
-          return activity(agentState.state);
-      }
+      return reportedActivity(result, id);
     } catch {
       // A failed observation is not evidence that a worker is idle or blocked.
     }
@@ -135,12 +150,7 @@ export default function registerFactory(
                 revision: null,
               };
               if (!run) return row;
-              row.status =
-                run.kind === "done"
-                  ? "accepted"
-                  : run.kind === "blocked" || run.kind === "uncertain"
-                    ? "blocked"
-                    : "unknown";
+              row.status = runStatuses[run.kind];
               if (run.kind === "done") row.revision = run.revision;
               if ("thread" in run && run.thread) {
                 row.thread = run.thread;
@@ -151,14 +161,7 @@ export default function registerFactory(
                 } catch {}
                 if (run.kind === "running") {
                   const activity = await observe(run.thread, tools);
-                  row.status =
-                    activity === "running"
-                      ? "working"
-                      : activity === "idle"
-                        ? "idle"
-                        : activity === "unknown"
-                          ? "unknown"
-                          : "blocked";
+                  row.status = activityStatuses[activity];
                 }
               }
               return row;

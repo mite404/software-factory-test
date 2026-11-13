@@ -11,7 +11,7 @@
     "format:check": "prettier --check '{src,factory}/**/*.ts' '*.{json,yml}' '.github/workflows/*.yml'",
     "test": "amp --version && bun test",
     "fallow:staged": "git diff --cached --no-ext-diff --unified=0 | fallow audit --base HEAD --diff-stdin",
-    "fallow:ci": "fallow audit --worsened error --fail-on-parse-error --format github-annotations"
+    "fallow:ci": "fallow --ci --fail-on-parse-error"
   },
   "devDependencies": {
     "@ampcode/cli": "^0.0.1794542441-g4e0611",

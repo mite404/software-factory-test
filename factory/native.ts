@@ -169,6 +169,136 @@ function git(root: string, ...args: string[]) {
   }).trim();
 }
 
+function allowedChanges(
+  worktree: string,
+  base: string,
+  revision: string,
+  scope: string[],
+) {
+  const changed = git(worktree, "diff", "--name-only", base, revision)
+    .split("\n")
+    .filter(Boolean);
+  return (
+    changed.length > 0 &&
+    changed.every((path) =>
+      scope.some(
+        (prefix) =>
+          path === prefix || (prefix.endsWith("/") && path.startsWith(prefix)),
+      ),
+    )
+  );
+}
+
+function candidate(
+  run: Extract<Run, { kind: "running" }>,
+  report: Record<string, unknown>,
+  scope: string[],
+) {
+  const revision = git(run.worktree, "rev-parse", "HEAD");
+  return report.revision === revision &&
+    revision !== run.base &&
+    !git(run.worktree, "status", "--porcelain") &&
+    allowedChanges(run.worktree, run.base, revision, scope)
+    ? revision
+    : null;
+}
+
+function verify(worktree: string, command: string) {
+  return new Promise<{
+    status: number | null;
+    stdout: string;
+    stderr: string;
+    error: Error | null;
+  }>((resolve) => {
+    execFile(
+      "bash",
+      ["-lc", command],
+      {
+        cwd: worktree,
+        encoding: "utf8",
+        timeout: 120_000,
+        maxBuffer: 1024 * 1024,
+      },
+      (error, stdout, stderr) => {
+        const status =
+          typeof error?.code === "number" ? error.code : error ? null : 0;
+        resolve({
+          status,
+          stdout,
+          stderr,
+          error: status === null ? error : null,
+        });
+      },
+    );
+  });
+}
+
+function unchanged(worktree: string, revision: string) {
+  return (
+    git(worktree, "rev-parse", "HEAD") === revision &&
+    !git(worktree, "status", "--porcelain")
+  );
+}
+
+async function candidateEvidence(
+  directory: string,
+  task: Task,
+  run: Extract<Run, { kind: "running" }>,
+  report: Record<string, unknown>,
+  config: Awaited<ReturnType<typeof configuration>>,
+) {
+  const revision = candidate(run, report, config.scope);
+  const result = revision ? await verify(run.worktree, config.verify) : null;
+  const log = join(directory, `${task.id}-${run.attempt}.log`);
+  await writeFile(
+    log,
+    result
+      ? `${result.stdout}${result.stderr}${result.error ?? ""}`
+      : "Candidate revision, clean tree, or allowed-path check failed",
+  );
+  const accepted =
+    revision && result?.status === 0 && unchanged(run.worktree, revision);
+  return { revision: accepted ? revision : null, log };
+}
+
+async function currentReport(directory: string, task: Task, attempt: number) {
+  const path = join(directory, `${task.id}.report.json`);
+  if (!existsSync(path)) return null;
+  const report = object(JSON.parse(await readFile(path, "utf8")));
+  return report.attempt === attempt ? report : null;
+}
+
+function controlState(
+  state: State,
+  action: string,
+  execute: boolean,
+  owner?: ThreadID,
+) {
+  if (
+    owner &&
+    Object.values(state.runs).some(
+      (run) => "thread" in run && run.thread === owner,
+    )
+  )
+    throw new Error("Workers cannot control the factory");
+  if (action === "start") {
+    if (!execute)
+      throw new Error(
+        "Grant permissions.execute in .factory.json before starting",
+      );
+    state.owner ??= owner;
+    if (!state.owner) throw new Error("Starting requires an owner thread");
+    state.enabled = true;
+  }
+  if (action === "pause") state.enabled = false;
+}
+
+function restoreTickets(queue: Task[], persisted: Task[], state: State) {
+  for (const task of persisted)
+    if (state.runs[task.id] && !queue.some((row) => row.id === task.id))
+      queue.push(task);
+}
+
 /** Create the sequential dispatcher. Unknown remote effects are parked, never retried blindly. */
 export function createFactory(
   root: string,
@@ -222,33 +352,13 @@ export function createFactory(
       await store.init();
       persistence = openPersistence(directory, queue);
       const state = persistence.state;
-      for (const task of persistence.tickets)
-        if (state.runs[task.id] && !queue.some((row) => row.id === task.id))
-          queue.push(task);
+      restoreTickets(queue, persistence.tickets, state);
       const commit = (ticket: string, action: string, detail: string) =>
         persistence!.commit(state, ticket, action, detail);
       stateCache = state;
-      if (
-        owner &&
-        Object.values(state.runs).some(
-          (run) => "thread" in run && run.thread === owner,
-        )
-      )
-        throw new Error("Workers cannot control the factory");
-      if (action === "start") {
-        if (!config.execute)
-          throw new Error(
-            "Grant permissions.execute in .factory.json before starting",
-          );
-        state.owner ??= owner;
-        if (!state.owner) throw new Error("Starting requires an owner thread");
-        state.enabled = true;
-        commit("factory", "started", state.owner);
-      }
-      if (action === "pause") {
-        state.enabled = false;
-        commit("factory", "paused", state.owner ?? "");
-      }
+      controlState(state, action, config.execute, owner);
+      if (action === "start") commit("factory", "started", state.owner!);
+      if (action === "pause") commit("factory", "paused", state.owner ?? "");
       if (!state.enabled || !config.execute) return state;
       const wake = () => {
         void tick("reconcile").catch((error) =>
@@ -264,156 +374,82 @@ export function createFactory(
           await event("factory", "observation-unavailable", String(error));
         }
       };
-      for (const run of Object.values(state.runs)) {
-        if (run.kind === "running") await watch(run.thread);
+      async function watchRunning() {
+        for (const run of Object.values(state.runs))
+          if (run.kind === "running") await watch(run.thread);
       }
+      await watchRunning();
       if (
         Object.values(state.runs).some(
           (run) => run.kind === "creating" || run.kind === "uncertain",
         )
       )
         return state;
-      for (const task of queue) {
-        const run = state.runs[task.id];
-        if (run?.kind !== "running") continue;
-        if (run.delivery === "sending") {
-          state.runs[task.id] = {
-            kind: "uncertain",
-            thread: run.thread,
-            reason: "Delivery outcome unknown; inspect thread before recovery",
-          };
-          commit(task.id, "uncertain", "delivery-unknown");
-          return state;
-        }
-        if (run.delivery === "queued") {
-          run.delivery = "sending";
-          commit(task.id, "sending", run.thread);
-          await host.send(run.thread, await prompt(task, run, config));
-          run.delivery = "sent";
-          commit(task.id, "sent", run.thread);
-          continue;
-        }
-        const activity = await observe(run.thread);
-        if (activity === "running" || activity === "unknown") continue;
-        if (activity !== "idle") {
-          state.runs[task.id] = {
-            kind: "blocked",
-            thread: run.thread,
-            reason: `Worker ${activity}; inspect before resuming`,
-          };
-          commit(task.id, "blocked", activity);
-          continue;
-        }
-        const reportPath = join(directory, `${task.id}.report.json`);
-        if (!existsSync(reportPath)) continue;
-        const report = object(JSON.parse(await readFile(reportPath, "utf8")));
-        if (report.attempt !== run.attempt) continue;
-        if (report.kind === "blocked") {
-          state.runs[task.id] = {
-            kind: "blocked",
-            thread: run.thread,
-            reason: text(report.reason),
-          };
-          commit(task.id, "blocked", text(report.reason));
-          continue;
-        }
-        if (report.kind !== "candidate")
-          throw new Error("Invalid worker report");
-        const revision = git(run.worktree, "rev-parse", "HEAD");
-        const changed = git(
-          run.worktree,
-          "diff",
-          "--name-only",
-          run.base,
-          revision,
-        )
-          .split("\n")
-          .filter(Boolean);
-        const eligible =
-          report.revision === revision &&
-          revision !== run.base &&
-          !git(run.worktree, "status", "--porcelain") &&
-          changed.length > 0 &&
-          changed.every((path) =>
-            config.scope.some(
-              (prefix) =>
-                path === prefix ||
-                (prefix.endsWith("/") && path.startsWith(prefix)),
-            ),
-          );
-        const result = eligible
-          ? await new Promise<{
-              status: number | null;
-              stdout: string;
-              stderr: string;
-              error: Error | null;
-            }>((resolve) => {
-              execFile(
-                "bash",
-                ["-lc", config.verify],
-                {
-                  cwd: run.worktree,
-                  encoding: "utf8",
-                  timeout: 120_000,
-                  maxBuffer: 1024 * 1024,
-                },
-                (error, stdout, stderr) => {
-                  const status =
-                    typeof error?.code === "number"
-                      ? error.code
-                      : error
-                        ? null
-                        : 0;
-                  resolve({
-                    status,
-                    stdout,
-                    stderr,
-                    error: status === null ? error : null,
-                  });
-                },
-              );
-            })
-          : null;
-        const log = join(directory, `${task.id}-${run.attempt}.log`);
-        const diagnostics = result
-          ? `${result.stdout ?? ""}${result.stderr ?? ""}${result.error ?? ""}`
-          : "Candidate revision, clean tree, or allowed-path check failed";
-        await writeFile(log, diagnostics);
+      async function send(
+        task: Task,
+        run: Extract<Run, { kind: "running" }>,
+        message: string,
+      ) {
+        run.delivery = "sending";
+        commit(task.id, "sending", run.thread);
+        await host.send(run.thread, message);
+        run.delivery = "sent";
+        commit(task.id, "sent", run.thread);
+      }
+
+      async function accept(
+        task: Task,
+        run: Extract<Run, { kind: "running" }>,
+        report: Record<string, unknown>,
+        revision: string,
+        log: string,
+      ) {
+        const target = git(root, "rev-parse", "HEAD");
         if (
-          result?.status === 0 &&
-          git(run.worktree, "rev-parse", "HEAD") === revision &&
-          !git(run.worktree, "status", "--porcelain")
+          git(root, "status", "--porcelain") ||
+          (target !== run.base && target !== revision)
         ) {
-          const target = git(root, "rev-parse", "HEAD");
-          if (
-            git(root, "status", "--porcelain") ||
-            (target !== run.base && target !== revision)
-          ) {
-            state.runs[task.id] = {
-              kind: "blocked",
-              thread: run.thread,
-              reason: "Integration target changed; reconcile before landing",
-            };
-            commit(task.id, "blocked", "target-changed");
-            continue;
-          }
-          if (target !== revision) git(root, "merge", "--ff-only", revision);
-          await store.ledger.record({
-            pr: queue.indexOf(task) + 1,
-            sha: revision,
-            verdict: "unit-test-verified",
-            evidence: log,
-          });
           state.runs[task.id] = {
-            kind: "done",
+            kind: "blocked",
             thread: run.thread,
-            revision,
-            insight:
-              typeof report.insight === "string"
-                ? report.insight.slice(0, 1000)
-                : "",
+            reason: "Integration target changed; reconcile before landing",
           };
-          commit(task.id, "accepted", revision);
+          commit(task.id, "blocked", "target-changed");
+          return;
+        }
+        if (target !== revision) git(root, "merge", "--ff-only", revision);
+        await store.ledger.record({
+          pr: queue.indexOf(task) + 1,
+          sha: revision,
+          verdict: "unit-test-verified",
+          evidence: log,
+        });
+        state.runs[task.id] = {
+          kind: "done",
+          thread: run.thread,
+          revision,
+          insight:
+            typeof report.insight === "string"
+              ? report.insight.slice(0, 1000)
+              : "",
+        };
+        commit(task.id, "accepted", revision);
+      }
+
+      async function checkCandidate(
+        task: Task,
+        run: Extract<Run, { kind: "running" }>,
+        report: Record<string, unknown>,
+      ) {
+        const { revision, log } = await candidateEvidence(
+          directory,
+          task,
+          run,
+          report,
+          config,
+        );
+        if (revision) {
+          await accept(task, run, report, revision, log);
         } else if (run.attempt < 2) {
           run.attempt++;
           run.delivery = "queued";
@@ -427,59 +463,111 @@ export function createFactory(
           commit(task.id, "blocked", log);
         }
         if (state.runs[task.id]?.kind === "running") {
-          const retry = `Verification rejected attempt ${run.attempt - 1}. Read ${log}, repair the candidate, and submit report attempt ${run.attempt}.\n${await prompt(task, run, config)}`;
-          run.delivery = "sending";
-          commit(task.id, "sending", run.thread);
-          await host.send(run.thread, retry);
-          run.delivery = "sent";
-          commit(task.id, "sent", run.thread);
+          await send(
+            task,
+            run,
+            `Verification rejected attempt ${run.attempt - 1}. Read ${log}, repair the candidate, and submit report attempt ${run.attempt}.\n${await prompt(task, run, config)}`,
+          );
           return state;
         }
       }
-      if (Object.values(state.runs).some((run) => run.kind === "running"))
+
+      async function settle(
+        task: Task,
+        run: Extract<Run, { kind: "running" }>,
+      ) {
+        if (run.delivery === "sending") {
+          state.runs[task.id] = {
+            kind: "uncertain",
+            thread: run.thread,
+            reason: "Delivery outcome unknown; inspect thread before recovery",
+          };
+          commit(task.id, "uncertain", "delivery-unknown");
+          return state;
+        }
+        if (run.delivery === "queued") {
+          await send(task, run, await prompt(task, run, config));
+          return;
+        }
+        const activity = await observe(run.thread);
+        if (activity === "running" || activity === "unknown") return;
+        if (activity !== "idle") {
+          state.runs[task.id] = {
+            kind: "blocked",
+            thread: run.thread,
+            reason: `Worker ${activity}; inspect before resuming`,
+          };
+          commit(task.id, "blocked", activity);
+          return;
+        }
+        const report = await currentReport(directory, task, run.attempt);
+        if (!report) return;
+        if (report.kind === "blocked") {
+          state.runs[task.id] = {
+            kind: "blocked",
+            thread: run.thread,
+            reason: text(report.reason),
+          };
+          commit(task.id, "blocked", text(report.reason));
+          return;
+        }
+        if (report.kind !== "candidate")
+          throw new Error("Invalid worker report");
+        return checkCandidate(task, run, report);
+      }
+
+      async function dispatchNext() {
+        if (Object.values(state.runs).some((run) => run.kind === "running"))
+          return state;
+        const next = queue.find(
+          (task) =>
+            !state.runs[task.id] &&
+            task.after.every((id) => state.runs[id]?.kind === "done"),
+        );
+        if (!next || !state.owner) return state;
+        if (git(root, "status", "--porcelain"))
+          throw new Error("Commit existing changes before dispatch");
+        const base = git(root, "rev-parse", "HEAD");
+        const worktree = join(directory, "worktrees", next.id);
+        state.runs[next.id] = { kind: "creating", base, worktree };
+        commit(next.id, "creating", base);
+        git(
+          root,
+          "worktree",
+          "add",
+          "-b",
+          `feat/${next.id}-${randomUUID().slice(0, 8)}`,
+          worktree,
+          base,
+        );
+        const thread = await host.create(
+          state.owner,
+          config.workerModel,
+          config.workerEffort,
+        );
+        const run: Extract<Run, { kind: "running" }> = {
+          kind: "running",
+          base,
+          worktree,
+          thread,
+          attempt: 1,
+          delivery: "queued",
+        };
+        state.runs[next.id] = run;
+        commit(next.id, "created", thread);
+        await watch(thread);
+        await send(next, run, await prompt(next, run, config));
         return state;
-      const next = queue.find(
-        (task) =>
-          !state.runs[task.id] &&
-          task.after.every((id) => state.runs[id]?.kind === "done"),
-      );
-      if (!next || !state.owner) return state;
-      if (git(root, "status", "--porcelain"))
-        throw new Error("Commit existing changes before dispatch");
-      const base = git(root, "rev-parse", "HEAD");
-      const worktree = join(directory, "worktrees", next.id);
-      state.runs[next.id] = { kind: "creating", base, worktree };
-      commit(next.id, "creating", base);
-      git(
-        root,
-        "worktree",
-        "add",
-        "-b",
-        `factory/${next.id}-${randomUUID().slice(0, 8)}`,
-        worktree,
-        base,
-      );
-      const thread = await host.create(
-        state.owner,
-        config.workerModel,
-        config.workerEffort,
-      );
-      const run: Extract<Run, { kind: "running" }> = {
-        kind: "running",
-        base,
-        worktree,
-        thread,
-        attempt: 1,
-        delivery: "queued",
-      };
-      state.runs[next.id] = run;
-      commit(next.id, "created", thread);
-      await watch(thread);
-      run.delivery = "sending";
-      commit(next.id, "sending", thread);
-      await host.send(thread, await prompt(next, run, config));
-      run.delivery = "sent";
-      commit(next.id, "sent", thread);
+      }
+
+      async function settleRunning() {
+        for (const task of queue) {
+          const run = state.runs[task.id];
+          if (run?.kind === "running" && (await settle(task, run))) return true;
+        }
+        return false;
+      }
+      if (!(await settleRunning())) await dispatchNext();
       return state;
     } finally {
       persistence?.close();

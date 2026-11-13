@@ -17,69 +17,75 @@ export type DashboardSnapshot = {
   }[];
 };
 
-function parseSnapshot(value: unknown): DashboardSnapshot {
+function record(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object") throw new Error("Invalid status");
+  return { ...value };
+}
+
+function string(value: unknown): string {
+  if (typeof value !== "string") throw new Error("Invalid task");
+  return value;
+}
+
+function reference(value: unknown, pattern: RegExp): string | null {
+  if (value === null) return null;
+  if (typeof value !== "string" || !pattern.test(value))
+    throw new Error("Invalid task");
+  return value;
+}
+
+function activity(
+  value: unknown,
+): DashboardSnapshot["tasks"][number]["status"] {
+  switch (value) {
+    case "working":
+    case "idle":
+    case "blocked":
+    case "queued":
+    case "accepted":
+    case "unknown":
+      return value;
+    default:
+      throw new Error("Invalid activity");
+  }
+}
+
+function parseTask(value: unknown): DashboardSnapshot["tasks"][number] {
+  const task = record(value);
+  return {
+    id: string(task.id),
+    title: string(task.title),
+    status: activity(task.status),
+    thread: reference(task.thread, /^T-[\w-]+$/),
+    revision: reference(task.revision, /^[a-f0-9]{40}$/),
+  };
+}
+
+function parseSnapshot(input: unknown): DashboardSnapshot {
+  const value = record(input);
   if (
-    !value ||
-    typeof value !== "object" ||
-    !("project" in value) ||
     typeof value.project !== "string" ||
-    !("observedAt" in value) ||
     typeof value.observedAt !== "string" ||
     !Number.isFinite(Date.parse(value.observedAt)) ||
-    !("enabled" in value) ||
     typeof value.enabled !== "boolean" ||
-    !("tasks" in value) ||
     !Array.isArray(value.tasks)
   )
     throw new Error("Invalid status");
-  const tasks = value.tasks.map(
-    (task: unknown): DashboardSnapshot["tasks"][number] => {
-      if (
-        !task ||
-        typeof task !== "object" ||
-        !("id" in task) ||
-        typeof task.id !== "string" ||
-        !("title" in task) ||
-        typeof task.title !== "string" ||
-        !("status" in task) ||
-        !("thread" in task) ||
-        !(
-          task.thread === null ||
-          (typeof task.thread === "string" && /^T-[\w-]+$/.test(task.thread))
-        ) ||
-        !("revision" in task) ||
-        !(
-          task.revision === null ||
-          (typeof task.revision === "string" &&
-            /^[a-f0-9]{40}$/.test(task.revision))
-        )
-      )
-        throw new Error("Invalid task");
-      const status = task.status;
-      if (
-        status !== "working" &&
-        status !== "idle" &&
-        status !== "blocked" &&
-        status !== "queued" &&
-        status !== "accepted" &&
-        status !== "unknown"
-      )
-        throw new Error("Invalid activity");
-      return {
-        id: task.id,
-        title: task.title,
-        status,
-        thread: task.thread,
-        revision: task.revision,
-      };
-    },
-  );
   return {
     project: value.project,
     observedAt: value.observedAt,
     enabled: value.enabled,
-    tasks,
+    tasks: value.tasks.map(parseTask),
   };
+}
+
+function missingFile(error: unknown): boolean {
+  return (
+    !!error &&
+    typeof error === "object" &&
+    "code" in error &&
+    error.code === "ENOENT"
+  );
 }
 
 /** Serve a curated, read-only status projection, never raw factory files. @throws If Git or HTML is unavailable. */
@@ -122,12 +128,7 @@ export function startDashboard({ root, port }: { root: string; port: number }) {
           { headers },
         );
       } catch (error) {
-        if (
-          error &&
-          typeof error === "object" &&
-          "code" in error &&
-          error.code === "ENOENT"
-        ) {
+        if (missingFile(error)) {
           return Response.json(
             {
               project: basename(root),

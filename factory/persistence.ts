@@ -38,6 +38,40 @@ function thread(value: unknown): value is ThreadID {
   return text(value) && value.startsWith("T-") && value.length > 2;
 }
 
+function worktreeRun(run: Record<string, unknown>): boolean {
+  return text(run.base) && text(run.worktree);
+}
+
+const runValidators: Record<string, (run: Record<string, unknown>) => boolean> =
+  {
+    creating: worktreeRun,
+    running: (run) =>
+      worktreeRun(run) &&
+      thread(run.thread) &&
+      Number.isSafeInteger(run.attempt) &&
+      typeof run.attempt === "number" &&
+      run.attempt > 0 &&
+      typeof run.delivery === "string" &&
+      ["queued", "sending", "sent"].includes(run.delivery),
+    blocked: (run) =>
+      text(run.reason) && (run.thread === undefined || thread(run.thread)),
+    uncertain: (run) => text(run.reason) && thread(run.thread),
+    done: (run) =>
+      text(run.revision) &&
+      thread(run.thread) &&
+      typeof run.insight === "string",
+  };
+
+function validateRun(id: string, value: unknown) {
+  const run = record(value);
+  const validate =
+    typeof run.kind === "string" && Object.hasOwn(runValidators, run.kind)
+      ? runValidators[run.kind]
+      : undefined;
+  if (!/^[a-zA-Z0-9_-]+$/.test(id) || !validate?.(run))
+    throw new Error(`Invalid factory run ${id}`);
+}
+
 function stateRecord(value: unknown): State {
   const state = record(value);
   if (
@@ -45,40 +79,8 @@ function stateRecord(value: unknown): State {
     (state.owner !== undefined && !thread(state.owner))
   )
     throw new Error("Invalid factory state");
-  for (const [id, value] of Object.entries(record(state.runs))) {
-    const run = record(value);
-    let valid = /^[a-zA-Z0-9_-]+$/.test(id);
-    switch (run.kind) {
-      case "creating":
-        valid &&= text(run.base) && text(run.worktree);
-        break;
-      case "running":
-        valid &&=
-          text(run.base) &&
-          text(run.worktree) &&
-          thread(run.thread) &&
-          Number.isSafeInteger(run.attempt) &&
-          (run.attempt as number) > 0 &&
-          ["queued", "sending", "sent"].includes(run.delivery as string);
-        break;
-      case "blocked":
-        valid &&=
-          text(run.reason) && (run.thread === undefined || thread(run.thread));
-        break;
-      case "uncertain":
-        valid &&= text(run.reason) && thread(run.thread);
-        break;
-      case "done":
-        valid &&=
-          text(run.revision) &&
-          thread(run.thread) &&
-          typeof run.insight === "string";
-        break;
-      default:
-        valid = false;
-    }
-    if (!valid) throw new Error(`Invalid factory run ${id}`);
-  }
+  for (const [id, value] of Object.entries(record(state.runs)))
+    validateRun(id, value);
   return value as State;
 }
 

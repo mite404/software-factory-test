@@ -35,6 +35,7 @@ case "$1" in
     bun run format:check
     guard
     bun test --only-failures
+    bun run fallow:ci
     ;;
   *)
     echo "unknown stage: $1" >&2

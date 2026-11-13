@@ -11,6 +11,40 @@ import { openPersistence } from "./persistence";
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 
+async function damageCandidate(
+  gate: string,
+  root: string,
+  worktree: string,
+  reportPath: string,
+  base: string,
+) {
+  if (gate === "revision") {
+    await writeFile(
+      reportPath,
+      JSON.stringify({ kind: "candidate", attempt: 1, revision: base }),
+    );
+  } else if (gate === "dirty") {
+    await writeFile(join(worktree, "src/value"), "dirty");
+  } else if (gate === "integration") {
+    await writeFile(join(root, "prd.md"), "# Changed target\n");
+    git(root, "add", "prd.md");
+    git(root, "commit", "-qm", "target moved");
+  } else {
+    const path = gate === "scope" ? "outside" : "src/value";
+    await writeFile(join(worktree, path), "bad");
+    git(worktree, "add", path);
+    git(worktree, "commit", "-qm", "invalid candidate");
+    await writeFile(
+      reportPath,
+      JSON.stringify({
+        kind: "candidate",
+        attempt: 1,
+        revision: git(worktree, "rev-parse", "HEAD"),
+      }),
+    );
+  }
+}
+
 test.each([
   "valid",
   "revision",
@@ -249,36 +283,8 @@ test.each([
         expect((await control("reconcile")).runs.A).toEqual(original);
         expect(ledger).toEqual([]);
         await writeFile(configPath, saved);
-      } else if (gate !== "valid" && gate !== "responsive") {
-        if (gate === "revision") {
-          await writeFile(
-            reportPath,
-            JSON.stringify({
-              kind: "candidate",
-              attempt: 1,
-              revision: original.base,
-            }),
-          );
-        } else if (gate === "dirty") {
-          await writeFile(join(worktree, "src/value"), "dirty");
-        } else if (gate === "integration") {
-          await writeFile(join(root, "prd.md"), "# Changed target\n");
-          git(root, "add", "prd.md");
-          git(root, "commit", "-qm", "target moved");
-        } else {
-          const path = gate === "scope" ? "outside" : "src/value";
-          await writeFile(join(worktree, path), "bad");
-          git(worktree, "add", path);
-          git(worktree, "commit", "-qm", "invalid candidate");
-          await writeFile(
-            reportPath,
-            JSON.stringify({
-              kind: "candidate",
-              attempt: 1,
-              revision: git(worktree, "rev-parse", "HEAD"),
-            }),
-          );
-        }
+      } else if (!["valid", "responsive"].includes(gate)) {
+        await damageCandidate(gate, root, worktree, reportPath, original.base);
         const rejected = (await control("reconcile")).runs.A;
         expect(ledger).toEqual([]);
         expect(await readFile(join(root, "src/value"), "utf8")).toBe("old");
@@ -339,9 +345,7 @@ test.each([
       expect(creates).toBe(1);
       expect(sends).toEqual(
         Array(
-          gate === "valid" || gate === "permission" || gate === "responsive"
-            ? 1
-            : 2,
+          ["valid", "permission", "responsive"].includes(gate) ? 1 : 2,
         ).fill("T-worker"),
       );
 

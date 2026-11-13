@@ -108,15 +108,16 @@ bun run lint:ci
 bun run typecheck
 bun run format:check
 bun test
-bun run fallow:ci --base origin/main
+bun run fallow:ci
 ```
 
 Installation enables Lefthook. Pre-commit runs type-aware correctness and async-safety lint,
 TypeScript over both `src` and `factory`, and a staged-diff Fallow audit. CI additionally rejects
 lint warnings, runs Oxlint's compiler diagnostics alongside standalone `tsc`, checks formatting,
-runs every test, and audits introduced or worsened Fallow findings against the PR base revision
-(or the previous main revision on a push). Existing complexity is reported, not silently waived
-as new work. Three-occurrence duplication detection follows Yaklabs' configuration.
+runs every test, rejects focused tests and conflict markers, and applies strict whole-project
+Fallow checks. Changed-code attribution is restricted to pre-commit; CI does not exempt inherited
+findings. Fallow's built-in CI mode runs dead-code, duplication, and health analysis with failure
+on findings. Three-occurrence duplication detection follows Yaklabs' configuration.
 
 The locked development dependencies supply Amp's CLI and official plugin types. Tests use a
 bookkeeping fixture instead of requiring a personal Amp skill installation; factory Git operations,
