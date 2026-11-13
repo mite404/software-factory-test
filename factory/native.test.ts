@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
+  chmod,
   copyFile,
   mkdtemp,
   mkdir,
@@ -138,6 +139,93 @@ test.each(["", "bun install --frozen-lockfile && "])(
     }
   },
   90000,
+);
+
+test.each(
+  ["setup", "gate"].flatMap((stage) =>
+    ["none", "SSH_CLIENT", "SSH2_CLIENT"].map((ssh) => ({ stage, ssh })),
+  ),
+)(
+  "$stage preserves nested Bash dependency lookup with $ssh and noninteractive stdin",
+  async ({ stage, ssh }) => {
+    const saved = {
+      SSH_CLIENT: process.env.SSH_CLIENT,
+      SSH2_CLIENT: process.env.SSH2_CLIENT,
+    };
+    delete process.env.SSH_CLIENT;
+    delete process.env.SSH2_CLIENT;
+    if (ssh !== "none") process.env[ssh] = "controlled-shell-fixture";
+    try {
+      const f = await preparationFixture(() => "");
+      const home = join(f.root, ".git/shell-home");
+      await mkdir(join(home, "bin"), { recursive: true });
+      await writeFile(
+        join(home, ".bashrc"),
+        'echo startup-interference >> "$HOME/startup-marker"\nexport PATH=/usr/bin:/bin\n',
+      );
+      const dependency = join(home, "bin/factory-fixture-dependency");
+      await writeFile(
+        dependency,
+        "#!/bin/sh\nif read -r input; then exit 1; fi\necho dependency-ready\n",
+      );
+      await chmod(dependency, 0o755);
+      const command = `env SHLVL=0 HOME='${home}' PATH='${home}/bin:/usr/bin:/bin' bash -c 'factory-fixture-dependency'`;
+      const configPath = join(f.root, ".factory.json");
+      const config = JSON.parse(await readFile(configPath, "utf8"));
+      if (stage === "setup") config.setup = `${command} && ${config.setup}`;
+      else config.verify = command;
+      await writeFile(configPath, JSON.stringify(config));
+      f.git("add", ".factory.json");
+      f.git(
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "-qm",
+        "configure nested shell",
+      );
+      const factory = f.factory();
+      expect((await factory.tick("start", "T-owner")).runs.A).toMatchObject({
+        kind: "running",
+        attempt: 1,
+      });
+      await mkdir(join(f.worktree, "src"));
+      await writeFile(join(f.worktree, "src/value"), "good");
+      f.git("-C", f.worktree, "add", "src/value");
+      f.git(
+        "-C",
+        f.worktree,
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "-qm",
+        "candidate",
+      );
+      const revision = f.git("-C", f.worktree, "rev-parse", "HEAD");
+      await writeFile(
+        join(factory.directory, "A.report.json"),
+        JSON.stringify({ kind: "candidate", attempt: 1, revision }),
+      );
+      f.host.state = async () => "idle";
+      expect((await factory.tick("reconcile")).runs.A).toMatchObject({
+        kind: "done",
+        revision,
+      });
+      expect(await Bun.file(join(home, "startup-marker")).exists()).toBe(false);
+      if (stage === "gate")
+        expect(await readFile(join(factory.directory, "A-1.log"), "utf8")).toBe(
+          "dependency-ready\n",
+        );
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  },
 );
 
 test.each([

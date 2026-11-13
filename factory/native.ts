@@ -320,14 +320,15 @@ function verify(
     let failure: Error | null = null;
     const child = spawn(
       "bash",
-      onSpawn
-        ? [
-            "-lc",
-            'read -r ready && exec bash -lc "$1"',
-            "factory-setup",
-            command,
-          ]
-        : ["-lc", command],
+      [
+        "--noprofile",
+        "--norc",
+        "-c",
+        // Both socket stdin and inherited SSH client markers trigger Bash's remote startup.
+        `${onSpawn ? "read -r ready && " : ""}exec env -u SSH_CLIENT -u SSH2_CLIENT bash -lc "$1" </dev/null`,
+        "factory-command",
+        command,
+      ],
       {
         cwd: worktree,
         detached: true,

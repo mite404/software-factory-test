@@ -79,10 +79,16 @@ must be run in the assigned prepared worktree; this ticket does not claim they a
 
 ## Done when
 
-- [ ] Native setup succeeds with ordinary declared commands and no stdin workaround in config.
-- [ ] Verification also preserves nested dependency lookup without relying on ancestor tools.
-- [ ] Interrupted setup, timeout and explicit same-worktree retry retain their existing behavior.
-- [ ] Exact committed candidate passes full gates and native conditional cold review.
+- [x] Native setup succeeds with ordinary declared commands and no stdin workaround in config.
+- [x] Verification also preserves nested dependency lookup without relying on ancestor tools.
+- [x] Interrupted setup, timeout and explicit same-worktree retry retain their existing behavior.
+- [x] Exact committed candidate passes full gates and native conditional cold review.
+
+Accepted candidate `a98c57684f63b5103c3456ae6b432fd0cb5b5119` passed native attempt-two gates
+and fresh cold review with no findings. The same worker repaired the first review's SSH-marker
+finding. Parent source matched the accepted files exactly and passed 123 tests, all gates and guard.
+Controlled public API tests cover setup and verification without configuration redirections, with
+neither SSH marker and with each marker individually. Temporary dogfood redirections were removed.
 
 ## Notes
 

@@ -279,10 +279,10 @@ passed parent gates and were committed locally as `f8eda06`; nothing has been pu
   repair was manual. Automatic preparation is now accepted and integrated locally.
 
 The next native dispatch exposed socket-backed command stdin causing nested Bash to reset Bun's
-dependency paths. Configuration redirects stdin without skipping hooks or gates, and explicit
-`retry-setup` recovered the same worktree at implementation attempt one.
-[Shared-launcher repair](feats/noninteractive-launcher/noninteractive-launcher-ticket1.md) remains
-required to remove that configuration workaround.
+dependency paths. Explicit `retry-setup` recovered the same worktree at implementation attempt one.
+[Shared-launcher repair](feats/noninteractive-launcher/noninteractive-launcher-ticket1.md) is now
+accepted through same-worker repair and fresh cold review. Parent verification passed 123 tests,
+all gates and guard. Ordinary setup and verification commands no longer need stdin redirections.
 
 ## Delivery order and proof
 
@@ -308,7 +308,7 @@ New required pipeline stories are tracked separately from the accepted pre-accep
 [Repair escalation](feats/repair-escalation/repair-escalation-ticket1.md) is accepted through native
 attempt-two verification and fresh cold review. Parent verification passed 117 tests, all gates
 and guard. Two rejections now preserve an owner-resumable checkpoint rather than a terminal cap.
-The active bounded unit is the shared-launcher repair, before further feature dispatch.
+The shared-launcher repair is also accepted and integrated locally.
 Re-scope each later ticket against accepted prerequisites.
 
 Finish the existing sequential setup and dispatch trial first. Build F02 and F03 as the persistence

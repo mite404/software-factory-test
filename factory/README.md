@@ -63,6 +63,13 @@ paths in the reason. An existing path must be the exact registered worker worktr
 can run. A path that fails this identity check is left intact for operator inspection rather than
 treated as prepared. Commands run under the existing coordinator lock, outside SQLite transactions.
 The coordinator records the command, timeout, worktree, log path, and process group in SQLite.
+Setup and verification commands run through `bash -lc` with stdin connected to `/dev/null`.
+They cannot prompt for input. The launcher removes inherited `SSH_CLIENT` and `SSH2_CLIENT` markers.
+Together with replacing Bun's socket-backed stdin, this prevents Bash's remote-shell startup
+detection from loading `.bashrc` and replacing dependency paths in nested shells.
+Setup keeps a private readiness pipe until its process group is durably recorded; only then
+does the launcher replace stdin and execute the declared command. Commands need no stdin redirection
+in configuration. Login-shell profiles still apply; this is not a hermetic environment.
 Logs live in the repository Git directory under `factory/<ticket>-setup-<unique-id>.log`. Output
 is bounded and recorded as it arrives. A timeout or output limit kills the command's process group
 and closes its output pipes so detached descendants cannot hold the coordinator open. Descendants
