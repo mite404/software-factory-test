@@ -163,6 +163,17 @@ function tally(feed: Feed): string {
   ].join(" · ");
 }
 
+// The feed says "blocked" for a few seconds while a cold review is being dispatched. A pending
+// review is work in progress, so it counts as working everywhere on the page.
+function settle(feed: Feed): Feed {
+  return {
+    ...feed,
+    tasks: feed.tasks.map((task) =>
+      task.evidence?.review?.pending ? { ...task, status: "working" } : task,
+    ),
+  };
+}
+
 function nextLabel(active: Task | undefined, total: number): string {
   if (active) return `${active.id}, ${active.status}`.toUpperCase();
   return total ? "EVERY TICKET LANDED" : "NO TICKETS";
@@ -174,9 +185,19 @@ function nextLabel(active: Task | undefined, total: number): string {
  * @param prev The previous poll, or null on the first one, which replays no transitions.
  * @param now Epoch milliseconds used to age the observation.
  */
-export function derive(prev: Feed | null, next: Feed, now: number): View {
+export function derive(prev: Feed | null, raw: Feed, now: number): View {
+  const next = settle(raw);
   const tasks = next.tasks;
-  const before = new Map((prev ?? next).tasks.map((t) => [t.id, t.status]));
+  const earlier = settle(prev ?? raw).tasks;
+  const before = new Map(earlier.map((t) => [t.id, t.status]));
+  // A review record that disappears without a landing is a rejection. The feed's own "blocked"
+  // lasts about 2 s, shorter than a poll, so the status alone misses it.
+  const reviewed = new Set(
+    earlier.filter((t) => t.evidence?.review).map((t) => t.id),
+  );
+  const rejected = tasks.find(
+    (t) => t.status !== "accepted" && !t.evidence?.review && reviewed.has(t.id),
+  )?.id;
   const became = (status: Task["status"]) =>
     tasks.find((t) => t.status === status && before.get(t.id) !== status)?.id;
   const rows = tasks
@@ -234,6 +255,6 @@ export function derive(prev: Feed | null, next: Feed, now: number): View {
     landed: !!landing,
     reviewed: !!tasks.find((t) => t.id === landing)?.evidence?.review,
     outRow: rowOf(landing),
-    backRow: rowOf(became("blocked")),
+    backRow: rowOf(rejected ?? became("blocked")),
   };
 }

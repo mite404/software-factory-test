@@ -170,3 +170,20 @@ test("a tooltip cuts a brief-length title and leaves a short one whole", () => {
   expect(long!.label).toBe(`T1 · ${"x".repeat(39)}… · working`);
   expect(short!.label).toBe("T2 · ticket 2 · idle");
 });
+
+// Real sequence from backup-adoption-ticket1: "blocked" while its review is dispatched, then a
+// rejection whose own "blocked" falls between two polls.
+test("a pending review is never drawn blocked, and a vanished review is a rejection", () => {
+  const working = feed(["accepted", "working"]);
+  const dispatching = feed(["accepted", "blocked"]);
+  dispatching.tasks[1]!.evidence = { review: { pending: true } };
+  const view = derive(working, dispatching, NOW);
+  expect(view.backRow).toBe(0);
+  expect(view.builders[0]!.status).toBe("working");
+  expect(view.tally).toBe("1 landed · 0 queued");
+
+  expect(derive(dispatching, working, NOW).backRow).toBe(1); // review gone, not landed
+  expect(derive(working, working, NOW).backRow).toBe(0);
+  const landed = feed(["accepted", "accepted"]);
+  expect(derive(dispatching, landed, NOW).backRow).toBe(0);
+});
