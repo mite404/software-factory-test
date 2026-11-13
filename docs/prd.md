@@ -47,6 +47,7 @@ only part of one. Evidence and trial limitations remain in [workflow-trials.md](
 - F11: Safe worker retirement remains planned.
 - F12: A versioned project-owned factory definition remains planned. Existing `.factory.json`
   configuration and the documented Foreman prompt are starting points, not the complete system.
+- F13: Evidence-based effectiveness, scorecards, and spending reports remain planned.
 
 Automated discovery, scheduled full gates, and the complete backup, restore, and retirement loop
 remain outstanding. Implementation workers currently use Sol 6.1 at medium effort, one at a time.
@@ -351,6 +352,70 @@ Provide a read-only check and effective-configuration view. Preserve operator ed
 migrate existing `.factory.json` installations explicitly, without silently changing permissions.
 See F12 for acceptance. The configuration engine is not implemented.
 
+### R16. Factory effectiveness and cost visibility
+
+Measure whether the factory delivers verified changes with less repair and intervention, not how
+many threads, tokens, tests, or PRs it produces. Extend the existing abstract workbench with an
+effectiveness view; the reference screenshots inform capabilities, not the visual design. Show
+delivery reliability first, workflow delays next, and scorecards and spending as supporting views.
+
+Correlate project, ticket, worker thread, candidate revision, integration revision, optional PR,
+check run and attempt, and evidence. Report opened, merged, closed-unmerged, and pending PRs
+separately. Direct-commit projects retain delivery-level reporting without fabricated PR records.
+PR merge, local acceptance, remote publication, and post-landing verification are distinct events.
+
+Define the initial measures as follows:
+
+- First-pass CI success: deliveries whose first submitted revision passes all configured required
+  checks on their first attempt, divided by deliveries with an observed initial CI outcome.
+  Preserve initial failures even after reruns or repairs. Show evidence coverage against all
+  eligible deliveries alongside the rate, with numerator and denominator.
+- Current CI state: required checks on the exact current revision, with pending, failed, cancelled,
+  skipped, stale-revision, unavailable, and no-CI states distinct from passed. No CI is not green.
+- Repair after landing: linked regressions, reverts, and repair tickets during a configured
+  observation window. Separate confirmed cases, suspected links, mature observations, and changes
+  still under observation. Missing incident reporting does not prove defect-free delivery.
+- Flow: queue-to-start, start-to-first-proof, verification, review wait, and integration durations,
+  plus same-worker corrections and blocked time. Show medians, tails, sample counts, and unfinished
+  work age separately. Do not infer active coding time from elapsed thread time.
+- Human intervention: explicit rescue or correction requests, separate from planned approvals and
+  ordinary steering. Automatic notifications are not human interventions; lower counts alone do
+  not prove higher quality.
+
+Each measure states its cohort, time basis, formula, exclusions, freshness, and evidence coverage.
+Make underlying deliveries and failure evidence inspectable. Deduplicate events and check attempts;
+out-of-order updates cannot erase earlier failures or attach old checks to a changed revision.
+Compare matching task categories and configuration versions rather than rank unlike projects.
+
+Keep PR and test-suite scorecards multidimensional. Use deterministic check results for acceptance,
+requirement coverage, regression reproduction, and workflow compliance where evidence exists.
+Test counts and coverage percentages alone are not test effectiveness. Retain suite versions,
+fixture identities, evaluator versions, candidate revisions, counts, and failure evidence. Separate
+observed instability from confirmed flaky tests. Optional model judgments are labeled advisory,
+versioned with their rubric and model, and never override a failed mandatory gate. Do not collapse
+the dimensions into a single factory score or claim a trend across incompatible rubric versions.
+Project-specific scorer declarations belong to the factory definition from R15.
+
+Use Amp's [thread usage API](https://ampcode.com/api/external) rather than invent token prices or
+scrape its UI. It exposes lifetime thread totals and model, orb, and tool breakdowns. Collect
+authorized usage server-side, preserving observation time and source semantics. Count each thread
+once, including workers and corrections. Parent usage does not include child-thread usage. Keep
+shared orchestration overhead unallocated unless an explicit allocation rule is recorded.
+
+Report Amp-reported USD usage separately from experimental BYOK list-price estimates. These are not
+cash invoices or complete provider bills. Do not add included orb/tool/model subtotals to the
+thread total again. Missing provider costs, subscription coverage, and inaccessible or expired
+records are visible, not free work. Current API retention is 90 days, or 180 days for Enterprise
+workspaces; preserve permitted observations before expiry when historical reporting is required.
+Time-window spending uses observed usage deltas, not lifetime totals for recently created threads.
+Missing boundary observations produce a labeled partial period, not invented historical spend.
+Cost per accepted delivery includes attributable retries and shows attribution coverage; retain
+failed and abandoned work in project spending rather than hiding it outside successful PRs.
+
+Reports read recorded evidence without model calls or CI reruns. Evaluations are explicit,
+permission-controlled work with their own cost. Score changes do not authorize policy changes,
+new workers, publications, or self-modification. Implementation and usage ingestion remain planned.
+
 ## Acceptance criteria
 
 - AC1: A fixture PRD produces one coherent story and fake ticket with observable acceptance
@@ -396,6 +461,16 @@ See F12 for acceptance. The configuration engine is not implemented.
   upgrade preserve active ownership, project edits, and explicit permissions.
 - AC29: Duplicate native hook events do not repeat side effects. Failed or unauthorized hooks remain
   visible and cannot bypass revision-bound acceptance or create replacement workers.
+- AC30: A failed initial CI run followed by a successful repair remains a first-pass failure.
+  Missing checks and stale-revision checks cannot inflate success rates; coverage is visible.
+- AC31: Reports distinguish PR merge, accepted direct commits, publication, and post-landing repair,
+  with explicit cohorts, unfinished work, observation windows, and inspectable evidence.
+- AC32: Versioned PR and suite scorecards preserve counts and failures. An advisory model score or
+  high average cannot override a failed mandatory gate or imply unmeasured test effectiveness.
+- AC33: Repeated usage imports do not double-count threads or included subtotals. Amp usage, BYOK
+  estimates, shared overhead, and missing data stay distinct; partial periods are labeled.
+- AC34: Dashboard reads trigger no model calls, evaluations, or CI reruns. Invalid, duplicate, and
+  out-of-order events cannot change metric meaning or silently alter execution permissions.
 
 Passing simulations alone does not satisfy native dispatch or restart acceptance. See
 [workflow-trials.md](workflow-trials.md) for observed results and limitations.
