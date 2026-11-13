@@ -194,6 +194,32 @@ not pass this trial, despite the feature's passing local checks.
 
 Sources, bootstrap receipts, and full logs are under `.amp/in/scratchpad/factory-feature-02/`.
 
+## Trial 6: recover the original disconnected candidate
+
+2026-11-13. [Feature 03](features/feature-03/feature-03-impl.md) used one Sol 6.1/medium worker.
+The initial patch passed local tests but failed live acceptance because synchronous verification
+blocked the plugin heartbeat. A diagnostic wrapper confirmed matching server idle state before
+the block. The same worker then lost executor connectivity before correcting that second failure.
+
+With explicit permission, the parent resumed that worker through CLI in a supervised service.
+The amendment made verification asynchronous and added an event-loop responsiveness regression.
+Parent verification passed 53 tests, 1,072 assertions, strict SDK TypeScript, and whitespace checks.
+
+Both refreshed native plugins completed their real verification commands and integrated their
+original candidates. Each fixture retained exactly one creation, delivery, acceptance, and ledger
+entry after repeated reconciliation. Both root revisions matched the reports; both queues were
+paused afterward. No replacement worker, remote write, or worker retirement occurred.
+
+The one-shot CLI continuation was mistakenly run as an auto-restarting service. After completion,
+the service repeatedly resubmitted the same prompt. The operator noticed the repeated messages;
+the parent confirmed the restart counter and stopped the service. No continuation process remained.
+Use a finite shell task for one-shot CLI continuation, not a restarting server service. This trial
+preserved one worker and one acceptance, but did not preserve one corrective prompt submission.
+
+This proves explicit reconciliation after disconnect. It does not prove automatic executor
+reattachment or context-free server status observation. Full logs and patches remain under
+`.amp/in/scratchpad/factory-feature-03/` and the preserved Feature 02 fixture.
+
 [trial-artifact]:
   https://ampcode.com/artifacts/factory-workflow-trials-36c5101e-8f2e-4e6c-ab3f-0a4425873f7e
 [source-workflow]: https://ampcode.com/threads/T-01a1ce51-ec2c-73cf-9b63-a2eb9f40442b

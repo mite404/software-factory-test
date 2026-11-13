@@ -48,10 +48,11 @@ As an operator, I can bind the factory to one orchestrator thread and observe it
 execution and the dashboard agree about which agents own the work.
 
 Priority: P0. Dependencies: F01, F02. Status: native local-worker adapter prototype only.
-Feature 02 model and effort forwarding is locally verified. A live post-disconnect recovery gap
-blocks automated acceptance: native thread state rejects disconnected threads even when the
-supported thread-status tool reports the original worker idle. Repair this before another
-unattended workflow claim; do not replace the worker or treat idle as acceptance.
+Feature 02 model and effort forwarding and Feature 03 explicit disconnected-worker reconciliation
+passed live acceptance. The status fallback uses a supported Amp tool without model calls.
+Verification is asynchronous so it does not starve the plugin heartbeat. Automatic local executor
+reattachment remains unimplemented; resuming the same disconnected worker required authorized CLI
+continuation. Idle remains an observation, not acceptance.
 
 - Store one orchestrator thread ID per project. V1 does not offer an arbitrary thread selector.
 - Observe native Amp thread state and titles without model calls. Distinguish idle, running,

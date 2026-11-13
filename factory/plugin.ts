@@ -1,4 +1,4 @@
-import type { PluginAPI } from "@ampcode/plugin";
+import type { PluginAPI, PluginTools } from "@ampcode/plugin";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
@@ -11,6 +11,18 @@ import {
   type NativeHost,
 } from "./native";
 
+function activity(value: unknown): Awaited<ReturnType<NativeHost["state"]>> {
+  switch (value) {
+    case "idle":
+    case "running":
+    case "awaiting-approval":
+    case "error":
+      return value;
+    default:
+      return "unknown";
+  }
+}
+
 /** Register the repository-local native dispatch adapter. Setup supplies the unchanged store. */
 export default function registerFactory(
   amp: PluginAPI,
@@ -20,6 +32,42 @@ export default function registerFactory(
   const subscriptions: { unsubscribe(): void }[] = [];
   let stopped = false;
   let publishing = false;
+
+  async function observe(
+    id: Parameters<NativeHost["state"]>[0],
+    tools?: PluginTools,
+  ) {
+    try {
+      return activity(await amp.threads.get(id).state.get());
+    } catch {
+      if (!tools) return "unknown";
+    }
+    try {
+      const result = await tools.call("amp.get_thread_status", { thread: id });
+      if (
+        result &&
+        typeof result === "object" &&
+        "metadata" in result &&
+        "agentState" in result
+      ) {
+        const { metadata, agentState } = result;
+        if (
+          metadata &&
+          typeof metadata === "object" &&
+          "threadID" in metadata &&
+          metadata.threadID === id &&
+          agentState &&
+          typeof agentState === "object" &&
+          "state" in agentState
+        )
+          return activity(agentState.state);
+      }
+    } catch {
+      // A failed observation is not evidence that a worker is idle or blocked.
+    }
+    return "unknown";
+  }
+
   const host: NativeHost = {
     async create(parentThreadID, model, reasoningEffort) {
       const agent = amp.createAgent({
@@ -42,26 +90,29 @@ export default function registerFactory(
         .get(id)
         .appendUserMessage({ type: "user-message", content });
     },
-    async state(id) {
-      return amp.threads.get(id).state.get();
-    },
+    state: observe,
     watch(id, wake) {
-      subscriptions.push(
-        amp.threads.get(id).state.subscribe(() => {
-          if (!stopped) {
-            wake();
-            void publish();
-          }
-        }),
-        amp.threads.get(id).title.subscribe(() => {
+      const thread = amp.threads.get(id);
+      const state = thread.state.subscribe(() => {
+        if (!stopped) {
+          wake();
+          void publish();
+        }
+      });
+      try {
+        const title = thread.title.subscribe(() => {
           if (!stopped) void publish();
-        }),
-      );
+        });
+        subscriptions.push(state, title);
+      } catch (error) {
+        state.unsubscribe();
+        throw error;
+      }
     },
   };
   const factory = createFactory(root, host, openStore);
 
-  async function publish() {
+  async function publish(tools?: PluginTools) {
     if (stopped || publishing) return;
     publishing = true;
     try {
@@ -94,19 +145,20 @@ export default function registerFactory(
               if ("thread" in run && run.thread) {
                 row.thread = run.thread;
                 try {
-                  const thread = amp.threads.get(run.thread);
-                  row.title = (await thread.title.get()) ?? task.brief;
-                  if (run.kind === "running") {
-                    const activity = await thread.state.get();
-                    row.status =
-                      activity === "running"
-                        ? "working"
-                        : activity === "idle"
-                          ? "idle"
+                  row.title =
+                    (await amp.threads.get(run.thread).title.get()) ??
+                    task.brief;
+                } catch {}
+                if (run.kind === "running") {
+                  const activity = await observe(run.thread, tools);
+                  row.status =
+                    activity === "running"
+                      ? "working"
+                      : activity === "idle"
+                        ? "idle"
+                        : activity === "unknown"
+                          ? "unknown"
                           : "blocked";
-                  }
-                } catch {
-                  if (run.kind === "running") row.status = "unknown";
                 }
               }
               return row;
@@ -154,7 +206,11 @@ export default function registerFactory(
         action !== "reconcile"
       )
         throw new Error("Unknown action");
-      return JSON.stringify(await factory.tick(action, ctx.thread.id));
+      const state = await factory.tick(action, ctx.thread.id, (id) =>
+        observe(id, ctx.tools),
+      );
+      await publish(ctx.tools);
+      return JSON.stringify(state);
     },
   });
   amp.onDispose(() => {

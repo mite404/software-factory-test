@@ -1,5 +1,5 @@
 import type { AgentReasoningEffort } from "@ampcode/plugin";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import {
@@ -51,9 +51,10 @@ export type NativeHost = {
     effort?: AgentReasoningEffort,
   ): Promise<ThreadID>;
   send(thread: ThreadID, message: string): Promise<void>;
+  /** Observe activity; unavailable evidence is unknown and preserves running ownership. */
   state(
     thread: ThreadID,
-  ): Promise<"idle" | "running" | "awaiting-approval" | "error">;
+  ): Promise<"idle" | "running" | "awaiting-approval" | "error" | "unknown">;
   watch(thread: ThreadID, wake: () => void): void;
 };
 
@@ -229,6 +230,7 @@ export function createFactory(
   async function reconcile(
     action: "status" | "start" | "pause" | "reconcile",
     owner?: ThreadID,
+    observe: NativeHost["state"] = host.state,
   ) {
     const config = await configuration(root);
     const queue = tasks(JSON.parse(await readFile(config.tickets, "utf8")));
@@ -267,19 +269,25 @@ export function createFactory(
         state.enabled = false;
         await atomic(statePath, state);
       }
+      if (action === "status" || !state.enabled || !config.execute)
+        return state;
       const wake = () => {
         void tick("reconcile").catch((error) =>
           event("factory", "error", String(error)),
         );
       };
-      for (const run of Object.values(state.runs)) {
-        if (run.kind === "running" && !watched.has(run.thread)) {
-          watched.add(run.thread);
-          host.watch(run.thread, wake);
+      const watch = async (thread: ThreadID) => {
+        if (watched.has(thread)) return;
+        try {
+          host.watch(thread, wake);
+          watched.add(thread);
+        } catch (error) {
+          await event("factory", "observation-unavailable", String(error));
         }
+      };
+      for (const run of Object.values(state.runs)) {
+        if (run.kind === "running") await watch(run.thread);
       }
-      if (action === "status" || !state.enabled || !config.execute)
-        return state;
       if (
         Object.values(state.runs).some(
           (run) => run.kind === "creating" || run.kind === "uncertain",
@@ -308,8 +316,8 @@ export function createFactory(
           await event(task.id, "sent", run.thread);
           continue;
         }
-        const activity = await host.state(run.thread);
-        if (activity === "running") continue;
+        const activity = await observe(run.thread);
+        if (activity === "running" || activity === "unknown") continue;
         if (activity !== "idle") {
           state.runs[task.id] = {
             kind: "blocked",
@@ -359,11 +367,36 @@ export function createFactory(
             ),
           );
         const result = eligible
-          ? spawnSync("bash", ["-lc", config.verify], {
-              cwd: run.worktree,
-              encoding: "utf8",
-              timeout: 120_000,
-              maxBuffer: 1024 * 1024,
+          ? await new Promise<{
+              status: number | null;
+              stdout: string;
+              stderr: string;
+              error: Error | null;
+            }>((resolve) => {
+              execFile(
+                "bash",
+                ["-lc", config.verify],
+                {
+                  cwd: run.worktree,
+                  encoding: "utf8",
+                  timeout: 120_000,
+                  maxBuffer: 1024 * 1024,
+                },
+                (error, stdout, stderr) => {
+                  const status =
+                    typeof error?.code === "number"
+                      ? error.code
+                      : error
+                        ? null
+                        : 0;
+                  resolve({
+                    status,
+                    stdout,
+                    stderr,
+                    error: status === null ? error : null,
+                  });
+                },
+              );
             })
           : null;
         const log = join(directory, `${task.id}-${run.attempt}.log`);
@@ -469,8 +502,7 @@ export function createFactory(
       };
       state.runs[next.id] = run;
       await atomic(statePath, state);
-      watched.add(thread);
-      host.watch(thread, wake);
+      await watch(thread);
       run.delivery = "sending";
       await atomic(statePath, state);
       await host.send(thread, await prompt(next, run, config));
@@ -487,8 +519,11 @@ export function createFactory(
   function tick(
     action: "status" | "start" | "pause" | "reconcile",
     owner?: ThreadID,
+    observe: NativeHost["state"] = host.state,
   ): Promise<State> {
-    const result = pending.catch(() => {}).then(() => reconcile(action, owner));
+    const result = pending
+      .catch(() => {})
+      .then(() => reconcile(action, owner, observe));
     pending = result;
     return result;
   }

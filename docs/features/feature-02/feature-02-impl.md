@@ -2,7 +2,7 @@
 
 ## Status
 
-- State: locally verified; automated factory acceptance blocked. Priority: P0. Category: feature.
+- State: locally verified; live factory acceptance recovered by Feature 03. Priority: P0.
 - Story: [feature-02-story.md](feature-02-story.md), feature 1.
 - Worker: one `openai/gpt-6.1-sol` child at medium effort. No nested delegation.
 - Planned locally on 2026-11-13. No external ticket, push, or deployment is authorized.
@@ -102,3 +102,8 @@ rewriting that state, granting acceptance from prose, or starting a replacement.
 Local feature verification is complete; automatic post-disconnect acceptance is not. Repair that
 recovery path before claiming the next unattended workflow loop. No application commit or push
 was made here. The original worker and its worktree remain intact.
+
+Feature 03 subsequently repaired explicit reconciliation. The refreshed adapter verified and
+integrated this original candidate with its original worker. Parent checks confirmed one creation,
+delivery, acceptance, and revision-ledger entry after repeated reconciliation. No replacement
+worker was required. The earlier failed trial remains part of the workflow record.

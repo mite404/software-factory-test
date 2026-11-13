@@ -30,6 +30,22 @@ Existing configuration, tickets, and runtime state stay unchanged. Reload the fa
 explicitly after a successful refresh. Ordinary repeated setup remains a no-op, and `--check` never
 writes.
 
+## Recover a disconnected worker
+
+Use the factory control tool's `reconcile` action after reloading the plugin. Native Amp state stays
+the primary observation. If the native read fails, an explicit control invocation can use
+`amp.get_thread_status` through its invocation context. The adapter trusts only structured results
+whose `metadata.threadID` matches the worker and whose `agentState.state` is recognized.
+
+Unavailable or invalid observations remain unknown. The factory retains the running record,
+attempt, report, worktree, and thread for a later reconciliation. Unknown observations never imply
+idle or acceptance. Background recovery has no invocation context and cannot use this fallback.
+
+Server-confirmed idle candidates still require the existing revision, allowed-path, clean-tree,
+verification, and integration checks. Idle without a report is not acceptance. Status and pause do
+not attach observers. Failed attachments can be retried by a later active reconciliation.
+Reconciliation respects the paused queue and `permissions.execute`; it does not grant permission.
+
 ## Dashboard
 
 Run the read-only dashboard against a repository with an installed, loaded factory plugin:
