@@ -1,6 +1,6 @@
 import type { PluginAPI, PluginTools } from "@ampcode/plugin";
-import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { DashboardSnapshot } from "./dashboard";
 import type { Run } from "./persistence";
@@ -36,6 +36,8 @@ function reportedActivity(value: unknown, id: string) {
 }
 
 const runStatuses = {
+  preparing: "unknown",
+  "preparation-failed": "blocked",
   creating: "unknown",
   running: "unknown",
   blocked: "blocked",
@@ -195,8 +197,13 @@ export default function registerFactory(
       };
       await mkdir(factory.directory, { recursive: true });
       const path = join(factory.directory, "dashboard.json");
-      await writeFile(`${path}.tmp`, JSON.stringify(snapshot));
-      if (!stopped) await rename(`${path}.tmp`, path);
+      const temporary = `${path}.${randomUUID()}.tmp`;
+      try {
+        await writeFile(temporary, JSON.stringify(snapshot));
+        if (!stopped) await rename(temporary, path);
+      } finally {
+        await rm(temporary, { force: true });
+      }
     } catch (error) {
       amp.logger.log("factory dashboard observation failed", String(error));
     } finally {
@@ -212,13 +219,13 @@ export default function registerFactory(
   const suffix = createHash("sha256").update(root).digest("hex").slice(0, 8);
   amp.registerTool({
     name: `factory_control_${suffix}`,
-    description: `Control the factory in ${root}. status is read-only. start requires explicit user authorization and permissions.execute=true in .factory.json. pause stops dispatch. reconcile recovers persisted work without granting permissions.`,
+    description: `Control the factory in ${root}. status is read-only. start requires explicit user authorization and permissions.execute=true in .factory.json. pause stops dispatch. reconcile recovers persisted work without granting permissions. retry-setup explicitly reruns parked preparation in the same worktree before creating a worker.`,
     inputSchema: {
       type: "object",
       properties: {
         action: {
           type: "string",
-          enum: ["status", "start", "pause", "reconcile"],
+          enum: ["status", "start", "pause", "reconcile", "retry-setup"],
         },
       },
       required: ["action"],
@@ -230,7 +237,8 @@ export default function registerFactory(
         action !== "status" &&
         action !== "start" &&
         action !== "pause" &&
-        action !== "reconcile"
+        action !== "reconcile" &&
+        action !== "retry-setup"
       )
         throw new Error("Unknown action");
       const state = await factory.tick(action, ctx.thread.id, (id) =>

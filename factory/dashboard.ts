@@ -106,6 +106,8 @@ function durableTask(id: string, run: Run | undefined) {
   };
   if (!run) return row;
   const statuses = {
+    preparing: "unknown",
+    "preparation-failed": "blocked",
     creating: "unknown",
     running: "unknown",
     blocked: "blocked",

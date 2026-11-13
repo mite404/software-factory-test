@@ -89,6 +89,22 @@ test("installer validates native effort before writes and dispatch rejects inval
       JSON.stringify({ ...config, review: true, workerModel: "unknown/model" }),
     );
     expect(configuration(root)).rejects.toThrow(/OpenAI or Anthropic/);
+    for (const setup of ["", " ", null, 1, false, [], {}]) {
+      await writeFile(configPath, JSON.stringify({ ...config, setup }));
+      expect(configuration(root)).rejects.toThrow(/nonempty text/);
+    }
+    for (const setupTimeoutMs of [null, 0, -1, 1.5, "1000", 2_147_483_648]) {
+      await writeFile(
+        configPath,
+        JSON.stringify({ ...config, setup: "true", setupTimeoutMs }),
+      );
+      expect(configuration(root)).rejects.toThrow(/setupTimeoutMs/);
+    }
+    await writeFile(
+      configPath,
+      JSON.stringify({ ...config, setupTimeoutMs: 1000 }),
+    );
+    expect(configuration(root)).rejects.toThrow(/setupTimeoutMs/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -119,11 +135,37 @@ test("refresh rebuilds only the adapter in two repositories", async () => {
       ];
       const run = (flags: string[] = []) =>
         spawnSync("bun", [...args, ...flags], { encoding: "utf8" });
-      expect(run(name === "first" ? ["--review"] : []).status).toBe(0);
+      for (const flags of [
+        ["--setup", " "],
+        ["--setup-timeout-ms", "1000"],
+        ["--setup", "true", "--setup-timeout-ms", "0"],
+      ]) {
+        expect(run(flags).status).toBe(1);
+        expect(await Bun.file(join(root, ".factory.json")).exists()).toBe(
+          false,
+        );
+      }
+      expect(
+        run(
+          name === "first"
+            ? [
+                "--review",
+                "--setup",
+                "bun install --frozen-lockfile",
+                "--setup-timeout-ms",
+                "90000",
+              ]
+            : [],
+        ).status,
+      ).toBe(0);
       const plugin = join(root, ".amp/plugins/software-factory.js");
       const config = join(root, ".factory.json");
       const saved = await Bun.file(config).json();
       expect(saved.review).toBe(name === "first");
+      expect(saved.setup).toBe(
+        name === "first" ? "bun install --frozen-lockfile" : undefined,
+      );
+      expect(saved.setupTimeoutMs).toBe(name === "first" ? 90000 : undefined);
       if (name === "second") delete saved.review;
       saved.workerModel = "anthropic/claude-sonnet-4.6";
       if (name === "first") saved.workerEffort = "high";

@@ -42,6 +42,24 @@ const parked: State = {
       revision: "def",
       insight: "Verified evidence",
     },
+    E: {
+      kind: "preparing",
+      base: "abc",
+      worktree: "/unused-E",
+      command: "bun install --frozen-lockfile",
+      timeoutMs: 120000,
+      log: "/setup-E.log",
+      pid: 12345,
+    },
+    F: {
+      kind: "preparation-failed",
+      base: "abc",
+      worktree: "/unused-F",
+      command: "false",
+      timeoutMs: 1000,
+      log: "/setup-F.log",
+      reason: "Exit 1",
+    },
   },
 };
 
@@ -198,7 +216,7 @@ test("migration preserves nonempty ownership and history exactly once across res
       detail: "def",
     },
   ]);
-  expect(db.query("SELECT count(*) AS n FROM runs").get()).toEqual({ n: 4 });
+  expect(db.query("SELECT count(*) AS n FROM runs").get()).toEqual({ n: 6 });
   expect(db.query("SELECT id FROM tickets").all()).toEqual([{ id: "A" }]);
   db.close();
   await f.factory().tick("pause");
@@ -255,6 +273,14 @@ test.each([
   '{"enabled":true,"runs":{"A":null}}',
   '{"enabled":true,"runs":{"A":{"kind":"running","thread":"T-original"}}}',
   '{"enabled":true,"runs":{"A":{"kind":"unrecognized"}}}',
+  ...[
+    { ...parked.runs.E, log: "" },
+    { ...parked.runs.E, timeoutMs: 0 },
+    { ...parked.runs.E, pid: -1 },
+    { ...parked.runs.E, attempt: 1 },
+    { ...parked.runs.E, thread: "T-premature" },
+    { ...parked.runs.F, reason: "" },
+  ].map((run) => JSON.stringify({ enabled: true, runs: { A: run } })),
 ])(
   "invalid legacy state fails closed without overwriting bytes %s",
   async (bytes) => {

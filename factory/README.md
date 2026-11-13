@@ -39,6 +39,51 @@ To change future workers, edit `workerModel` and `workerEffort` in `.factory.jso
 apply only when creating a new worker. Corrections continue on the same worker with its original
 settings, not a replacement.
 
+## Prepare worker worktrees
+
+Preparation is opt-in. Set `setup` to a shell command in `.factory.json`, or pass
+`--setup 'bun install --frozen-lockfile'` during initial installation. Set `setupTimeoutMs` or pass
+`--setup-timeout-ms 120000` to choose a timeout. The default is 120,000 milliseconds. Timeouts must
+be positive integers no greater than 2,147,483,647 and require a setup command. Omitted setup keeps
+the existing dispatch behavior. Repeated installation, checks, and refresh preserve saved settings.
+
+The dispatcher records `preparing`, creates the worker worktree, and runs setup with that exact
+worktree as its working directory. No implementation thread is created or messaged until setup
+exits successfully and leaves the worktree clean at its base revision. Ignored dependency output
+such as `node_modules/` is allowed; tracked edits and unignored files fail preparation with their
+paths in the reason. An existing path must be the exact registered worker worktree before setup
+can run. A path that fails this identity check is left intact for operator inspection rather than
+treated as prepared. Commands run under the existing coordinator lock, outside SQLite transactions.
+The coordinator records the command, timeout, worktree, log path, and process group in SQLite.
+Logs live in the repository Git directory under `factory/<ticket>-setup-<unique-id>.log`. Output
+is bounded and recorded as it arrives. A timeout or output limit kills the command's process group
+and closes its output pipes so detached descendants cannot hold the coordinator open. Descendants
+that escaped the group may survive; inspect and stop them before retrying.
+
+A nonzero exit, timeout, or local preparation error records `preparation-failed` with its reason
+and retained log. Preparation does not create an implementation attempt or spend a repair attempt.
+Failed and interrupted preparation block further dispatch. Status, reload, start, and reconcile do
+not repeat setup or create a replacement worker. Existing dashboards show failed setup as blocked,
+with no worker thread.
+
+To recover, inspect the saved reason and log, fix the environment or saved setup command, then call
+the native factory control tool with `action: "retry-setup"`. Execution must remain enabled and
+permitted. Commit any root checkout changes, including edits to tracked `.factory.json`, before
+retrying. A dirty root is rejected before setup or worker creation. Retry uses the current
+configured command and timeout in the same worktree. If the clean root has advanced, retry
+fast-forwards the unowned preparation worktree to root HEAD and records that new base before running
+setup. Local worktree changes or a non-fast-forward history require operator reconciliation; retry
+never resets or discards them. Each retry retains the earlier logs and events. Setup commands must
+tolerate partial prior execution, leave the revision unchanged and the worktree clean, and finish
+their subprocesses rather than launch background services.
+
+An interrupted command's recorded process group must have exited before retry can run. If the
+coordinator exits during setup, inspect any surviving process before stopping it or retrying. A
+reopened coordinator never assumes an interrupted command succeeded. A command observed closing
+clears its saved process group, so a later retry does not mistake a reused PID for live setup. Once
+preparation succeeds, worker creation starts at implementation attempt one. Ambiguous thread
+creation or delivery remains parked and cannot be retried with `retry-setup`.
+
 ## Conditional post-graft review
 
 Review is opt-in: pass `--review` during initial setup or set `review: true` in `.factory.json`.
@@ -68,8 +113,9 @@ not the coordinator's model or subsequently edited worker settings.
 
 The reviewer receives original requirements, staged code/callers, and coordinator gate evidence,
 never worker messages, insights, self-review, or prior reviewer opinions. Its only permitted write
-is its JSON verdict report. Findings require severity, location, concrete evidence, and an actionable
-correction; empty findings can pass. Narrative text and idle state cannot approve a candidate.
+is its JSON verdict report. Findings require severity, location, concrete evidence, and an
+actionable correction; empty findings can pass. Narrative text and idle state cannot approve a
+candidate.
 
 Review identity, delivery, verdict evidence, and events live in the existing SQLite run state.
 The dashboard's existing title, thread, revision, and activity fields project the pending review.
@@ -141,9 +187,9 @@ can inflate the displayed queue count, but the dispatcher will not start removed
 does not claim to be a current dispatch plan.
 
 The response retains `project`, `observedAt`, `enabled`, `fresh`, and the existing task fields.
-`durable` is `available`, `missing`, `invalid`, or `unavailable`; `observations` independently reports
-`available`, `missing`, or `invalid`. A missing database returns an empty, non-fresh status, not
-legacy acceptance.
+`durable` is `available`, `missing`, `invalid`, or `unavailable`; `observations` independently
+reports `available`, `missing`, or `invalid`. A missing database returns an empty, non-fresh status,
+not legacy acceptance.
 Invalid or unsupported SQLite returns HTTP 503 with `durable: "invalid"`. Malformed observations
 do not hide valid durable acceptance. GET never initializes, imports, migrates, or rewrites storage.
 All storage connections use a connection-local five-second busy timeout so dashboard readers and

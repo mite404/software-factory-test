@@ -11,7 +11,17 @@ export type Task = {
   size?: "small" | "medium" | "large";
   risky?: boolean;
 };
+type Preparation = {
+  base: string;
+  worktree: string;
+  command: string;
+  timeoutMs: number;
+  log: string;
+  pid?: number;
+};
 export type Run =
+  | (Preparation & { kind: "preparing" })
+  | (Preparation & { kind: "preparation-failed"; reason: string })
   | { kind: "creating"; base: string; worktree: string }
   | {
       kind: "running";
@@ -50,12 +60,27 @@ function text(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function positiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
 function thread(value: unknown): value is ThreadID {
   return text(value) && value.startsWith("T-") && value.length > 2;
 }
 
 function worktreeRun(run: Record<string, unknown>): boolean {
   return text(run.base) && text(run.worktree);
+}
+
+function preparationRun(run: Record<string, unknown>): boolean {
+  return (
+    worktreeRun(run) &&
+    ["command", "log"].every((key) => text(run[key])) &&
+    positiveInteger(run.timeoutMs) &&
+    run.timeoutMs <= 2_147_483_647 &&
+    (run.pid === undefined || positiveInteger(run.pid)) &&
+    ["thread", "attempt"].every((key) => run[key] === undefined)
+  );
 }
 
 function reviewFields(run: Record<string, unknown>): boolean {
@@ -69,13 +94,13 @@ function reviewFields(run: Record<string, unknown>): boolean {
 
 const runValidators: Record<string, (run: Record<string, unknown>) => boolean> =
   {
+    preparing: preparationRun,
+    "preparation-failed": (run) => preparationRun(run) && text(run.reason),
     creating: worktreeRun,
     running: (run) =>
       worktreeRun(run) &&
       thread(run.thread) &&
-      Number.isSafeInteger(run.attempt) &&
-      typeof run.attempt === "number" &&
-      run.attempt > 0 &&
+      positiveInteger(run.attempt) &&
       typeof run.delivery === "string" &&
       ["queued", "sending", "sent"].includes(run.delivery) &&
       reviewFields(run),

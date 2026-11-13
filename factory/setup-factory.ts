@@ -18,6 +18,7 @@ import { parseArgs } from "node:util";
 import {
   configuration,
   localPath,
+  parseSetup,
   parseWorkerEffort,
   reviewerModel,
 } from "./native";
@@ -116,6 +117,8 @@ function options() {
       repo: { type: "string", default: "." },
       prd: { type: "string" },
       verify: { type: "string" },
+      setup: { type: "string" },
+      "setup-timeout-ms": { type: "string" },
       scope: { type: "string", multiple: true },
       "worker-model": { type: "string", default: "openai/gpt-6.1-sol" },
       "worker-effort": { type: "string", default: "medium" },
@@ -126,7 +129,14 @@ function options() {
     },
   });
   if (values.review) reviewerModel(values["worker-model"]);
-  return values;
+  const { command: setup, timeoutMs: setupTimeoutMs } =
+    parseSetup(
+      values.setup,
+      values["setup-timeout-ms"] === undefined
+        ? undefined
+        : Number(values["setup-timeout-ms"]),
+    ) ?? {};
+  return { ...values, setup, setupTimeoutMs };
 }
 
 function repository(path: string) {
@@ -181,6 +191,8 @@ async function main() {
     prd: values.prd,
     tickets: ".factory-tickets.json",
     verify: values.verify,
+    setup: values.setup,
+    setupTimeoutMs: values.setupTimeoutMs,
     scope: values.scope,
     capacity: 1,
     mode: "bug-finding",

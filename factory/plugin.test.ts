@@ -496,3 +496,153 @@ test.each([
   },
   30_000,
 );
+
+test("setup recovery control preserves durable failure and compatible observations across reload", async () => {
+  const root = await mkdtemp(join(tmpdir(), "factory-plugin-setup-"));
+  let dispose = () => {};
+  try {
+    git(root, "init", "-q");
+    await writeFile(join(root, "prd.md"), "Fixture");
+    await writeFile(
+      join(root, "tickets.json"),
+      JSON.stringify([{ id: "A", brief: "Work", after: [] }]),
+    );
+    await writeFile(
+      join(root, ".factory.json"),
+      JSON.stringify({
+        version: 1,
+        capacity: 1,
+        workerModel: "openai/gpt-6.1-sol",
+        prd: "prd.md",
+        tickets: "tickets.json",
+        scope: ["src/"],
+        verify: "true",
+        setup: `test -f '${root}/.git/setup-ready' || { echo dependencies-unavailable >&2; exit 17; }`,
+        permissions: { execute: true, publish: false, externalTickets: false },
+      }),
+    );
+    git(root, "add", ".");
+    git(
+      root,
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "commit",
+      "-qm",
+      "fixture",
+    );
+    let creates = 0;
+    let sends = 0;
+    let execute!: (
+      input: { action: string },
+      ctx: PluginToolContext,
+    ) => Promise<unknown>;
+    const subscription = () => ({ unsubscribe() {} });
+    const amp = {
+      createAgent() {
+        return {
+          async createThread() {
+            creates++;
+            return { id: "T-worker" };
+          },
+        };
+      },
+      threads: {
+        get() {
+          return {
+            async appendUserMessage() {
+              sends++;
+            },
+            state: {
+              async get() {
+                return "running";
+              },
+              subscribe: subscription,
+            },
+            title: {
+              async get() {
+                return null;
+              },
+              subscribe: subscription,
+            },
+          };
+        },
+      },
+      logger: { log() {} },
+      registerTool(tool: { execute: typeof execute }) {
+        execute = tool.execute;
+      },
+      onDispose(fn: () => void) {
+        dispose = fn;
+      },
+    } as unknown as PluginAPI;
+    const ctx = { thread: { id: "T-owner" } } as unknown as PluginToolContext;
+    const control = async (action: string) =>
+      JSON.parse(String(await execute({ action }, ctx)));
+    const load = () =>
+      registerFactory(amp, root, () => ({
+        async init() {},
+        async close() {},
+        ledger: { async record() {} },
+      }));
+    const observation = join(root, ".git/factory/dashboard.json");
+    async function observed(status: string) {
+      for (let i = 0; i < 1200; i++) {
+        if (existsSync(observation)) {
+          const snapshot = JSON.parse(await readFile(observation, "utf8"));
+          if (snapshot.tasks[0].status === status) return snapshot.tasks[0];
+        }
+        await Bun.sleep(5);
+      }
+      throw new Error(`Observation never reached ${status}`);
+    }
+    load();
+    const failed = (await control("start")).runs.A;
+    expect(failed).toMatchObject({
+      kind: "preparation-failed",
+      worktree: join(root, ".git/factory/worktrees/A"),
+    });
+    expect(await readFile(failed.log, "utf8")).toContain(
+      "dependencies-unavailable",
+    );
+    expect(creates).toBe(0);
+    expect(sends).toBe(0);
+    dispose();
+    load();
+    expect((await control("reconcile")).runs.A).toEqual(failed);
+    expect(await observed("blocked")).toMatchObject({
+      status: "blocked",
+      thread: null,
+    });
+    const server = startDashboard({ root, port: 0 });
+    try {
+      const status = await (
+        await fetch(`http://localhost:${server.port}/api/status`)
+      ).json();
+      expect(status.tasks[0]).toMatchObject({
+        status: "blocked",
+        thread: null,
+      });
+      expect(JSON.stringify(status)).not.toContain(failed.log);
+    } finally {
+      await server.stop(true);
+    }
+    await writeFile(join(root, ".git/setup-ready"), "ready");
+    expect((await control("retry-setup")).runs.A).toMatchObject({
+      kind: "running",
+      worktree: failed.worktree,
+      attempt: 1,
+      thread: "T-worker",
+    });
+    expect(creates).toBe(1);
+    expect(sends).toBe(1);
+    expect(await observed("working")).toMatchObject({
+      status: "working",
+      thread: "T-worker",
+    });
+  } finally {
+    dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+}, 30000);

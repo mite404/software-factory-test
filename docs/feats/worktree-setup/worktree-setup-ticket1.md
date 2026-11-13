@@ -9,7 +9,10 @@
 - Depends on: accepted native dispatch, SQLite persistence, and conditional cold review.
 - Planned at: `7a3b1c6c705c0c54bc08b5f7734fd3ffb78de608`, 2026-11-13.
 - Local path: `docs/feats/worktree-setup/worktree-setup-ticket1.md`
-- Backlog: F14. Local-only ticket; implementation not started.
+- Backlog: F14. Local-only ticket; native attempt three accepted after full gates and cold review.
+- Accepted candidate: `2558ccc9d7a9a6d2a7c7d034c597d7e9faeae594`, 115 tests passed.
+- Worker: https://ampcode.com/threads/T-01a1d464-359e-72b7-89b4-f6c177b8fbb4
+- Review: https://ampcode.com/threads/T-01a1d613-ee38-74d4-b08b-b724ac7a9598
 
 ## Why this matters
 
@@ -99,8 +102,8 @@ worktree manually once because the missing setup feature cannot prepare its own 
 
 ## Done when
 
-- [ ] Setup succeeds in the exact worktree before implementation delivery.
-- [ ] Failed setup preserves diagnostics and blocks creation without spending an attempt.
-- [ ] Explicit retry and restart reuse the worktree and do not duplicate workers.
-- [ ] Omitted setup preserves existing configuration behavior.
-- [ ] The exact candidate passes full gates and required independent post-graft review.
+- [x] Setup succeeds in the exact worktree before implementation delivery.
+- [x] Failed setup preserves diagnostics and blocks creation without spending an attempt.
+- [x] Explicit retry and restart reuse the worktree and do not duplicate workers.
+- [x] Omitted setup preserves existing configuration behavior.
+- [x] The exact candidate passes full gates and required independent post-graft review.

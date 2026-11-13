@@ -1,7 +1,7 @@
 import type { AgentReasoningEffort } from "@ampcode/plugin";
-import { execFile, execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { appendFileSync, existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { reviewPrompt, reviewVerdict, type Review } from "./review";
@@ -61,6 +61,32 @@ function text(value: unknown): string {
 function strings(value: unknown): string[] {
   if (!Array.isArray(value)) throw new Error("Expected string array");
   return value.map(text);
+}
+
+/** Parse optional operator-owned worktree setup. @throws On an empty command or invalid timeout. */
+export function parseSetup(command: unknown, timeout: unknown) {
+  if (command === undefined) {
+    if (timeout === undefined) return undefined;
+    throw new Error("setupTimeoutMs requires setup");
+  }
+  const setup = text(command);
+  const timeoutMs = timeout === undefined ? 120_000 : timeout;
+  if (
+    typeof timeoutMs !== "number" ||
+    !Number.isSafeInteger(timeoutMs) ||
+    timeoutMs <= 0 ||
+    timeoutMs > 2_147_483_647
+  )
+    throw new Error(
+      "Invalid setupTimeoutMs; expected positive milliseconds with setup",
+    );
+  return { command: setup, timeoutMs };
+}
+
+function isPreparation(
+  run: Run | undefined,
+): run is Extract<Run, { kind: "preparing" | "preparation-failed" }> {
+  return run?.kind === "preparing" || run?.kind === "preparation-failed";
 }
 
 /** Parse native worker effort; omission keeps the model default. @throws On unsupported values. */
@@ -153,6 +179,7 @@ export async function configuration(root: string) {
       );
   }
   const verify = text(raw.verify);
+  const setup = parseSetup(raw.setup, raw.setupTimeoutMs);
   await readFile(prd, "utf8");
   return {
     workerModel,
@@ -162,6 +189,7 @@ export async function configuration(root: string) {
     tickets,
     scope,
     verify,
+    setup,
     execute: permissions.execute,
   };
 }
@@ -207,6 +235,34 @@ function git(root: string, ...args: string[]) {
   }).trim();
 }
 
+function requireWorktree(root: string, worktree: string) {
+  if (
+    !git(root, "worktree", "list", "--porcelain", "-z")
+      .split("\0")
+      .includes(`worktree ${worktree}`) ||
+    git(worktree, "rev-parse", "--show-toplevel") !== worktree
+  )
+    throw new Error(
+      `Preparation path is not the registered worker worktree; inspect before retrying: ${worktree}`,
+    );
+}
+
+function requireSetupStopped(pid: number | undefined) {
+  if (pid === undefined) return;
+  try {
+    process.kill(-pid, 0);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ESRCH") return;
+    if (code === "EPERM")
+      throw new Error(
+        `Cannot verify setup process group ${pid}; inspect its ownership and permissions before retrying`,
+      );
+    throw error;
+  }
+  throw new Error("Setup process is still alive; inspect before retrying");
+}
+
 function allowedChanges(
   worktree: string,
   base: string,
@@ -241,33 +297,103 @@ function candidate(
     : null;
 }
 
-function verify(worktree: string, command: string) {
+function verify(
+  worktree: string,
+  command: string,
+  timeout = 120_000,
+  onSpawn?: (pid: number) => void,
+  log?: string,
+) {
   return new Promise<{
     status: number | null;
     stdout: string;
     stderr: string;
     error: Error | null;
   }>((resolve) => {
-    execFile(
+    let stdout = "";
+    let stderr = "";
+    let failure: Error | null = null;
+    const child = spawn(
       "bash",
-      ["-lc", command],
+      onSpawn
+        ? [
+            "-lc",
+            'read -r ready && exec bash -lc "$1"',
+            "factory-setup",
+            command,
+          ]
+        : ["-lc", command],
       {
         cwd: worktree,
-        encoding: "utf8",
-        timeout: 120_000,
-        maxBuffer: 1024 * 1024,
-      },
-      (error, stdout, stderr) => {
-        const status =
-          typeof error?.code === "number" ? error.code : error ? null : 0;
-        resolve({
-          status,
-          stdout,
-          stderr,
-          error: status === null ? error : null,
-        });
+        detached: true,
       },
     );
+    function stop(error: Error) {
+      failure = new Error(
+        `${error.message}; output pipes closed; detached descendants may remain, inspect before retrying`,
+      );
+      if (child.pid) {
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ESRCH")
+            failure = new Error(String(error));
+        }
+      }
+      child.stdout.destroy();
+      child.stderr.destroy();
+      child.stdin.destroy();
+    }
+    function output(chunk: string) {
+      if (!log) return;
+      try {
+        appendFileSync(log, chunk);
+      } catch (error) {
+        stop(new Error(String(error)));
+      }
+    }
+    const timer = setTimeout(
+      () => stop(new Error(`Command timed out after ${timeout}ms`)),
+      timeout,
+    );
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+      output(chunk.slice(0, Math.max(0, 1024 * 1024 - stdout.length)));
+      stdout += chunk;
+      if (stdout.length > 1024 * 1024) {
+        stdout = stdout.slice(0, 1024 * 1024);
+        stop(new Error("Command stdout exceeded 1 MiB"));
+      }
+    });
+    child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+      output(chunk.slice(0, Math.max(0, 1024 * 1024 - stderr.length)));
+      stderr += chunk;
+      if (stderr.length > 1024 * 1024) {
+        stderr = stderr.slice(0, 1024 * 1024);
+        stop(new Error("Command stderr exceeded 1 MiB"));
+      }
+    });
+    child.on("error", (error) => {
+      failure = error;
+    });
+    child.stdin.on("error", stop);
+    child.on("close", (status) => {
+      clearTimeout(timer);
+      resolve({
+        status: failure ? null : status,
+        stdout,
+        stderr,
+        error: failure,
+      });
+    });
+    if (onSpawn && child.pid) {
+      try {
+        onSpawn(child.pid);
+        // A crash before the PID commit must leave setup unstarted.
+        child.stdin.end("ready\n");
+      } catch (error) {
+        stop(new Error(String(error)));
+      }
+    } else child.stdin.end();
   });
 }
 
@@ -396,7 +522,7 @@ export function createFactory(
 
   let stateCache: State = { enabled: false, runs: {} };
   async function reconcile(
-    action: "status" | "start" | "pause" | "reconcile",
+    action: "status" | "start" | "pause" | "reconcile" | "retry-setup",
     owner?: ThreadID,
     observe: NativeHost["state"] = host.state,
   ) {
@@ -442,7 +568,10 @@ export function createFactory(
       await watchRunning();
       if (
         Object.values(state.runs).some(
-          (run) => run.kind === "creating" || run.kind === "uncertain",
+          (run) =>
+            run.kind === "creating" ||
+            run.kind === "uncertain" ||
+            (isPreparation(run) && action !== "retry-setup"),
         )
       )
         return state;
@@ -717,6 +846,104 @@ export function createFactory(
         return checkCandidate(task, run, report);
       }
 
+      async function createWorker(task: Task, base: string, worktree: string) {
+        if (state.runs[task.id]?.kind !== "creating") {
+          state.runs[task.id] = { kind: "creating", base, worktree };
+          commit(task.id, "creating", base);
+        }
+        const thread = await host.create(
+          state.owner!,
+          config.workerModel,
+          config.workerEffort,
+        );
+        const run: Extract<Run, { kind: "running" }> = {
+          kind: "running",
+          base,
+          worktree,
+          thread,
+          attempt: 1,
+          delivery: "queued",
+          workerModel: config.workerModel,
+          requirements: `${task.brief}\n${await readFile(config.prd, "utf8")}`,
+        };
+        state.runs[task.id] = run;
+        commit(task.id, "created", thread);
+        await watch(thread);
+        await send(task, run, await prompt(task, run, config));
+        return state;
+      }
+
+      async function prepare(task: Task, base: string, worktree: string) {
+        if (!config.setup)
+          throw new Error("Configure setup before retrying preparation");
+        const run: Extract<Run, { kind: "preparing" }> = {
+          kind: "preparing",
+          base,
+          worktree,
+          command: config.setup.command,
+          timeoutMs: config.setup.timeoutMs,
+          log: join(directory, `${task.id}-setup-${randomUUID()}.log`),
+        };
+        await writeFile(
+          run.log,
+          `Command: ${run.command}\nWorktree: ${worktree}\nTimeout: ${run.timeoutMs}ms\n`,
+        );
+        state.runs[task.id] = run;
+        commit(task.id, "preparing", JSON.stringify(run));
+        try {
+          if (!existsSync(worktree)) addWorktree(task, base, worktree);
+          requireWorktree(root, worktree);
+          if (git(worktree, "rev-parse", "HEAD") !== base)
+            throw new Error("Preparation worktree revision changed");
+          const result = await verify(
+            worktree,
+            run.command,
+            run.timeoutMs,
+            (pid) => {
+              run.pid = pid;
+              commit(task.id, "setup-spawned", JSON.stringify(run));
+            },
+            run.log,
+          );
+          delete run.pid;
+          commit(task.id, "setup-finished", run.log);
+          await writeFile(
+            run.log,
+            `${await readFile(run.log, "utf8")}\nStatus: ${result.status}\n${result.error ?? ""}`,
+          );
+          if (result.status !== 0)
+            throw new Error(
+              `Setup failed (${result.status ?? result.error}): ${run.log}`,
+            );
+          if (!unchanged(worktree, base))
+            throw new Error(
+              `Setup must leave the worktree clean at ${base}: ${git(worktree, "status", "--porcelain")}`,
+            );
+        } catch (error) {
+          const reason = String(error);
+          state.runs[task.id] = { ...run, kind: "preparation-failed", reason };
+          commit(
+            task.id,
+            "preparation-failed",
+            JSON.stringify({ log: run.log, reason }),
+          );
+          return state;
+        }
+        return createWorker(task, base, worktree);
+      }
+
+      function addWorktree(task: Task, base: string, worktree: string) {
+        git(
+          root,
+          "worktree",
+          "add",
+          "-b",
+          `feat/${task.id}-${randomUUID().slice(0, 8)}`,
+          worktree,
+          base,
+        );
+      }
+
       async function dispatchNext() {
         if (Object.values(state.runs).some((run) => run.kind === "running"))
           return state;
@@ -730,40 +957,18 @@ export function createFactory(
           throw new Error("Commit existing changes before dispatch");
         const base = git(root, "rev-parse", "HEAD");
         const worktree = join(directory, "worktrees", next.id);
+        if (config.setup) return prepare(next, base, worktree);
         state.runs[next.id] = { kind: "creating", base, worktree };
         commit(next.id, "creating", base);
-        git(
-          root,
-          "worktree",
-          "add",
-          "-b",
-          `feat/${next.id}-${randomUUID().slice(0, 8)}`,
-          worktree,
-          base,
-        );
-        const thread = await host.create(
-          state.owner,
-          config.workerModel,
-          config.workerEffort,
-        );
-        const run: Extract<Run, { kind: "running" }> = {
-          kind: "running",
-          base,
-          worktree,
-          thread,
-          attempt: 1,
-          delivery: "queued",
-          workerModel: config.workerModel,
-          requirements: `${next.brief}\n${await readFile(config.prd, "utf8")}`,
-        };
-        state.runs[next.id] = run;
-        commit(next.id, "created", thread);
-        await watch(thread);
-        await send(next, run, await prompt(next, run, config));
-        return state;
+        addWorktree(next, base, worktree);
+        return createWorker(next, base, worktree);
       }
 
-      async function settleRunning() {
+      async function settleRuns() {
+        if (action === "retry-setup") {
+          await retrySetup();
+          return true;
+        }
         for (const task of queue) {
           const run = state.runs[task.id];
           if (run?.kind === "running") {
@@ -775,7 +980,27 @@ export function createFactory(
         }
         return false;
       }
-      if (!(await settleRunning())) await dispatchNext();
+      async function retrySetup() {
+        for (const task of queue) {
+          const run = state.runs[task.id];
+          if (!isPreparation(run)) continue;
+          requireSetupStopped(run.pid);
+          if (git(root, "status", "--porcelain"))
+            throw new Error("Commit existing changes before retrying setup");
+          const base = git(root, "rev-parse", "HEAD");
+          if (base !== run.base && existsSync(run.worktree)) {
+            requireWorktree(root, run.worktree);
+            if (git(run.worktree, "status", "--porcelain"))
+              throw new Error(
+                "Preparation worktree has local changes; reconcile before retrying setup",
+              );
+            git(run.worktree, "merge", "--ff-only", base);
+          }
+          return prepare(task, base, run.worktree);
+        }
+        throw new Error("No preparation to retry");
+      }
+      if (!(await settleRuns())) await dispatchNext();
       return state;
     } finally {
       persistence?.close();
@@ -785,7 +1010,7 @@ export function createFactory(
 
   /** Serialize local callbacks; the poteto lock excludes other plugin processes. @throws On unsafe state or failed I/O. */
   function tick(
-    action: "status" | "start" | "pause" | "reconcile",
+    action: "status" | "start" | "pause" | "reconcile" | "retry-setup",
     owner?: ThreadID,
     observe: NativeHost["state"] = host.state,
   ): Promise<State> {
