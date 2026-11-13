@@ -387,6 +387,7 @@ body {
   fill: #cfcfcf;
   opacity: 0;
   offset-rotate: 0deg;
+  pointer-events: none; /* an invisible packet at rest must not cover a link */
 }
 .out {
   offset-rotate: auto;

@@ -86,14 +86,19 @@ function land(reviewed: boolean) {
   cycle(stage, "landing", LANDING_MS);
 }
 
+// An SVG link without an href is neither clickable nor focusable.
+function link(anchor: Element, href: string | null) {
+  if (href) anchor.setAttribute("href", href);
+  else anchor.removeAttribute("href");
+}
+
 function paintBuilders(view: View) {
   builders.forEach((row, i) => {
     const cell = view.builders[i]!;
     row.dataset.status = cell.status;
     write(row, ".id", cell.id);
     row.dataset.tip = cell.label;
-    if (cell.href) one(".card", row).setAttribute("href", cell.href);
-    else one(".card", row).removeAttribute("href");
+    link(one(".card", row), cell.href);
   });
 }
 
@@ -122,6 +127,7 @@ function paintTickets(view: View) {
     dot.toggleAttribute("data-on", cell.on);
     dot.classList.toggle("last", cell.last);
     dot.dataset.tip = cell.label;
+    link(dot.parentElement!, cell.href);
   });
   queue.forEach((dot, i) => {
     const cell = view.queue[i]!;
@@ -174,6 +180,7 @@ function render(view: View) {
   write(document, "#tally", view.tally);
   write(document, "#head", view.head);
   write(document, "#next", view.next);
+  write(document, "#active-steps", view.activeSteps);
   write(document, "#waiting", view.waiting);
   slots.forEach((slot, i) => slot.toggleAttribute("data-on", i < view.slots));
   paintBuilders(view);

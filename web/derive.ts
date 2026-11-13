@@ -4,7 +4,7 @@ import type { DashboardSnapshot } from "../factory/dashboard";
 // evidence.review is the cold review record bound to the task's current revision; null means none
 // is recorded, which on an accepted task is not proof that review was skipped.
 export type Task = DashboardSnapshot["tasks"][number] & {
-  evidence?: { review: object | null };
+  evidence?: { review: { pending?: boolean } | null };
 };
 
 // One step chip of a COMING row, placed in SVG units.
@@ -37,10 +37,11 @@ export type View = {
   tally: string;
   head: string;
   next: string;
+  activeSteps: string; // the ACTIVE ticket's authored steps on one line; the feed has no current step
   waiting: string;
   slots: number; // lit submission slots: idle builders whose work is not accepted yet
   builders: Cell[]; // 4 rows: tickets that had not landed one poll ago
-  main: { on: boolean; last: boolean; label: string }[]; // 7 dots, newest first, beside the integrator
+  main: { on: boolean; last: boolean; label: string; href: string | null }[]; // 7 dots, newest first, beside the integrator
   queue: (Cell & { tag: string })[]; // 10 tickets in order, windowed around the active one
   // 3 rows: the next tickets that have not landed, with the stage each one has reached
   coming: {
@@ -79,12 +80,14 @@ function pad<T>(items: T[], length: number): (T | undefined)[] {
   return Array.from({ length }, (_, i) => items[i]);
 }
 
+function cut(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
 function describe(task: Task): string {
   const revision = task.revision ? ` · ${task.revision.slice(0, 7)}` : "";
   // The tooltip is one unwrapped line, so a brief-length title is cut to fit.
-  const title =
-    task.title.length > 40 ? `${task.title.slice(0, 39)}…` : task.title;
-  return `${task.id} · ${title} · ${task.status}${revision}`;
+  return `${task.id} · ${cut(task.title, 40)} · ${task.status}${revision}`;
 }
 
 function cell(task: Task | undefined): Cell {
@@ -97,9 +100,11 @@ function cell(task: Task | undefined): Cell {
   };
 }
 
-function steps(status: Cell["status"]): string[] {
-  const done = REACHED[status] ?? 0;
-  const current = status === "blocked" ? "fail" : done ? "now" : "";
+// A pending review record is evidence the gate passed and cold review is running.
+function steps(status: Cell["status"], reviewing = false): string[] {
+  const done = reviewing ? 5 : (REACHED[status] ?? 0);
+  const current =
+    status === "blocked" && !reviewing ? "fail" : done ? "now" : "";
   return Array.from({ length: STEPS }, (_, i) =>
     i < done ? "done" : i === done ? current : "",
   );
@@ -110,7 +115,7 @@ function chips(labels: string[]): Chip[] {
   const placed: Chip[] = [];
   let x = CHIP_X;
   for (const label of labels) {
-    const text = label.length > 32 ? `${label.slice(0, 31)}…` : label;
+    const text = cut(label, 32);
     const width = Math.round(text.length * 6.4 + 18);
     if (x + width > CHIP_END) break;
     placed.push({ text, x, width });
@@ -134,9 +139,9 @@ function ticketRow(
     };
   return {
     id: task.id,
-    title: task.title.slice(0, 36),
+    title: cut(task.title, 32),
     status: task.status,
-    steps: steps(task.status),
+    steps: steps(task.status, task.evidence?.review?.pending === true),
     chips: row ? chips(task.steps) : [],
   };
 }
@@ -196,12 +201,12 @@ export function derive(prev: Feed | null, next: Feed, now: number): View {
   return {
     state: !next.fresh ? "stale" : next.enabled ? "live" : "paused",
     project: next.project.toUpperCase(),
-    target:
-      next.target.length > 24 ? `${next.target.slice(0, 23)}…` : next.target,
+    target: cut(next.target, 24),
     observed: observed(next, now),
     tally: tally(next),
     head: main[0]?.revision?.slice(0, 7) ?? "nothing landed yet",
     next: nextLabel(pending[0], tasks.length),
+    activeSteps: cut(pending[0]?.steps.join(" → ") ?? "", 100),
     waiting: idle[0] ? `${idle[0].id} · idle` : "",
     slots: idle.length,
     builders: pad(rows, ROWS).map(cell),
@@ -209,10 +214,18 @@ export function derive(prev: Feed | null, next: Feed, now: number): View {
       on: !!task,
       last: i === 0 && !!task,
       label: task ? describe(task) : "",
+      href: cell(task).href,
     })),
     queue: pad(tasks.slice(start), QUEUE_DOTS)
       .map(cell)
-      .map((c) => ({ ...c, tag: QUIET.includes(c.status) ? "" : c.status })),
+      // neighbours with the same status share one tag: the dots sit closer than "working" is wide
+      .map((c, i, cells) => ({
+        ...c,
+        tag:
+          QUIET.includes(c.status) || cells[i - 1]?.status === c.status
+            ? ""
+            : c.status,
+      })),
     coming: pad(pending, COMING_ROWS).map(ticketRow),
     startRow: rowOf(
       tasks.find((t) => t.status === "working" && before.get(t.id) === "queued")

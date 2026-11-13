@@ -59,6 +59,11 @@ test("a ticket that lands keeps its builder row for one poll, then leaves", () =
     ...Array.from({ length: 5 }, () => [false, false]),
   ]);
   expect(landingPoll.head).toBe("2222222");
+  expect(landingPoll.main.map((d) => d.href).slice(0, 3)).toEqual([
+    null,
+    null,
+    null,
+  ]);
   expect(landingPoll.next).toBe("T3, BLOCKED");
   expect(landingPoll.tally).toBe("2 landed · 1 queued · 1 blocked");
   expect(landingPoll.coming.map((c) => c.id)).toEqual(["T3", "T4", ""]);
@@ -81,6 +86,12 @@ test("a ticket that lands keeps its builder row for one poll, then leaves", () =
     "blocked",
     "",
   ]);
+  // two neighbours in the same status share one tag, or the labels overlap
+  expect(
+    derive(null, feed(["working", "working", "blocked"]), NOW)
+      .queue.map((c) => c.tag)
+      .slice(0, 3),
+  ).toEqual(["working", "", "blocked"]);
 
   const nextPoll = derive(after, after, NOW);
   expect(nextPoll.landed).toBe(false);
@@ -126,13 +137,21 @@ test("the queue window follows the active ticket", () => {
 
 test("COMING rows lay out a ticket's own steps and drop what does not fit", () => {
   const next = feed(["working", "queued", "queued"]);
-  next.tasks[0]!.steps = ["never shown on ACTIVE"];
+  next.tasks[0]!.steps = ["first", "second"];
+  next.tasks[0]!.evidence = { review: { pending: true } };
   next.tasks[1]!.steps = [
     "ab",
     "x".repeat(40),
     ...Array(9).fill("y".repeat(30)),
   ];
-  const [active, first, legacy] = derive(null, next, NOW).coming;
+  const view = derive(null, next, NOW);
+  const [active, first, legacy] = view.coming;
+
+  // ACTIVE keeps the stage pills; its steps go on the header line instead.
+  expect(view.activeSteps).toBe("first → second");
+  // A pending review record puts the ticket in cold review, past the gate.
+  expect(active!.steps.slice(3)).toEqual(["done", "done", "now", ""]);
+  expect(view.builders[0]!.href).toBe("https://ampcode.com/threads/T-abc");
 
   expect(active!.chips).toEqual([]);
   expect(legacy!.chips).toEqual([]);
