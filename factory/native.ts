@@ -13,6 +13,7 @@ import {
 import {
   factoryStatus,
   openPersistence,
+  taskSteps,
   type ThreadID,
   type Task,
   type Run,
@@ -221,6 +222,7 @@ export function tasks(value: unknown): Task[] {
       id,
       brief: text(raw.brief),
       after: strings(raw.after),
+      ...(raw.steps === undefined ? {} : { steps: taskSteps(raw.steps) }),
       size,
       risky,
     };

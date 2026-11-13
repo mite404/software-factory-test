@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { execFileSync } from "node:child_process";
 import {
   mkdtemp,
@@ -11,7 +12,190 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startDashboard } from "./dashboard";
+import { tasks } from "./native";
 import { openPersistence } from "./persistence";
+
+test("HTTP retains authored labels across restarts and rejects untrusted labels without leaking private data", async () => {
+  const root = await mkdtemp(join(tmpdir(), "factory-labels-"));
+  execFileSync("git", ["init", "-q", root]);
+  const directory = join(root, ".git/factory");
+  const server = startDashboard({ root, port: 0 });
+  const url = `http://localhost:${server.port}/api/status`;
+  const canary = "PRIVATE-BRIEF-REPORT-CANARY";
+  try {
+    const queue = tasks([
+      {
+        id: "A",
+        brief: canary,
+        after: [],
+        steps: [
+          "Verify private field exclusion",
+          "Preserve ordered task labels",
+        ],
+        report: canary,
+      },
+      { id: "legacy", brief: canary, after: [] },
+    ]);
+    const storage = openPersistence(directory, queue);
+    storage.commit(
+      { enabled: true, runs: { orphan: { kind: "blocked", reason: canary } } },
+      "orphan",
+      "blocked",
+      canary,
+    );
+    storage.close();
+    const reopened = openPersistence(directory, []);
+    const retained = reopened.tickets;
+    reopened.close();
+    const expected = [
+      {
+        id: "A",
+        steps: [
+          "Verify private field exclusion",
+          "Preserve ordered task labels",
+        ],
+      },
+      { id: "legacy", steps: [] },
+      { id: "orphan", steps: [] },
+    ];
+    const check = async () => {
+      const response = await fetch(url);
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.tasks).toMatchObject(expected);
+      expect(JSON.stringify(body)).not.toContain(canary);
+      expect(JSON.stringify(body)).not.toContain("currentStep");
+      return body;
+    };
+    await check();
+    expect(retained[0]?.steps).toEqual([
+      "Verify private field exclusion",
+      "Preserve ordered task labels",
+    ]);
+    const snapshot = {
+      project: "fixture",
+      enabled: true,
+      observedAt: new Date().toISOString(),
+      tasks: [
+        {
+          id: "A",
+          title: "Observed title",
+          status: "queued",
+          thread: null,
+          revision: null,
+          steps: ["Untrusted heartbeat replacement"],
+        },
+      ],
+    };
+    const path = join(directory, "dashboard.json");
+    await writeFile(path, JSON.stringify(snapshot));
+    expect(await check()).toMatchObject({
+      observations: "available",
+      fresh: true,
+    });
+    snapshot.observedAt = new Date(Date.now() - 60_000).toISOString();
+    await writeFile(path, JSON.stringify(snapshot));
+    expect(await check()).toMatchObject({
+      observations: "available",
+      fresh: false,
+    });
+    for (const steps of [null, "wrong", [""], ["  "], [9]]) {
+      await writeFile(
+        path,
+        JSON.stringify({
+          ...snapshot,
+          tasks: [{ ...snapshot.tasks[0], steps }],
+        }),
+      );
+      expect(await check()).toMatchObject({
+        observations: "invalid",
+        fresh: false,
+      });
+    }
+    const db = new Database(join(directory, "state.sqlite"));
+    try {
+      for (const steps of [null, "wrong", [""], ["  "], [9]]) {
+        db.query("UPDATE tickets SET data = ? WHERE id = 'A'").run(
+          JSON.stringify({ ...queue[0], steps }),
+        );
+        expect(() => openPersistence(directory, [])).toThrow();
+        const response = await fetch(url);
+        expect(response.status).toBe(503);
+        expect(await response.json()).toMatchObject({
+          durable: "invalid",
+          tasks: [],
+        });
+      }
+    } finally {
+      db.close();
+    }
+  } finally {
+    await server.stop(true);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("HTTP target follows the root branch with missing storage, branch changes and detached HEAD", async () => {
+  const root = await mkdtemp(join(tmpdir(), "factory-target-"));
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim();
+  git("init", "-q", "-b", "initial-target");
+  git(
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "commit",
+    "--allow-empty",
+    "-qm",
+    "fixture",
+  );
+  const server = startDashboard({ root, port: 0 });
+  const url = `http://localhost:${server.port}/api/status`;
+  try {
+    expect(await (await fetch(url)).json()).toMatchObject({
+      target: "initial-target",
+      durable: "missing",
+    });
+    const storage = openPersistence(join(root, ".git/factory"), []);
+    storage.close();
+    expect(await (await fetch(url)).json()).toMatchObject({
+      target: "initial-target",
+      durable: "available",
+    });
+    git("checkout", "-qb", "changed-target");
+    expect(await (await fetch(url)).json()).toMatchObject({
+      target: "changed-target",
+      durable: "available",
+    });
+    git("checkout", "-q", "--detach");
+    expect(await (await fetch(url)).json()).toMatchObject({
+      target: "detached HEAD",
+      durable: "available",
+    });
+    await rm(join(root, ".git/factory"), { recursive: true });
+    expect(await (await fetch(url)).json()).toMatchObject({
+      target: "detached HEAD",
+      durable: "missing",
+    });
+    await rm(root, { recursive: true });
+    const failed = await fetch(url);
+    expect(failed.status).toBe(503);
+    expect(failed.headers.get("content-type")).toContain("application/json");
+    const body = await failed.text();
+    expect(JSON.parse(body)).toMatchObject({
+      durable: "invalid",
+      fresh: false,
+      tasks: [],
+      error: "Durable status unavailable.",
+    });
+    expect(body).not.toContain(root);
+    expect(body).not.toContain("fatal:");
+  } finally {
+    await server.stop(true);
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 async function holdDatabase(
   directory: string,

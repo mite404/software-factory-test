@@ -178,6 +178,7 @@ export default function registerFactory(
               const row: DashboardSnapshot["tasks"][number] = {
                 id: task.id,
                 title: task.brief,
+                steps: task.steps ?? [],
                 status: "queued",
                 thread: null,
                 revision: null,

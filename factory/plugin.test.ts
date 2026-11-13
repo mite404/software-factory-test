@@ -77,7 +77,14 @@ test.each([
       await writeFile(join(root, "prd.md"), "# Fixture\n");
       await writeFile(
         join(root, "tickets.json"),
-        JSON.stringify([{ id: "A", brief: "Repair value", after: [] }]),
+        JSON.stringify([
+          {
+            id: "A",
+            brief: "Repair value",
+            after: [],
+            steps: ["Repair the stored value", "Verify the public response"],
+          },
+        ]),
       );
       await writeFile(
         join(root, ".factory.json"),
@@ -232,8 +239,11 @@ test.each([
       expect((await control("reconcile")).runs.A).toEqual(original);
       expect(
         (await Bun.file(join(root, ".git/factory/dashboard.json")).json())
-          .tasks[0].status,
-      ).toBe("idle");
+          .tasks[0],
+      ).toMatchObject({
+        status: "idle",
+        steps: ["Repair the stored value", "Verify the public response"],
+      });
       readFails = false;
       const worktree = original.worktree;
       await writeFile(join(worktree, "src/value"), "good");

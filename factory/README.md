@@ -202,7 +202,21 @@ Retained tickets without runs are displayed as queued even after removal from th
 can inflate the displayed queue count, but the dispatcher will not start removed tickets. Status
 does not claim to be a current dispatch plan.
 
+Queue tickets accept optional `steps: string[]` with ordered, nonblank authored labels. Non-array
+values, non-string elements, and blank labels are rejected. Omitted labels remain compatible with
+older queues, SQLite tickets, and observation snapshots. Use public three-to-five-word labels;
+keep implementation sentences in the ticket, and private briefs or report paths out of labels.
+See the [ticket authoring skill](../.agents/skills/creating-factory-tickets/SKILL.md) for a matching
+ticket and queue example.
+
 The response retains `project`, `observedAt`, `enabled`, `fresh`, and the existing task fields.
+Top-level `target` reads the root checkout's current Git branch on each request, including when
+storage is missing. An empty branch name returns `detached HEAD`. Branch changes require no restart.
+Each task's `steps` comes from retained SQLite ticket data, or `[]` for unlabeled historical tickets
+and run-only identities. Labels survive missing or stale observations and removal from the queue.
+Snapshots carry validated labels but cannot override durable labels in HTTP responses. Malformed
+snapshot labels invalidate observations; malformed durable labels return invalid storage. Neither
+labels nor their order indicate the current step. No current-step progress is inferred.
 `durable` is `available`, `missing`, `invalid`, or `unavailable`; `observations` independently
 reports `available`, `missing`, or `invalid`. A missing database returns an empty, non-fresh status,
 not legacy acceptance.

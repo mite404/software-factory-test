@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { factoryRecords, type Run } from "./persistence";
+import { factoryRecords, taskSteps, type Run } from "./persistence";
 
 export type DashboardSnapshot = {
   project: string;
@@ -12,6 +12,7 @@ export type DashboardSnapshot = {
   tasks: {
     id: string;
     title: string;
+    steps: string[];
     status: "working" | "idle" | "blocked" | "queued" | "accepted" | "unknown";
     thread: string | null;
     revision: string | null;
@@ -56,6 +57,7 @@ function parseTask(value: unknown): DashboardSnapshot["tasks"][number] {
   return {
     id: string(task.id),
     title: string(task.title),
+    steps: taskSteps(task.steps),
     status: activity(task.status),
     thread: reference(task.thread, /^T-[\w-]+$/),
     revision: reference(task.revision, /^[a-f0-9]{40}$/),
@@ -96,10 +98,11 @@ function reviewFor(id: string, run: Run | undefined) {
   return matches ? review : null;
 }
 
-function durableTask(id: string, run: Run | undefined) {
+function durableTask(id: string, steps: string[], run: Run | undefined) {
   const row: DashboardSnapshot["tasks"][number] = {
     id,
     title: id,
+    steps,
     status: "queued",
     thread: null,
     revision: null,
@@ -143,11 +146,12 @@ function applyObservation(
 
 function projectTask(
   id: string,
+  steps: string[],
   run: Run | undefined,
   observed: DashboardSnapshot["tasks"][number] | undefined,
   fresh: boolean,
 ) {
-  const row = durableTask(id, run);
+  const row = durableTask(id, steps, run);
   const review = reviewFor(id, run);
   let gate = null;
   let reviewEvidence = null;
@@ -200,6 +204,14 @@ async function readObservation(directory: string) {
   }
 }
 
+function targetBranch(root: string) {
+  return (
+    execFileSync("git", ["-C", root, "branch", "--show-current"], {
+      encoding: "utf8",
+    }).trim() || "detached HEAD"
+  );
+}
+
 /** Serve a curated, read-only status projection, never raw factory files. @throws If Git or HTML is unavailable. */
 export function startDashboard({ root, port }: { root: string; port: number }) {
   const directory = execFileSync(
@@ -232,6 +244,7 @@ export function startDashboard({ root, port }: { root: string; port: number }) {
         await readObservation(directory);
       const empty = {
         project: basename(root),
+        target: "",
         observedAt: snapshot?.observedAt ?? null,
         observations,
         enabled: false,
@@ -239,10 +252,12 @@ export function startDashboard({ root, port }: { root: string; port: number }) {
         tasks: [],
       };
       try {
+        empty.target = targetBranch(root);
         const records = factoryRecords(join(directory, "factory"));
         if (!records)
           return Response.json({ ...empty, durable: "missing" }, { headers });
         const { state, tickets } = records;
+        const steps = new Map(tickets.map((task) => [task.id, task.steps]));
         const observed = new Map(
           snapshot?.tasks.map((task) => [task.id, task]),
         );
@@ -252,14 +267,16 @@ export function startDashboard({ root, port }: { root: string; port: number }) {
             durable: "available",
             enabled: state.enabled,
             fresh,
-            tasks: [...new Set([...tickets, ...Object.keys(state.runs)])].map(
-              (id) =>
-                projectTask(
-                  id,
-                  Object.hasOwn(state.runs, id) ? state.runs[id] : undefined,
-                  observed.get(id),
-                  fresh,
-                ),
+            tasks: [
+              ...new Set([...steps.keys(), ...Object.keys(state.runs)]),
+            ].map((id) =>
+              projectTask(
+                id,
+                steps.get(id) ?? [],
+                Object.hasOwn(state.runs, id) ? state.runs[id] : undefined,
+                observed.get(id),
+                fresh,
+              ),
             ),
           },
           { headers },

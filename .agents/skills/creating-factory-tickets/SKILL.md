@@ -39,7 +39,9 @@ Inspect actual code and dependencies first. Keep the ticket concise, with these 
 
 1. Status: goal, initial priority, Small/Medium/Large effort, risk and blast-radius reason,
    dependencies, actual planned-at revision/date. Scope size is not a duration or risk score.
-2. Why this matters, Current state, Approach, Scope, Steps, Test plan.
+2. Why this matters, Current state, Approach, Scope, Steps, Test plan. Start each numbered step
+   with a bold three-to-five-word task-specific label, followed by the full implementation sentence.
+   Labels name the work; the sentence retains its detail and acceptance constraints.
 3. **Why this approach?** Name the concrete failure without this structure and the safety
    property the chosen ownership boundary buys. Keep rationale here rather than repeating Approach.
 4. **Files You'll Touch.** Table: Path / Role / Contains / Edit, Create, or Read. Include tests
@@ -59,6 +61,13 @@ paired tickets use noninteractive `*` criteria so Linear remains the status owne
 Record authoring facts now; the coordinator must execute preflight before dispatch. Merely writing
 commands does not implement deterministic checks, modify factory acceptance, or authorize workers.
 Ticket creation does not grant execution, publication, deployment, or permission changes.
+
+When authoring an authorized queue entry, copy the bold step labels verbatim into its ordered
+`steps` string array, without Markdown or the full sentences. Keep the order identical to Steps;
+see the matching queue JSON in [EXAMPLE.md](EXAMPLE.md). These public labels describe planned work,
+not current-step progress. Keep private briefs, report paths, and secrets out of labels. Queue
+changes still require their own authorization; ticket creation alone does not authorize dispatch.
+Existing queue entries without `steps` remain valid and display no labels.
 
 ## Optional Linear pair
 

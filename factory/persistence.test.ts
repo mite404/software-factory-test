@@ -12,7 +12,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createFactory, type NativeHost } from "./native";
+import { createFactory, tasks, type NativeHost } from "./native";
 import {
   factoryRecords,
   factoryStatus,
@@ -178,9 +178,28 @@ test("durable records retain ticket identity without importing legacy or writing
   await writeFile(join(f.directory, "state.json"), "invalid legacy");
   const bytes = await readFile(join(f.directory, "state.sqlite"));
   const files = await readdir(f.directory);
+  const unchanged = openPersistence(f.directory, tasks(queue));
+  unchanged.close();
+  const db = new Database(join(f.directory, "state.sqlite"), {
+    readonly: true,
+  });
+  try {
+    expect(
+      db
+        .query(
+          "SELECT count(*) AS count FROM events WHERE action = 'configured'",
+        )
+        .get(),
+    ).toEqual({ count: 1 });
+    expect(
+      db.query("SELECT id, data FROM tickets ORDER BY rowid").all(),
+    ).toEqual([{ id: "A", data: JSON.stringify(queue[0]) }]);
+  } finally {
+    db.close();
+  }
   expect(factoryRecords(f.directory)).toEqual({
     state: parked,
-    tickets: ["A"],
+    tickets: [{ id: "A", steps: [] }],
   });
   expect(await readFile(join(f.directory, "state.sqlite"))).toEqual(bytes);
   expect(await readdir(f.directory)).toEqual(files);

@@ -37,9 +37,32 @@ observations in the existing HTTP projection. Keep the frontend contract and pri
 
 ## Steps
 
-1. Add a read-only durable projection and prove it does not initialize or alter storage.
-2. Combine durable identity with live freshness without promoting stale activity to working.
-3. Exercise the HTTP boundary and verify private fields never enter its response.
+1. **Read durable ticket records**. Add a read-only durable projection and prove it does not
+   initialize or alter storage.
+2. **Combine identity with freshness**. Combine durable identity with live freshness without
+   promoting stale activity to working.
+3. **Verify private field exclusion**. Exercise the HTTP boundary and verify private fields never
+   enter its response.
+
+Illustrative queue entry, not authorization to change the coordinator queue or dispatch work.
+The `steps` values copy the bold labels above in order. The brief retains the full ticket pointer.
+
+```json
+[
+  {
+    "id": "observation-ticket1",
+    "brief": "Implement docs/feats/observation/observation-ticket1.md",
+    "after": [],
+    "steps": [
+      "Read durable ticket records",
+      "Combine identity with freshness",
+      "Verify private field exclusion"
+    ]
+  }
+]
+```
+
+Labels are public planned-work descriptions, not evidence of the worker's current step.
 
 ## Test plan
 

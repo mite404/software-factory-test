@@ -8,6 +8,7 @@ export type Task = {
   id: string;
   brief: string;
   after: string[];
+  steps?: string[];
   size?: "small" | "medium" | "large";
   risky?: boolean;
 };
@@ -64,6 +65,14 @@ function record(value: unknown): Record<string, unknown> {
 
 function text(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+/** Parse ordered authored labels; missing legacy labels become empty. @throws On malformed labels. */
+export function taskSteps(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || !value.every(text))
+    throw new Error("Invalid ticket steps; expected nonblank string labels");
+  return value;
 }
 
 function positiveInteger(value: unknown): value is number {
@@ -261,7 +270,7 @@ export function factoryStatus(directory: string): State {
   }
 }
 
-/** Read existing SQLite identity and state together; never import legacy files. @throws On invalid storage. */
+/** Read curated SQLite tickets and state together; never import legacy files. @throws On invalid storage. */
 export function factoryRecords(directory: string) {
   if (!existsSync(join(directory, "state.sqlite"))) return null;
   const db = database(directory, true);
@@ -269,12 +278,14 @@ export function factoryRecords(directory: string) {
     return db.transaction(() => {
       const state = readState(db);
       const tickets = db
-        .query<{ id: string }, []>("SELECT id FROM tickets ORDER BY rowid")
+        .query<{ id: string; data: string }, []>(
+          "SELECT id, data FROM tickets ORDER BY rowid",
+        )
         .all()
-        .map(({ id }) => {
+        .map(({ id, data }) => {
           if (!/^[a-zA-Z0-9_-]+$/.test(id))
             throw new Error("Invalid factory ticket identity");
-          return id;
+          return { id, steps: taskSteps(record(JSON.parse(data)).steps) };
         });
       return { state, tickets };
     })();
@@ -338,7 +349,11 @@ export function openPersistence(directory: string, queue: Task[]) {
       tickets: db
         .query<{ data: string }, []>("SELECT data FROM tickets ORDER BY rowid")
         .all()
-        .map((row) => JSON.parse(row.data) as Task),
+        .map((row) => {
+          const task = JSON.parse(row.data) as Task;
+          taskSteps(task.steps);
+          return task;
+        }),
       /** Read the latest durable event for explicit pre-upgrade recovery. @throws On storage failure. */
       lastEvent(ticket: string, action: string) {
         return db

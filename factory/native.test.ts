@@ -12,11 +12,40 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { configuration, createFactory, type NativeHost } from "./native";
+import { configuration, createFactory, tasks, type NativeHost } from "./native";
 import { openStore } from "./bookkeeping.fixture";
 
 const installer = resolve(import.meta.dir, "setup-factory.ts");
 const preparationRoots: string[] = [];
+
+test("queue retains ordered step labels and rejects malformed labels", () => {
+  const task = { id: "A", brief: "Private brief", after: [] };
+  expect(
+    tasks([
+      {
+        ...task,
+        steps: [
+          "Verify private field exclusion",
+          "Preserve ordered task labels",
+        ],
+      },
+    ])[0],
+  ).toMatchObject({
+    steps: ["Verify private field exclusion", "Preserve ordered task labels"],
+  });
+  expect(Object.hasOwn(tasks([task])[0]!, "steps")).toBe(false);
+  expect(tasks([{ ...task, steps: [] }])[0]?.steps).toEqual([]);
+  for (const steps of [
+    null,
+    "Label",
+    {},
+    [""],
+    [" \t"],
+    [7],
+    ["Valid label", null],
+  ])
+    expect(() => tasks([{ ...task, steps }])).toThrow();
+});
 
 async function waitForFile(path: string) {
   for (let i = 0; i < 200 && !(await Bun.file(path).exists()); i++)
