@@ -193,7 +193,7 @@ test("a failed transition rolls back ownership and history before any worker cal
   const db = new Database(join(f.directory, "state.sqlite"));
   db.run(`CREATE TRIGGER fail_claim BEFORE INSERT ON events WHEN NEW.action = 'creating'
     BEGIN SELECT RAISE(ABORT, 'forced transaction failure'); END`);
-  await expect(f.factory().tick("start", "T-owner")).rejects.toThrow(
+  expect(f.factory().tick("start", "T-owner")).rejects.toThrow(
     "forced transaction failure",
   );
   expect(await f.factory().tick("status")).toEqual({
@@ -231,7 +231,7 @@ test.each([
     const f = await fixture();
     await mkdir(f.directory);
     await writeFile(join(f.directory, "state.json"), bytes);
-    await expect(f.factory().tick("start", "T-owner")).rejects.toThrow();
+    expect(f.factory().tick("start", "T-owner")).rejects.toThrow();
     expect(f.calls()).toBe(0);
     expect(existsSync(join(f.directory, "state.sqlite"))).toBe(false);
     expect(await readFile(join(f.directory, "state.json"), "utf8")).toBe(bytes);
@@ -246,7 +246,7 @@ test.each([
   const f = await fixture();
   await mkdir(f.directory);
   await writeFile(join(f.directory, "events.jsonl"), bytes);
-  await expect(f.factory().tick("start", "T-owner")).rejects.toThrow();
+  expect(f.factory().tick("start", "T-owner")).rejects.toThrow();
   expect(f.calls()).toBe(0);
   expect(existsSync(join(f.directory, "state.sqlite"))).toBe(false);
   expect(await readFile(join(f.directory, "events.jsonl"), "utf8")).toBe(bytes);
@@ -265,8 +265,8 @@ test.each(["corrupt", "newer", "unversioned"])(
       db.close();
     }
     const bytes = await readFile(path);
-    await expect(f.factory().tick("start", "T-owner")).rejects.toThrow();
-    await expect(f.factory().tick("status")).rejects.toThrow();
+    expect(f.factory().tick("start", "T-owner")).rejects.toThrow();
+    expect(f.factory().tick("status")).rejects.toThrow();
     expect(await readFile(path)).toEqual(bytes);
     expect(f.calls()).toBe(0);
   },
@@ -300,7 +300,7 @@ test("manifest removal retains the original worker and its delivery recovery", a
 
 test("disabled execution remains disabled through initialization and reopening", async () => {
   const f = await fixture(false);
-  await expect(f.factory().tick("start", "T-owner")).rejects.toThrow(
+  expect(f.factory().tick("start", "T-owner")).rejects.toThrow(
     "permissions.execute",
   );
   expect(await f.factory().tick("reconcile")).toEqual({

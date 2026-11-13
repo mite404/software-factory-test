@@ -2,9 +2,30 @@
   "name": "software-factory",
   "private": true,
   "type": "module",
+  "packageManager": "bun@1.4.4",
+  "scripts": {
+    "prepare": "lefthook install",
+    "lint": "oxlint --type-aware factory src",
+    "lint:ci": "oxlint --type-aware --type-check --deny-warnings factory src",
+    "typecheck": "tsc --noEmit",
+    "format:check": "prettier --check '{src,factory}/**/*.ts' '*.{json,yml}' '.github/workflows/*.yml'",
+    "test": "amp --version && bun test",
+    "fallow:staged": "git diff --cached --no-ext-diff --unified=0 | fallow audit --base HEAD --diff-stdin",
+    "fallow:ci": "fallow --ci --fail-on-parse-error"
+  },
   "devDependencies": {
+    "@ampcode/cli": "^0.0.1794542441-g4e0611",
+    "@ampcode/plugin": "^0.0.0-20261113001202-g919feb0",
     "@types/bun": "^1.1.0",
+    "fallow": "^3.42.0",
+    "lefthook": "^2.2.2",
+    "oxlint": "^1.93.0",
+    "oxlint-tsgolint": "^7.0.2007",
     "prettier": "^3.3.0",
     "typescript": "^5.5.0"
-  }
+  },
+  "trustedDependencies": [
+    "@ampcode/cli",
+    "lefthook"
+  ]
 }

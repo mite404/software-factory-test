@@ -103,10 +103,29 @@ hashes. PR metadata, conversation history, and evidence browsing remain backlog 
 ## Checks
 
 ```sh
+bun install --frozen-lockfile
+bun run lint:ci
+bun run typecheck
+bun run format:check
 bun test
+bun run fallow:ci
 ```
+
+Installation enables Lefthook. Pre-commit runs type-aware correctness and async-safety lint,
+TypeScript over both `src` and `factory`, and a staged-diff Fallow audit. CI additionally rejects
+lint warnings, runs Oxlint's compiler diagnostics alongside standalone `tsc`, checks formatting,
+runs every test, rejects focused tests and conflict markers, and applies strict whole-project
+Fallow checks. Changed-code attribution is restricted to pre-commit; CI does not exempt inherited
+findings. Fallow's built-in CI mode runs dead-code, duplication, and health analysis with failure
+on findings. Three-occurrence duplication detection follows Yaklabs' configuration.
+
+The locked development dependencies supply Amp's CLI and official plugin types. Tests use a
+bookkeeping fixture instead of requiring a personal Amp skill installation; factory Git operations,
+SQLite persistence, verification commands, and installer bundling remain real. This suite does not
+prove the external poteto store's cross-process lock or a live authenticated Amp dispatch.
 
 The API check uses a disposable Git repo and real HTTP requests. It covers fresh and stale
 observations, field filtering, malformed input, and rejection of file access and mutation requests.
-Native dispatch tests use real Git worktrees and configured verification commands, replacing only
-remote thread operations. Live native trials and browser verification are separate evidence.
+Native dispatch tests use real Git worktrees and configured verification commands, replacing remote
+thread operations and external bookkeeping. Live native trials and browser checks are separate
+evidence.

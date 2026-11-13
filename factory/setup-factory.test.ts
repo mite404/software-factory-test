@@ -78,9 +78,7 @@ test("installer validates native effort before writes and dispatch rejects inval
       const factory = createFactory(root, host, () => {
         throw new Error("Must reject before store");
       });
-      await expect(factory.tick("start", "T-owner")).rejects.toThrow(
-        /workerEffort/,
-      );
+      expect(factory.tick("start", "T-owner")).rejects.toThrow(/workerEffort/);
     }
   } finally {
     await rm(root, { recursive: true, force: true });

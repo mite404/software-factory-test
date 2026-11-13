@@ -22,7 +22,7 @@ touched_tests() { # base-ref -> test paths, one per line
 bun install --frozen-lockfile --silent
 
 case "$1" in
-  compile) bunx tsc --noEmit ;;
+  compile) bun run typecheck ;;
   fmt) bunx prettier --write --log-level warn . ;;
   guard) guard ;;
   test)
@@ -30,10 +30,12 @@ case "$1" in
     [ -z "$tests" ] || bun test --only-failures $tests
     ;;
   full)
-    bunx tsc --noEmit
-    bunx prettier --check --log-level warn .
+    bun run typecheck
+    bun run lint:ci
+    bun run format:check
     guard
     bun test --only-failures
+    bun run fallow:ci
     ;;
   *)
     echo "unknown stage: $1" >&2

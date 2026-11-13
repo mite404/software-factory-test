@@ -1,0 +1,10 @@
+{
+  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
+  "entry": [
+    "factory/plugin.ts",
+    "factory/dashboard.ts",
+    "factory/setup-factory.ts"
+  ],
+  "duplicates": { "minOccurrences": 3 },
+  "rules": { "unused-dev-dependencies": "error" }
+}
