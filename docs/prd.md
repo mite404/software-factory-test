@@ -1,7 +1,7 @@
 # Software factory
 
-Status: Draft requirements. The existing Bash engine and scratch trials prove parts of the workflow;
-the unattended native-thread factory is not implemented. Updated 2026-11-13.
+Status: Draft requirements with a locally verified sequential native-worker prototype. The full
+unattended factory and cross-orb recovery remain incomplete. Updated 2026-11-13.
 
 ## Problem
 
@@ -20,6 +20,36 @@ The first proving ground is `mite404/software-factory-test`. The motivating appl
 Architectural choices belong in [adr.md](adr.md); experiment results belong in
 [workflow-trials.md](workflow-trials.md).
 Implementation stories and dependencies are tracked in [backlog.md](backlog.md).
+
+## Implementation status
+
+This section summarizes the backlog, not acceptance of every requirement below. Acceptance criteria
+describe observable outcomes, not implementation tickets. A ticket may cover several criteria or
+only part of one. Evidence and trial limitations remain in [workflow-trials.md](workflow-trials.md).
+
+- F01: Install, repeat-safe setup, check-only mode, and plugin refresh are verified locally.
+  Repository service packaging remains incomplete.
+- F02: Coordinator, ticket, run, and event persistence uses atomic SQLite transactions. Legacy
+  migration is verified. Evidence and lessons still use existing storage.
+- F03: Native local-worker dispatch, explicit model and effort, same-worker corrections, supported
+  disconnected-state observations, and asynchronous verification are implemented. Automatic executor
+  reattachment and cross-orb execution remain unproven. An idle worker is not accepted work.
+- F04: Dependency insights exist. Structured phase lessons and relevant retrieval remain planned.
+- F05: Private backup implementation is in progress, not accepted. No private repository has been
+  provisioned and no production snapshot push is authorized.
+- F06: Replacement-orb restore and exclusive orchestrator ownership remain planned.
+- F07: A file-backed read-only observation API is verified. Direct SQLite reads and full evidence
+  projection remain pending.
+- F08: The first dashboard is browser-verified against disposable state and labeled samples.
+  SQLite API integration and full evidence views remain pending.
+- F09: The dashboard backup control is a disabled placeholder.
+- F10: Dashboard steering chat remains planned.
+- F11: Safe worker retirement remains planned.
+
+Automated discovery, scheduled full gates, and the complete backup, restore, and retirement loop
+remain outstanding. Implementation workers currently use Sol 6.1 at medium effort, one at a time.
+Luna remains available for inexpensive workflow fixtures. The reusable Foreman prompt is documented
+in [factory/foreman.md](../factory/foreman.md), not installed automatically as an agent mode.
 
 ## Operator needs
 
@@ -204,7 +234,7 @@ when required runtime components are absent.
 
 ### R11. Read-only dashboard data
 
-A future dashboard reads structured status from the orchestrator only. The browser needs no direct
+The dashboard reads structured status from the orchestrator only. The browser needs no direct
 filesystem access and no worker connections. Status endpoints read persisted SQLite without invoking
 or waking a model. The first view shows the queue, workers, blockers, verification, and timeline.
 
@@ -215,7 +245,8 @@ remain accurate. Stop motion on idle, blocked, or stale activity and respect red
 SQLite is the target store for coordinator state and project memory; endpoints return JSON.
 This replaces the earlier JSON-file direction rather than adding a competing source of truth.
 Generic mutation routes must not bypass coordinator transitions. State changes persist before
-becoming visible as events. The current prototype still uses files; migration is not implemented.
+becoming visible as events. Coordinator SQLite persistence and legacy migration are implemented.
+The dashboard still reads a file-backed projection; its direct SQLite API remains pending.
 
 ### R12. Orb-first operation and persistence
 
@@ -339,16 +370,17 @@ mode and may differ between orchestrator and worker. Comparative model quality r
 
 ## Open decisions
 
-- Production model and effort selections, and the evidence needed to escalate a worker.
+- Production model and effort selections, and the evidence needed to escalate a worker. Current
+  implementation workers use Sol 6.1 at medium effort; this does not settle production policy.
 - Recovery cadence and discovery cooldown. Fifteen minutes and one hour respectively are proposals,
   not configured schedules.
 - Final bug-rating thresholds beyond the current fixture rubric.
-- Runtime distribution and project-local installation layout for `setup-factory`. The command is a
-  requirement, not an implemented installer; prove the native runtime before fixing its packaging.
-- Dashboard endpoint authentication and portal setup. SQLite status and a read-only view come before
-  any remote control interface; neither is part of the current setup/dispatch slice.
-- SQLite migration, private state-repository configuration, snapshot retention and size limits,
-  orchestrator ownership enforcement, and replacement-orb restoration. These remain unimplemented;
-  an orb-local file alone does not satisfy durable memory across orb deletion.
+- Runtime distribution and repository service packaging. `factory/setup-factory.ts` implements
+  installation, check-only mode, and explicit refresh; complete service packaging remains pending.
+- Dashboard endpoint authentication and portal setup. A read-only prototype exists; direct SQLite
+  status and full evidence projection remain pending before remote controls.
+- Private state-repository configuration and backup verification are in progress. Snapshot retention
+  and size limits, orchestrator ownership enforcement, and replacement-orb restoration remain open.
+  SQLite persistence and legacy migration are verified, but an orb-local database is not a backup.
 - Native dispatch, code transfer, and uncertain-creation recovery across worker orbs. These must
   be proven before connecting the factory to the live application or Linear.
