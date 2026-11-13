@@ -5,11 +5,11 @@ scope inventory, not acceptance evidence or authorization for external actions.
 
 ## Count and order
 
-There are 28 remaining acceptance units: 23 new bounded tickets and five reused tickets. Some units
-adopt existing code or prove behavior rather than build from scratch. F07 and F14 already have
-accepted local cores. Feature numbers describe areas, not ticket counts. Dependencies below are
-acceptance prerequisites. Revalidate each ticket after its prerequisites land; do not dispatch the
-entire inventory against today's code.
+The inventory contains 28 acceptance units: 23 new bounded tickets and five reused tickets. One
+unit, v1-ticket1, is accepted; 27 remain. Some units adopt existing code or prove behavior rather
+than build from scratch. F07 and F14 already have accepted local cores. Feature numbers describe
+areas, not ticket counts. Dependencies below are acceptance prerequisites. Revalidate each ticket
+after its prerequisites land; do not dispatch the entire inventory against today's code.
 
 | Unit                                                                            | Outcome                                     | Prerequisites                                  | Requirements         |
 | ------------------------------------------------------------------------------- | ------------------------------------------- | ---------------------------------------------- | -------------------- |
@@ -89,11 +89,12 @@ work, also render and inspect affected states and record changed interactions.
 
 ## Current frontier
 
-The privacy regression is next because `factory/plugin.ts` currently uses `task.brief` as a title
-fallback, and the live feed exposed that text for feature-06. The older backup candidate remains
-preserved at `fb46845e` in its original fixture; its acceptance is not current canonical acceptance.
-Adopt its exact patch through a fresh bounded run, preserving the original worker and evidence. Do
-not reset or resume the old completed run as if its base and review were current.
+The privacy regression passed native gates, cold review, and parent verification with 127 tests.
+Public titles now use ticket IDs and review labels, not private briefs or observed thread titles.
+Canonical backup adoption is next. The older backup candidate remains preserved at `fb46845e` in its
+original fixture; its acceptance is not current canonical acceptance. Adopt its exact patch through
+a fresh bounded run, preserving the original worker and evidence. Do not reset or resume the old
+completed run as if its base and review were current.
 
 Local sequential steel-thread evidence exists in workflow trials 8 and 9 and subsequent native
 acceptances. Cross-orb transfer, replacement restore, remote monitoring, and retirement still need

@@ -7,6 +7,7 @@ implementation, not acceptance of the design. See [PRD](prd.md) and [decisions](
 The [remaining v1 execution inventory](v1-execution.md) scopes 28 acceptance units, including
 23 new bounded tickets and five reused tickets. It is the current dispatch/dependency plan;
 historical feature stories below retain their evidence and may describe superseded sequencing.
+One unit, public-title privacy (v1-ticket1), is now accepted; 27 remain.
 No extra execution or remote permission is granted by the inventory.
 
 ## F01 - Install the factory as a repository service

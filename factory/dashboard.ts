@@ -129,12 +129,10 @@ function applyObservation(
   row: DashboardSnapshot["tasks"][number],
   observed: DashboardSnapshot["tasks"][number] | undefined,
   fresh: boolean,
-  titleAllowed: boolean,
 ) {
   if (!observed) return;
   if (observed.thread !== row.thread || observed.revision !== row.revision)
     return;
-  if (titleAllowed) row.title = observed.title;
   if (
     fresh &&
     row.status === "unknown" &&
@@ -171,7 +169,7 @@ function projectTask(
       thread: row.thread,
     };
   }
-  applyObservation(row, observed, fresh, !review);
+  applyObservation(row, observed, fresh);
   return {
     ...row,
     evidence: {

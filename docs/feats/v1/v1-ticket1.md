@@ -7,7 +7,9 @@
 - Risk: elevated; public status crosses the private briefing boundary.
 - Depends on: accepted observation API and step-label contracts.
 - Planned at: `62816cf8a6c8c282172754c4a97242e5a4a9eab1`, 2026-11-13.
-- Mode: local only. Backlog: F07. State: ready for preflight.
+- Mode: local only. Backlog: F07. State: accepted natively and verified in the parent.
+- Accepted candidate: `af0ae26e10a7069d0b440b190203a74c34fc2de9`, attempt one.
+- Proof: 127 tests, all configured gates and guard; fresh cold review passed with no findings.
 
 ## Why this matters
 
@@ -74,6 +76,6 @@ worktree. Checks are not run during authoring.
 
 ## Done when
 
-- [ ] No private brief canary reaches snapshot titles or HTTP, including legacy observations.
-- [ ] Public identity, current review evidence, steps, and stale-state behavior remain correct.
-- [ ] Full gates, guard, and required fresh cold review pass on the clean exact candidate.
+- [x] No private brief canary reaches snapshot titles or HTTP, including legacy observations.
+- [x] Public identity, current review evidence, steps, and stale-state behavior remain correct.
+- [x] Full gates, guard, and required fresh cold review pass on the clean exact candidate.
