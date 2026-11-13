@@ -216,6 +216,27 @@ Existing `.factory.json`, service declarations, and Markdown prompts are startin
 - Prove customization in two disposable projects, invalid-definition refusal, safe repeat setup,
   reload during active work, backend/frontend agreement, and duplicate-event hook handling.
 
+## F13 - Measure factory effectiveness from evidence
+
+As an operator, I can inspect delivery reliability, workflow delays, scorecards, and spending,
+so I can improve the factory using observed outcomes rather than activity counts.
+
+Priority: P1. Dependencies: F02, F03, F07, F12. Status: planned. See R16 and AC30-AC34 in
+[prd.md](prd.md). The reference dashboard is conceptual inspiration, not a visual specification.
+
+- Start with revision-bound delivery and CI records, first-pass success with evidence coverage,
+  current check status, linked repairs, corrections, blocked time, and stage durations.
+- Track PR outcomes when available and direct-commit deliveries without requiring PR creation.
+  Preserve incomplete and abandoned work, unknown CI, observation windows, and explicit cohorts.
+- Add versioned PR and test-suite scorecards with evidence and mandatory-gate results. Keep
+  advisory model judgments separate; no single aggregate factory score or test-count proxy.
+- Ingest authorized Amp thread usage through its supported API, without UI scraping. Preserve
+  cumulative observations for period deltas, provider/model breakdown, source retention limits,
+  missing records, and shared overhead. Keep BYOK estimates separate from Amp-reported usage.
+- Read stored reports without model calls. Add no automatic evaluation, rerun, or self-modification.
+- Prove failed-then-green CI, absent/stale checks, direct commits, duplicated/out-of-order events,
+  changed rubrics, partial cost periods, child-thread attribution, and no-CI data refusal.
+
 ## Delivery order and proof
 
 Finish the existing sequential setup and dispatch trial first. Build F02 and F03 as the persistence
@@ -226,6 +247,10 @@ Scope F12 after the active backup ticket and before expanding installation and d
 First define the shared contract and migration boundary; implement capabilities in bounded tickets
 as their underlying features become available. Do not create a second concurrent worker or rewrite
 the active backup ticket to introduce this configuration format.
+
+Build F13 in bounded slices after the observation API and definition contract. Collect source
+evidence before adding charts or comparing factories; do not start another implementation worker
+while the current backup ticket is active.
 
 Each story needs its own observed acceptance evidence; the order above is not a completion claim.
 Use small disposable fixtures and Luna workers for workflow trials. End with a cross-orb trial:

@@ -164,3 +164,22 @@ Rejected: per-project engine forks, configuration duplicated across backend and 
 encoding the entire engine or arbitrary UI layouts in YAML. Schema validation and migration add
 maintenance, but keep supported customization explicit and upgrades reviewable. Public-safe
 definitions stay separate from private runtime memory and secrets. See R15 and backlog F12.
+
+## ADR-016 - Measure verified delivery, not activity
+
+2026-11-13 - Accepted direction. Effectiveness reporting and cost ingestion are not implemented.
+Use revision-bound delivery and check records for first-pass CI, recovery, workflow delay, and
+post-landing repair reporting. Show denominators and evidence coverage. No CI is unknown, not green;
+a successful rerun does not erase the initial failure. Support direct-commit delivery alongside
+optional PR records. Keep scorecard dimensions and mandatory gates separate from advisory judgments.
+
+Use the supported [Amp thread usage API](https://ampcode.com/api/external) for reported spending.
+Thread totals are cumulative and exclude child-thread usage; aggregate explicit thread identities
+once, without adding included component costs again. Keep BYOK list-price estimates, shared
+overhead, partial periods, and unavailable data explicit. Collect authorized observations within
+the source retention period rather than reconstruct past costs from current token prices.
+
+Rejected: a single factory health score, PR/test counts as quality, missing checks as success,
+and copying the reference dashboard's aesthetics. Source correlation and versioned metric
+definitions add storage and maintenance but make changes in reported effectiveness explainable.
+Scoring and reporting do not authorize extra model calls or policy changes. See R16 and F13.
