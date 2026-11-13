@@ -3,7 +3,8 @@
   "entry": [
     "factory/plugin.ts",
     "factory/dashboard.ts",
-    "factory/setup-factory.ts"
+    "factory/setup-factory.ts",
+    "web/index.html"
   ],
   "duplicates": { "minOccurrences": 3 },
   "rules": { "unused-dev-dependencies": "error" }

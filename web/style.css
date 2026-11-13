@@ -1,0 +1,1055 @@
+:root {
+  --bg: #0c0c0d;
+  --hi: #ececec;
+  --mid: #9c9c9e;
+  --dim: #5e5e61;
+  --line: #262628;
+  --edge: #3a3a3d;
+  --port: #4b4b50;
+  --amber: #e5b567;
+  --red: #e0605e;
+  --green: #86d39c;
+  --ice: #bfe3f2;
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+#stage {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  font-size: 13px;
+  fill: var(--mid);
+}
+
+[hidden] {
+  display: none;
+}
+
+/* text */
+.hi {
+  fill: var(--hi);
+  font-weight: 600;
+}
+.mid {
+  fill: var(--mid);
+}
+.dim {
+  fill: var(--dim);
+}
+.amber {
+  fill: var(--amber);
+}
+.green {
+  fill: var(--green);
+}
+.small {
+  font-size: 10px;
+}
+.caps {
+  letter-spacing: 1.5px;
+}
+.end {
+  text-anchor: end;
+}
+.mid-anchor {
+  text-anchor: middle;
+}
+
+/* header state: live | paused | stale | offline */
+.state {
+  font-weight: 600;
+  fill: var(--red);
+}
+[data-state="live"] .state {
+  fill: var(--green);
+}
+[data-state="paused"] .state {
+  fill: var(--amber);
+}
+.clock circle {
+  fill: none;
+  stroke: var(--mid);
+  stroke-width: 1.5;
+}
+.clock line {
+  stroke: var(--hi);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+[data-state="live"] .clock line {
+  animation: sweep 5s linear infinite;
+}
+
+/* structure */
+.wire,
+.rule,
+.arrow {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 1.5;
+}
+.arrow {
+  stroke: var(--edge);
+  stroke-dasharray: 3 3;
+}
+.box > rect:first-child,
+.planned rect {
+  fill: var(--bg);
+  stroke: var(--edge);
+  stroke-width: 2;
+}
+.port,
+.planned .port {
+  fill: var(--port);
+  stroke: var(--bg);
+  stroke-width: 1;
+  transition: fill 0.2s;
+}
+.review circle {
+  fill: var(--bg);
+  stroke: var(--edge);
+  stroke-width: 2;
+}
+.review .sweep,
+.track {
+  fill: none;
+  stroke: var(--edge);
+  stroke-width: 2;
+}
+.review .sweep {
+  stroke: var(--amber);
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  opacity: 0;
+  transform-origin: 896px 193px;
+  rotate: -90deg;
+}
+.verdict {
+  fill: var(--verdict);
+  opacity: 0;
+}
+.planned rect:not(.port) {
+  stroke-dasharray: 4 4;
+}
+
+/* builders: queued | working | idle | blocked | accepted | unknown | empty */
+.builder .bot rect,
+.builder .card rect {
+  fill: var(--bg);
+  stroke: var(--dim);
+  stroke-width: 1.5;
+  transition:
+    fill 0.3s,
+    stroke 0.3s;
+}
+.builder .bot path,
+.builder .ink {
+  fill: none;
+  stroke: var(--dim);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+.builder .eye,
+.builder .tip {
+  fill: var(--dim);
+}
+.builder .id {
+  font-size: 9px;
+  fill: var(--dim);
+}
+.builder[data-status="empty"] {
+  opacity: 0.35;
+}
+.builder[data-status="unknown"] .card rect {
+  stroke-dasharray: 3 3;
+}
+.builder[data-status="idle"] :is(.card rect, .ink) {
+  stroke: var(--mid);
+}
+.builder[data-status="accepted"] :is(.card rect, .ink) {
+  stroke: var(--green);
+}
+.builder[data-status="accepted"] :is(.id, .tip) {
+  fill: var(--green);
+}
+.builder[data-status="working"] .card rect {
+  fill: #8a6b3b;
+  stroke: #a98346;
+  filter: drop-shadow(0 0 7px #e5b56766);
+}
+.builder[data-status="working"] .ink {
+  stroke: #caa25e;
+  stroke-dasharray: 60;
+}
+.builder[data-status="working"] .tip {
+  fill: var(--amber);
+}
+.builder[data-status="working"] .id {
+  fill: var(--amber);
+}
+[data-state="live"] .builder[data-status="working"] .card rect {
+  animation: glow 1.6s ease-in-out infinite alternate;
+}
+[data-state="live"] .builder[data-status="working"] .ink {
+  animation: write 2.4s steps(8) infinite;
+}
+.builder[data-status="blocked"] .card rect {
+  fill: #4a2221;
+  stroke: var(--red);
+}
+.builder[data-status="blocked"] :is(.id, .tip) {
+  fill: var(--red);
+}
+
+/* submission: a lit slot is an idle builder whose work is not accepted yet */
+.slot circle {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 1.5;
+}
+.slot rect {
+  fill: #cfcfcf;
+  opacity: 0;
+}
+.slot[data-on] circle {
+  stroke: #dfe8d8;
+  stroke-width: 2.5;
+}
+.slot[data-on] rect {
+  opacity: 1;
+}
+
+/* integrator press */
+.plate :is(.stem, .platen),
+.base {
+  fill: #4a4a4e;
+}
+.load {
+  fill: var(--amber);
+  transform-box: fill-box;
+  transform-origin: left;
+  scale: 0 1;
+}
+.sparks {
+  fill: none;
+  stroke: var(--hi);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  opacity: 0;
+}
+.courier .ring {
+  fill: none;
+  stroke: var(--amber);
+  stroke-width: 1.5;
+  opacity: 0;
+}
+.red {
+  fill: var(--red);
+}
+#play {
+  position: fixed;
+  top: 14px;
+  right: 18px;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--mid);
+  background: none;
+  border: 1px solid var(--edge);
+  border-radius: 5px;
+  cursor: pointer;
+}
+#play:hover {
+  color: var(--hi);
+}
+.plate .face {
+  fill: #8d8d91;
+}
+.lane .step {
+  opacity: 0;
+}
+
+/* main */
+.mainline {
+  stroke: #6b6b6e;
+  stroke-width: 2;
+}
+.landed {
+  fill: #cfcfcf;
+  display: none;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.landed[data-on] {
+  display: inline;
+}
+.landed.last {
+  stroke: var(--amber);
+  stroke-width: 1.5;
+  paint-order: stroke;
+  r: 8px;
+}
+
+/* chips */
+.chips rect:not(.marker) {
+  fill: none;
+  stroke: var(--edge);
+  stroke-width: 1.2;
+  stroke-dasharray: 3 3;
+}
+.chips text {
+  font-size: 10.5px;
+  text-anchor: middle;
+  fill: var(--mid);
+}
+.chips.filled rect {
+  fill: #1c2a22;
+  stroke: #2f4a3a;
+}
+.chips.dashed text {
+  fill: var(--dim);
+}
+/* ticket rows: stages reached, as inferred by derive.ts */
+.chip[data-s="done"] rect {
+  fill: #1c2a22;
+  stroke: #2f4a3a;
+  stroke-dasharray: none;
+}
+.chip[data-s="done"] text {
+  fill: var(--green);
+}
+.chip[data-s="now"] rect {
+  stroke: var(--amber);
+}
+.chip[data-s="now"] text {
+  fill: var(--amber);
+}
+.chip[data-s="fail"] rect {
+  stroke: var(--red);
+}
+.chip[data-s="fail"] text,
+.coming[data-status="blocked"] .id {
+  fill: var(--red);
+}
+.coming[data-status="idle"] ~ .gatewire {
+  stroke: var(--amber);
+}
+.marker {
+  fill: #77777b;
+  transform: translate(226px, 598px);
+}
+
+/* ticket queue */
+.q:is(:not([data-status]), [data-status="empty"]) {
+  display: none;
+}
+.q circle {
+  fill: #a9a9ac;
+}
+.q text {
+  font-size: 9px;
+  text-anchor: middle;
+  fill: var(--mid);
+}
+.q:is([data-status="queued"], [data-status="unknown"]) circle {
+  fill: var(--bg);
+  stroke: var(--dim);
+  stroke-width: 1.5;
+}
+.q[data-status="unknown"] circle {
+  stroke-dasharray: 2 2;
+}
+.q[data-status="working"] circle {
+  fill: var(--amber);
+}
+.q[data-status="working"] text {
+  fill: var(--amber);
+}
+.q[data-status="idle"] circle {
+  fill: var(--hi);
+}
+.q[data-status="blocked"] circle {
+  fill: var(--red);
+}
+.q[data-status="blocked"] text {
+  fill: var(--red);
+}
+
+/* packets ride SVG paths; main.ts adds .go and the stage's .landing for one cycle */
+.pkt {
+  fill: #cfcfcf;
+  opacity: 0;
+  offset-rotate: 0deg;
+}
+.out {
+  offset-rotate: auto;
+}
+.out.r1 {
+  offset-path: url(#w1);
+}
+.out.r2 {
+  offset-path: url(#w2);
+}
+.out.r3 {
+  offset-path: url(#w3);
+}
+.out.r4 {
+  offset-path: url(#w4);
+}
+.back {
+  fill: var(--red);
+}
+.back.r1 {
+  offset-path: url(#b1);
+}
+.back.r2 {
+  offset-path: url(#b2);
+}
+.back.r3 {
+  offset-path: url(#b3);
+}
+.back.r4 {
+  offset-path: url(#b4);
+}
+.brief.r1 {
+  offset-path: url(#h1);
+}
+.brief.r2 {
+  offset-path: url(#h2);
+}
+.brief.r3 {
+  offset-path: url(#h3);
+}
+.brief.r4 {
+  offset-path: url(#h4);
+}
+.brief.go {
+  animation: travel 1.2s ease-in both;
+}
+.courier {
+  offset-path: url(#feed);
+  offset-rotate: auto; /* the streak trails the ball down and up the review branch */
+}
+.cand {
+  offset-path: url(#rv-in);
+}
+.fixes {
+  offset-path: url(#rv-out);
+  fill: var(--amber);
+}
+.probe {
+  offset-path: url(#fg-in);
+}
+.mainred {
+  offset-path: url(#fg-out);
+  fill: var(--red);
+}
+.lane-up {
+  stroke-dasharray: 4 4;
+}
+.checkpoint {
+  opacity: 0;
+}
+/* Chrome anchors a group at its bounding-box centre; pin it to the packet, not its label. */
+.up {
+  fill: var(--red);
+  transform-box: fill-box;
+  offset-anchor: 9px 6px;
+}
+.pkt.up text {
+  text-anchor: start;
+}
+.up.setup {
+  offset-path: url(#fb-setup);
+}
+.up.gatefail {
+  offset-path: url(#fb-gate);
+}
+.up.findings {
+  offset-path: url(#fb-review);
+  fill: var(--amber);
+}
+.pkt text {
+  font-size: 10px;
+  text-anchor: middle;
+}
+.out.go {
+  animation: travel 1s ease-in both;
+}
+.back.go {
+  animation: travel 2.8s ease-in-out both;
+}
+
+/*
+ * Landing, 5.8 s: 0 packet leaves its builder, 1.0 crosses to the integrator, 1.75 the press
+ * closes and the screen shakes, 3.25 the press opens, 3.7 the freezer doors shut on the ball,
+ * 3.95 mist leaves the seal, 4.9 the doors are open again and it passes,
+ * 5.4 the commit sits on main.
+ */
+.landing .courier {
+  animation: deliver 4.4s 1s linear both;
+}
+.landing .plate.top {
+  animation: press 1.5s 1.75s both;
+  --travel: 33px;
+}
+.landing .plate.bottom {
+  animation: press 1.5s 1.75s both;
+  --travel: -33px;
+}
+/* The block is squashed while the press is closed and comes out as a ringed ball. */
+.landing .courier .block {
+  animation: squash 4.4s 1s both;
+}
+.landing .courier .trail {
+  animation: trail 4.4s 1s both;
+}
+.landing .courier .ring {
+  animation: ring 4.4s 1s both;
+}
+.landing .sweep {
+  animation: judge 1.6s 3.7s linear;
+}
+.landing .door {
+  animation: shut 1.2s 3.7s both;
+}
+.landing .mist circle {
+  animation: mist 1s 3.95s ease-out;
+}
+.landing .sparks {
+  animation: flash 0.3s 1.86s both;
+}
+.landing .load {
+  animation: load 1.15s 1.9s linear;
+}
+/* The six checks tick while the marker sits on verify. */
+.landing .checks rect {
+  animation: tick 0.3s calc(2.35s + var(--i) * 75ms);
+}
+.landing .integrator .port {
+  animation: lit 1.7s 1.7s;
+}
+#stage.landing {
+  animation: shake 0.55s 1.9s;
+}
+.landing .step {
+  animation: flash 0.36s both;
+}
+.landing .s1 {
+  animation-delay: 1.8s;
+}
+.landing .s2 {
+  animation-delay: 2.16s;
+}
+.landing .s3 {
+  animation-delay: 2.52s;
+}
+.landing .s4 {
+  animation-delay: 2.88s;
+  animation-duration: 0.8s;
+}
+.landing .marker {
+  animation: walk 3.6s 1.75s steps(1) both;
+  fill: var(--hi);
+}
+.landing .landed.last {
+  animation: pop 0.5s 5.3s backwards;
+}
+
+/* A landing with no recorded cold review stays on the gate-to-main wire: no detour, doors or mist. */
+.landing.direct .courier {
+  offset-path: url(#direct);
+  animation-name: deliver-direct;
+}
+.landing.direct .courier .trail {
+  animation-name: trail-direct;
+}
+.landing.direct :is(.door, .sweep, .mist circle, .s4) {
+  animation: none;
+}
+
+/*
+ * Replay only. Cold review with findings, 4.8 s: 0 the candidate enters, 1.0 the ring sweeps,
+ * 2.6 fixes leave for the builder. Full gate, 5 s: 0 a probe leaves main, 2.1 the gate turns
+ * green (.passing) or red (.gating), and on red a main-red packet returns at 2.2.
+ */
+.reviewing .cand {
+  animation: drop 4.8s both;
+}
+.reviewing .sweep {
+  animation: draw 1.6s 1s linear;
+}
+.reviewing .door {
+  animation: shut 1.6s 0.95s both;
+}
+.reviewing .mist circle {
+  animation: mist 1.2s 1.25s ease-out;
+}
+.reviewing .review .exit {
+  animation: lit 0.6s 2.6s;
+}
+.reviewing .fixes {
+  animation: travel 2.2s 2.6s ease-in-out forwards;
+}
+/* Replay only, placeholder. Reports to the foreman, 7 s: 0 setup failure, 0.8 gate failure,
+ * 2.4 review findings, 5.2 the two-rejection checkpoint shows. */
+.reporting .setup {
+  animation: travel 1.2s ease-in-out both;
+}
+.reporting .gatefail {
+  animation: travel 2.8s 0.8s ease-in-out both;
+}
+.reporting .findings {
+  animation: travel 2.8s 2.4s ease-in-out both;
+}
+.reporting .checkpoint {
+  animation: flash 1.8s 5.2s both;
+}
+.gating {
+  --verdict: var(--red);
+}
+.passing {
+  --verdict: var(--green);
+}
+:is(.gating, .passing) .probe {
+  animation: probe 3s both;
+}
+:is(.gating, .passing) :is(.track, .planned .exit) {
+  animation: verdict 2.9s 2.1s;
+}
+.gating .bad,
+.passing .good {
+  animation: flash 2.9s 2.1s both;
+}
+.gating .mainred {
+  animation: travel 2.8s 2.2s ease-in-out forwards;
+}
+
+@keyframes judge {
+  0% {
+    opacity: 1;
+    stroke-dashoffset: 100;
+  }
+  75% {
+    stroke-dashoffset: 0;
+    stroke: var(--amber);
+  }
+  80%,
+  100% {
+    opacity: 1;
+    stroke-dashoffset: 0;
+    stroke: var(--green);
+  }
+}
+@keyframes drop {
+  0% {
+    offset-distance: 0%;
+    opacity: 1;
+  }
+  20% {
+    offset-distance: 100%;
+    fill: #cfcfcf;
+  }
+  54% {
+    offset-distance: 100%;
+    fill: var(--amber);
+    opacity: 1;
+  }
+  58%,
+  100% {
+    offset-distance: 100%;
+    opacity: 0;
+  }
+}
+@keyframes draw {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 1;
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes probe {
+  0% {
+    offset-distance: 0%;
+    opacity: 1;
+  }
+  30% {
+    offset-distance: 51%;
+  }
+  68% {
+    offset-distance: 100%;
+    fill: #cfcfcf;
+  }
+  72% {
+    fill: var(--verdict);
+    opacity: 1;
+  }
+  80%,
+  100% {
+    offset-distance: 100%;
+    fill: var(--verdict);
+    opacity: 0;
+  }
+}
+@keyframes verdict {
+  0%,
+  100% {
+    stroke: var(--verdict);
+    fill: var(--verdict);
+  }
+}
+@keyframes sweep {
+  to {
+    rotate: 360deg;
+  }
+}
+@keyframes glow {
+  from {
+    filter: drop-shadow(0 0 3px #e5b56733);
+  }
+  to {
+    filter: drop-shadow(0 0 10px #e5b567aa);
+  }
+}
+@keyframes write {
+  from {
+    stroke-dashoffset: 60;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes travel {
+  0% {
+    offset-distance: 0%;
+    opacity: 1;
+  }
+  92% {
+    opacity: 1;
+  }
+  100% {
+    offset-distance: 100%;
+    opacity: 0;
+  }
+}
+@keyframes deliver {
+  0% {
+    offset-distance: 0%;
+    opacity: 0;
+  }
+  2% {
+    opacity: 1;
+  }
+  17.8% {
+    offset-distance: 47.2%;
+    fill: #cfcfcf;
+  }
+  21% {
+    fill: var(--amber);
+  }
+  51.4% {
+    offset-distance: 47.2%;
+    fill: var(--amber);
+  }
+  61.4%,
+  88.6% {
+    offset-distance: 77.7%;
+  }
+  98% {
+    opacity: 1;
+  }
+  100% {
+    offset-distance: 100%;
+    opacity: 0;
+  }
+}
+@keyframes press {
+  0%,
+  100% {
+    translate: 0 0;
+  }
+  10%,
+  86% {
+    translate: 0 var(--travel);
+  }
+}
+@keyframes shake {
+  0%,
+  100% {
+    translate: 0 0;
+  }
+  12% {
+    translate: -6px 1px;
+  }
+  27% {
+    translate: 5px -1px;
+  }
+  42% {
+    translate: -4px 0;
+  }
+  58% {
+    translate: 3px 1px;
+  }
+  74% {
+    translate: -2px 0;
+  }
+  88% {
+    translate: 1px 0;
+  }
+}
+@keyframes lit {
+  0%,
+  100% {
+    fill: var(--amber);
+  }
+}
+@keyframes flash {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  15%,
+  85% {
+    opacity: 1;
+  }
+}
+@keyframes walk {
+  0% {
+    transform: translate(226px, 598px);
+  }
+  17% {
+    transform: translate(538px, 598px);
+  }
+  29% {
+    transform: translate(1008px, 598px);
+  }
+}
+@keyframes shut {
+  0%,
+  100% {
+    translate: var(--open) 0;
+  }
+  20%,
+  82% {
+    translate: 0 0;
+  }
+}
+@keyframes mist {
+  0% {
+    opacity: 0;
+    scale: 0.3;
+  }
+  25% {
+    opacity: 0.55;
+  }
+  100% {
+    opacity: 0;
+    scale: 1.7;
+    translate: var(--dx) var(--dy);
+  }
+}
+@keyframes squash {
+  0%,
+  19% {
+    x: -10px;
+    y: -6px;
+    width: 20px;
+    height: 12px;
+    rx: 2px;
+  }
+  21%,
+  45% {
+    x: -13px;
+    y: -3px;
+    width: 26px;
+    height: 6px;
+    rx: 2px;
+  }
+  49%,
+  100% {
+    x: -6px;
+    y: -6px;
+    width: 12px;
+    height: 12px;
+    rx: 6px;
+  }
+}
+/* Motion blur: shown only while the packet moves. */
+@keyframes trail {
+  0%,
+  14.5% {
+    opacity: 1;
+    y: -6px;
+    height: 12px;
+  }
+  17.8%,
+  51.4%,
+  61.4%,
+  88.6% {
+    opacity: 0;
+  }
+  54%,
+  59%,
+  91%,
+  100% {
+    opacity: 1;
+  }
+}
+@keyframes ring {
+  0%,
+  46% {
+    opacity: 0;
+  }
+  50%,
+  100% {
+    opacity: 1;
+  }
+}
+@keyframes load {
+  from {
+    scale: 0 1;
+  }
+  to {
+    scale: 1 1;
+  }
+}
+@keyframes tick {
+  50% {
+    fill: #2f4a3a;
+    stroke: var(--green);
+  }
+}
+@keyframes pop {
+  from {
+    scale: 0;
+  }
+  60% {
+    scale: 1.5;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  #stage {
+    animation: none !important;
+  }
+}
+
+/* hover tooltip */
+#tip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  padding: 5px 9px;
+  border: 1px solid var(--edge);
+  border-radius: 5px;
+  background: #151517;
+  color: var(--hi);
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* flow-direction arrowheads on the wires */
+.wire .head {
+  stroke: var(--mid);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* cold review freezer doors: flush with the box border, parked outside its clip until a review runs */
+.door {
+  translate: var(--open) 0;
+}
+.door.left {
+  --open: -54px;
+}
+.door.right {
+  --open: 64px;
+}
+.door > path:first-child {
+  fill: #141416;
+  stroke: var(--port);
+  stroke-width: 1.5;
+}
+.door .panel {
+  fill: #2b2215;
+  stroke: #6d5631;
+}
+.door .plaque {
+  fill: #3a1f1e;
+  stroke: #7c3a38;
+}
+.door .lamp {
+  stroke: var(--ice);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  opacity: 0.7;
+}
+.door text {
+  font-size: 6px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-anchor: middle;
+  fill: #e9b4b0;
+}
+.mist circle {
+  fill: var(--ice);
+  filter: blur(4px);
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+@keyframes deliver-direct {
+  0% {
+    offset-distance: 0%;
+    opacity: 0;
+  }
+  2% {
+    opacity: 1;
+  }
+  17.8% {
+    offset-distance: 56.6%;
+    fill: #cfcfcf;
+  }
+  21% {
+    fill: var(--amber);
+  }
+  51.4% {
+    offset-distance: 56.6%;
+    fill: var(--amber);
+  }
+  98% {
+    opacity: 1;
+  }
+  100% {
+    offset-distance: 100%;
+    opacity: 0;
+  }
+}
+@keyframes trail-direct {
+  0%,
+  14.5% {
+    opacity: 1;
+    y: -6px;
+    height: 12px;
+  }
+  17.8%,
+  51.4% {
+    opacity: 0;
+  }
+  54%,
+  100% {
+    opacity: 1;
+  }
+}
