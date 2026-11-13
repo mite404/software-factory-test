@@ -39,10 +39,10 @@ after ambiguous registration and events, then return actionable failures to the 
 
 ## Steps
 
-1. Discover supported capabilities and bind delivery, ticket, owner, revision, and check identity.
-2. Persist publication outcomes and reconcile CI and PR subscription coverage independently.
-3. Reconcile duplicated, missed, and out-of-order events against current remote state.
-4. Route one actionable repair to the original worker and rerun required gates for its new revision.
+1. **Bind supported delivery identities**. Discover capabilities and correlate ticket, owner, and checks.
+2. **Persist independent monitoring outcomes**. Reconcile CI and PR coverage separately from publication.
+3. **Reconcile current remote truth**. Deduplicate missed and out-of-order events against actual state.
+4. **Repair with original owner**. Route actionable findings and rerun gates on the new revision.
 
 ## Test plan
 
