@@ -38,10 +38,10 @@ run both pre-landing and post-landing model reviews by default.
 
 ## Steps
 
-1. Represent exact landed revision, gate result and required review as distinct durable facts.
-2. Run one cold opposite-family review when size, risk or retry policy requires it.
-3. Route findings to the original worker; repaired revisions rerun the complete required gate.
-4. Preserve review isolation, revision invalidation and truthful dependent-dispatch rules.
+1. **Record distinct landing facts**. Separate exact landed revision, gate result, and required review.
+2. **Run one conditional review**. Use cold opposite-family review when size, risk, or retry requires.
+3. **Return findings to owner**. Repaired revisions rerun the complete required gate.
+4. **Invalidate changed revision proof**. Preserve review isolation and dependent-dispatch rules.
 
 ## Test plan
 

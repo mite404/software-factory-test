@@ -233,7 +233,10 @@ The plugin publishes a sanitized observation file under the target Git directory
 state and title subscriptions trigger updates; a five-second heartbeat refreshes observations.
 The browser polls the read-only `/api/status` endpoint every five seconds. SQLite supplies retained
 ticket/run identity, enabled state, and acceptance, even without a heartbeat or current manifest
-entry. Titles and activity remain observations: `observedAt` is never advanced by an HTTP read.
+entry. Public titles use ticket IDs, with a delivery label for post-graft reviews. Private briefs
+and native thread titles are not public title sources. HTTP ignores observed titles, including
+matching fresh or stale legacy observations, without rewriting historical files. Activity remains
+an observation: `observedAt` is never advanced by an HTTP read.
 `fresh` requires an observation less than 20 seconds old and no more than five seconds in the
 future.
 Missing, invalid, or stale observations cannot advertise working agents. Activity must also match
@@ -280,7 +283,7 @@ modifies the repository. The selector exercises working, blocked, idle, disconne
 states. **Pause motion** affects visuals only, not the factory. Reduced-motion preferences disable
 looping movement. **Back up now** is intentionally disabled until its backend is implemented.
 
-The current screen shows ticket and thread titles, available thread links, and accepted revision
+The current screen shows ticket IDs and review labels, available thread links, and accepted revision
 hashes. PR metadata, conversation history, and evidence browsing remain backlog work.
 
 ## Checks

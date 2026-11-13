@@ -404,6 +404,13 @@ test("HTTP reads durable acceptance without a heartbeat and never discloses priv
           thread: null,
           revision,
         },
+        {
+          id: "C",
+          title: canary,
+          status: "queued",
+          thread: null,
+          revision: null,
+        },
       ],
     };
     const path = join(directory, "dashboard.json");
@@ -415,6 +422,53 @@ test("HTTP reads durable acceptance without a heartbeat and never discloses priv
       { id: "B", title: "B - post-graft review (sent)", status: "working" },
       { id: "C", status: "queued" },
     ]);
+    snapshot.tasks[0] = {
+      id: "A",
+      title: canary,
+      status: "working",
+      thread: "T-worker",
+      revision,
+    };
+    for (const age of [0, 60_000]) {
+      snapshot.observedAt = new Date(Date.now() - age).toISOString();
+      await writeFile(path, JSON.stringify(snapshot));
+      const legacy = await fetch(url);
+      expect(legacy.status).toBe(200);
+      const body = await legacy.text();
+      expect(body).not.toContain(canary);
+      expect(JSON.parse(body)).toMatchObject({
+        fresh: age === 0,
+        tasks: [
+          {
+            id: "A",
+            title: "A",
+            status: "accepted",
+            thread: "T-worker",
+            revision,
+            evidence: { acceptance: { revision } },
+          },
+          {
+            id: "B",
+            title: "B - post-graft review (sent)",
+            thread: "T-review",
+            revision,
+            status: age === 0 ? "working" : "unknown",
+            evidence: {
+              review: { pending: true, revision, base: review.base },
+            },
+          },
+          {
+            id: "C",
+            title: "C",
+            status: "queued",
+            thread: null,
+            revision: null,
+          },
+        ],
+      });
+      expect(await readFile(path, "utf8")).toBe(JSON.stringify(snapshot));
+    }
+    snapshot.observedAt = new Date().toISOString();
     snapshot.tasks[1]!.thread = "T-old-review";
     await writeFile(path, JSON.stringify(snapshot));
     expect((await (await fetch(url)).json()).tasks[1].status).toBe("unknown");
@@ -464,7 +518,7 @@ test("HTTP reads durable acceptance without a heartbeat and never discloses priv
   }
 });
 
-test("dashboard serves fresh titles, stops stale activity, and never serves private files or writes", async () => {
+test("dashboard ignores observed titles, stops stale activity, and never serves private files or writes", async () => {
   const root = await mkdtemp(join(tmpdir(), "factory-dashboard-"));
   execFileSync("git", ["init", "-q", root]);
   await mkdir(join(root, ".git/factory"), { recursive: true });
@@ -527,7 +581,7 @@ test("dashboard serves fresh titles, stops stale activity, and never serves priv
     const current = await response.json();
     expect(current.fresh).toBe(true);
     expect(current.tasks[0]).toMatchObject({
-      title: "Repair <script>markup</script>",
+      title: "A",
       status: "working",
       thread: "T-actual-thread",
     });

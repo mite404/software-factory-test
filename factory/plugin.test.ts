@@ -12,6 +12,159 @@ import { openPersistence } from "./persistence";
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 
+test("plugin and HTTP keep private briefs and native titles out of public titles", async () => {
+  const root = await mkdtemp(join(tmpdir(), "factory-plugin-privacy-"));
+  const directory = join(root, ".git/factory");
+  const canary = "PRIVATE-INSTRUCTIONS-CANARY";
+  const revision = "a".repeat(40);
+  const base = "b".repeat(40);
+  const ids = [
+    "queued",
+    "failed",
+    "missing",
+    "native",
+    "accepted",
+    "review",
+    "reviewed",
+  ];
+  const queue = ids.map((id) => ({
+    id,
+    brief: canary,
+    after: [],
+    steps: ["Verify public identity"],
+  }));
+  let dispose = () => {};
+  let server: ReturnType<typeof startDashboard> | undefined;
+  try {
+    git(root, "init", "-q");
+    await writeFile(join(root, "prd.md"), "Fixture");
+    await writeFile(join(root, "tickets.json"), JSON.stringify(queue));
+    await writeFile(
+      join(root, ".factory.json"),
+      JSON.stringify({
+        version: 1,
+        capacity: 1,
+        workerModel: "openai/gpt-6.1-sol",
+        prd: "prd.md",
+        tickets: "tickets.json",
+        scope: ["src/"],
+        verify: "true",
+        permissions: { execute: false, publish: false, externalTickets: false },
+      }),
+    );
+    const storage = openPersistence(directory, queue);
+    const running = {
+      kind: "running" as const,
+      base,
+      worktree: canary,
+      attempt: 1,
+      thread: "T-worker" as const,
+      delivery: "sent" as const,
+    };
+    const review = {
+      ticket: "review",
+      attempt: 1,
+      revision,
+      base,
+      stage: "post-graft" as const,
+      worktree: canary,
+      model: "anthropic/reviewer" as const,
+      report: canary,
+      log: canary,
+      command: canary,
+      delivery: "sent" as const,
+      thread: "T-review" as const,
+    };
+    storage.commit(
+      {
+        enabled: false,
+        runs: {
+          failed: { ...running, thread: "T-failed" },
+          missing: { ...running, thread: "T-missing" },
+          native: running,
+          accepted: {
+            kind: "done",
+            revision,
+            thread: "T-worker",
+            insight: canary,
+          },
+          review: { ...running, review },
+          reviewed: {
+            kind: "done",
+            revision,
+            thread: "T-worker",
+            insight: canary,
+            review: { ...review, ticket: "reviewed" },
+          },
+        },
+      },
+      "factory",
+      "fixture",
+      canary,
+    );
+    storage.close();
+    const bytes = await readFile(join(directory, "state.sqlite"));
+    const amp = {
+      threads: {
+        get(id: string) {
+          return {
+            state: {
+              async get() {
+                return "running";
+              },
+              subscribe() {
+                return { unsubscribe() {} };
+              },
+            },
+            title: {
+              async get() {
+                if (id === "T-failed") throw new Error("title unavailable");
+                return id === "T-missing" ? null : canary;
+              },
+              subscribe() {
+                return { unsubscribe() {} };
+              },
+            },
+          };
+        },
+      },
+      logger: { log() {} },
+      registerTool() {},
+      onDispose(fn: () => void) {
+        dispose = fn;
+      },
+    } as unknown as PluginAPI;
+    registerFactory(amp, root, () => ({
+      async init() {},
+      async close() {},
+      ledger: { async record() {} },
+    }));
+    const path = join(directory, "dashboard.json");
+    for (let i = 0; !existsSync(path) && i < 1200; i++) await Bun.sleep(5);
+    const snapshot = JSON.parse(await readFile(path, "utf8"));
+    server = startDashboard({ root, port: 0 });
+    const response = await fetch(`http://localhost:${server.port}/api/status`);
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).not.toContain(canary);
+    expect(JSON.stringify(snapshot)).not.toContain(canary);
+    const expected = ids.map((id) => ({
+      id,
+      title: ["review", "reviewed"].includes(id)
+        ? `${id} - post-graft review (sent)`
+        : id,
+      steps: ["Verify public identity"],
+    }));
+    expect(snapshot.tasks).toMatchObject(expected);
+    expect(JSON.parse(body).tasks).toMatchObject(expected);
+    expect(await readFile(join(directory, "state.sqlite"))).toEqual(bytes);
+  } finally {
+    dispose();
+    await server?.stop(true);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 async function damageCandidate(
   gate: string,
   root: string,

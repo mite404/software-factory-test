@@ -140,14 +140,13 @@ export default function registerFactory(
   const factory = createFactory(root, host, openStore);
 
   async function reviewProjection(
-    title: string,
     run: Run,
     row: DashboardSnapshot["tasks"][number],
     tools?: PluginTools,
   ) {
     if (!("review" in run) || !run.review) return row;
     const review = run.review;
-    row.title = `${title} - post-graft review (${review.delivery})`;
+    row.title = `${row.id} - post-graft review (${review.delivery})`;
     row.thread = review.thread ?? null;
     row.revision = review.revision;
     if (run.kind === "done") return row;
@@ -177,7 +176,7 @@ export default function registerFactory(
               const run = state.runs[task.id];
               const row: DashboardSnapshot["tasks"][number] = {
                 id: task.id,
-                title: task.brief,
+                title: task.id,
                 steps: task.steps ?? [],
                 status: "queued",
                 thread: null,
@@ -188,17 +187,12 @@ export default function registerFactory(
               if (run.kind === "done") row.revision = run.revision;
               if ("thread" in run && run.thread) {
                 row.thread = run.thread;
-                try {
-                  row.title =
-                    (await amp.threads.get(run.thread).title.get()) ??
-                    task.brief;
-                } catch {}
                 if (run.kind === "running") {
                   const activity = await observe(run.thread, tools);
                   row.status = activityStatuses[activity];
                 }
               }
-              return reviewProjection(task.brief, run, row, tools);
+              return reviewProjection(run, row, tools);
             },
           ),
         ),

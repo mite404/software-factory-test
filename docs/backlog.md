@@ -4,6 +4,12 @@ Updated 2026-11-13. These are local user stories, not filed Linear tickets. No s
 remote provisioning, pushes, application delivery, or worker deletion. Status describes observed
 implementation, not acceptance of the design. See [PRD](prd.md) and [decisions](adr.md).
 
+The [remaining v1 execution inventory](v1-execution.md) scopes 28 acceptance units, including
+23 new bounded tickets and five reused tickets. It is the current dispatch/dependency plan;
+historical feature stories below retain their evidence and may describe superseded sequencing.
+One unit, public-title privacy (v1-ticket1), is now accepted; 27 remain.
+No extra execution or remote permission is granted by the inventory.
+
 ## F01 - Install the factory as a repository service
 
 As an operator, I can install and check the factory in an existing repo without changing my app
@@ -78,7 +84,7 @@ alone did not reconnect its tools. Why the coordinator CLI was terminated remain
 - Dispatch remains permission-gated and sequential. Recovery retains the same worker on rejection.
 - Every two failed candidates require a recorded Foreman decision, not a terminal attempt limit.
   [Repair escalation](feats/repair-escalation/repair-escalation-ticket1.md) has passed local gates;
-  live same-worker attempt-three delivery is recorded. Native acceptance is still required.
+  native same-worker repair and fresh cold review are accepted and integrated locally.
 
 ## F04 - Retain phase lessons
 
