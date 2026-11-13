@@ -202,6 +202,32 @@ testing; neither a formal proof nor a fixture-only test replaces the other requi
 the command, tool or harness version, tested revision, result, and evidence for each required check.
 Project definitions declare which checks are required and which observations are advisory.
 
+#### Coordinator-owned remote monitoring
+
+When remote publication is authorized, the coordinator owns publication and its monitoring together.
+Workers submit candidates; monitoring cannot depend on a worker's hooks, plugin installation, or
+continued activity. Route Amp subscription events to the persistent coordinator thread, not a
+temporary subagent. GitHub Actions runs checks; it does not own Amp thread routing or credentials.
+
+After each confirmed push, ensure an Amp CI subscription covers the exact pushed commit. After
+opening a PR, separately ensure a subscription covers its comments and reviews. Record repository,
+branch, commit, ticket, original worker, coordinator thread, optional PR, and subscription IDs in
+durable delivery state. Reuse Amp's supported subscription APIs and compatible `ci-watch` behavior
+rather than introducing another watcher. Agent instructions are a fallback, not the safety rule.
+
+If registration fails after a push, show "published, monitoring unavailable" and retain ownership.
+Do not mark the delivery fully verified. Reconcile registration without repeating the push or PR
+creation. After restart, confirm subscription coverage or recorded terminal results and restore
+missing monitoring idempotently. A completed CI subscription need not remain active once its result
+is durably recorded. Reconcile missed events against actual remote state.
+
+Route actionable failures and review feedback to the original worker with revision-bound evidence.
+Deduplicate notifications and correction dispatches. Correlate CI events with the commit, check,
+and run attempt; late results cannot verify a newer revision. A repaired commit receives fresh CI
+coverage and reruns the complete required gate under the landing invariants above. Subscription
+registration is not gate evidence and never grants publishing permission. This requirement applies
+when publication is enabled; the current local-only slice remains local-only.
+
 ### Target workflow
 
 This diagram records the intended boundaries, not a claim that every stage is implemented.
@@ -513,6 +539,20 @@ new workers, publications, or self-modification. Implementation and usage ingest
   capabilities without duplicate execution or invented success. Missing required tools block
   acceptance; advisory feedback cannot satisfy mandatory gates. Formal and app-level evidence
   retain their declared coverage and tested revision.
+- AC37: With worker hooks absent and the worker idle or disconnected, an authorized push still
+  receives coordinator-owned CI coverage for its exact commit. Opening a PR separately receives
+  comments and reviews coverage. Durable records bind both subscriptions to the ticket and owner.
+- AC38: Fail registration after a successful push or PR creation, then restart the coordinator.
+  The delivery remains visibly published with monitoring unavailable, not fully verified. Recovery
+  restores coverage without another push, PR, worker, or duplicate subscription. Already recorded
+  terminal CI results do not trigger endless resubscription.
+- AC39: Deliver duplicate, missed, and out-of-order CI and review events. Reconcile remote state and
+  return actionable diagnostics to the original worker without duplicate correction dispatches.
+  A repaired commit gets fresh CI coverage and a complete required-gate rerun. Success for the old
+  commit or an older check attempt cannot authorize acceptance of the repair.
+- AC40: Repository CI runs without Amp credentials or a worker subscription hook. Instructions and
+  `ci-watch` can assist, but disabling either cannot bypass coordinator monitoring requirements.
+  Subscription setup and recovery neither enable publishing nor change the local-only slice.
 
 Passing simulations alone does not satisfy native dispatch or restart acceptance. See
 [workflow-trials.md](workflow-trials.md) for observed results and limitations.
