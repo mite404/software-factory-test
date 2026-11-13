@@ -40,7 +40,8 @@ As an operator, I can restart the factory without losing its queue, ownership, o
 recovery does not depend on a model remembering the previous conversation.
 
 Priority: P0. Dependencies: F01. Status: core SQLite persistence and legacy migration verified in
-[Feature 04](features/feature-04/feature-04-impl.md). Evidence and lessons still use existing storage.
+[Feature 04](features/feature-04/feature-04-impl.md). Evidence and lessons still use existing
+storage.
 
 - Use Bun SQLite with versioned migrations and separate records for projects, tickets, worker
   runs, events, evidence, and lessons. Preserve explicit thread and revision correlation.
@@ -188,8 +189,8 @@ Priority: P1. Dependencies: F02, F03, F07, F08. Status: planned; no chat endpoin
 
 ## F11 - Retire disposable workers without losing work
 
-As an operator, I can let completed worker orbs be archived and shut down, so they do not retain
-resources after their results have been safely preserved.
+As an operator, I can release completed worker-orb resources while keeping ticket threads
+unarchived, so implementation history stays visible after results have been safely preserved.
 
 Priority: P0. Dependencies: F03, F04, F05, F06. Status: planned.
 
@@ -199,7 +200,8 @@ Priority: P0. Dependencies: F03, F04, F05, F06. Status: planned.
   accepted outcome and lessons. Worker-local file links do not satisfy preservation.
 - Failed backup or missing delivery permission blocks retirement without granting new permissions.
 - Record acceptance and retirement separately. Repeated archive, shutdown, and cleanup requests are
-  idempotent; missing evidence must leave recoverable work intact.
+  idempotent; missing evidence must leave recoverable work intact. Resource retirement does not
+  archive the ticket's implementation thread. Finished review agents may be archived.
 
 ## F12 - Define each project's factory as code
 
@@ -268,6 +270,27 @@ Priority: P0. Dependencies: F01, F03. Status: planned; observed in feature-07 do
   repair is manual, not proof that automatic setup or recovery exists.
 
 ## Delivery order and proof
+
+New required pipeline stories are tracked separately from the accepted pre-acceptance review slice:
+
+- F15, scheduled full gates, P0, depends on F12 and native serialized landing. Preserve landed
+  versus fully verified state, exact-revision attempts, restart safety and original-owner repair
+  routing. [Local ticket](feats/scheduled-gates/scheduled-gates-ticket1.md). Status: scoped, not
+  implemented.
+- F16, conditional post-landing review, P0, depends on F15 and F12. Reuse cold opposite-family
+  review without mandatory double review. Retain ownership and invalidate stale proof after repair.
+  [Local ticket](feats/post-landing-review/post-landing-review-ticket1.md).
+  Status: scoped, not built.
+- F17, native discovery and intake, P1, depends on F12 and F04. Promote the fixture discovery
+  contract into bounded native passes with mode changes, duplicate refusal, exhaustion, cooldown
+  and evidence. PRD R2-R4 and AC1-AC12 remain the acceptance contract. Status: not built natively.
+- F18, coordinator-owned remote monitoring, P0 when publication is enabled, depends on F12 and F15.
+  Implement durable push/PR correlation, native subscription reconciliation and original-owner
+  repair under AC37-AC40. Local-only execution stays unchanged. Status: not implemented.
+
+F14's next bounded implementation unit is
+[worktree-setup-ticket1](feats/worktree-setup/worktree-setup-ticket1.md). Fix this observed blocker
+before adding workers for other features. Re-scope each later ticket against accepted prerequisites.
 
 Finish the existing sequential setup and dispatch trial first. Build F02 and F03 as the persistence
 and Amp foundation, then F05 and F06 for safe recovery. F04, F07, and F08 provide usable memory and

@@ -134,7 +134,9 @@ required evidence outside that orb, and acknowledgment of the private snapshot c
 accepted outcome and lessons. A link to a file in the worker orb is not preserved evidence.
 Missing delivery permission or failed backup blocks retirement, not a reason to publish implicitly.
 Pending corrections stay with the same worker. Archival, shutdown, and cleanup are idempotent and
-recorded separately from acceptance; a stopped turn alone never triggers retirement.
+recorded separately from acceptance; a stopped turn alone never triggers retirement. Keep each
+ticket's implementation thread unarchived for traceability, including after resource retirement.
+Finished review agents may be archived after their evidence is preserved.
 
 ### R6. Context and shared discoveries
 
