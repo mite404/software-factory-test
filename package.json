@@ -6,8 +6,10 @@
   "scripts": {
     "prepare": "lefthook install",
     "lint": "oxlint --type-aware factory src web",
+    "lint:type-aware": "oxlint --type-aware factory src web",
+    "lint:type-aware:fix": "oxlint --type-aware --fix factory src web",
     "lint:ci": "oxlint --type-aware --type-check --deny-warnings factory src web",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "oxlint --type-aware --type-check factory src web",
     "format:check": "prettier --check '{src,factory,web}/**/*.ts' 'web/*.{html,css}' '*.{json,yml}' '.github/workflows/*.yml'",
     "web": "vite web",
     "test": "amp --version && bun test",
@@ -23,7 +25,6 @@
     "oxlint": "^1.93.0",
     "oxlint-tsgolint": "^7.0.2007",
     "prettier": "^3.3.0",
-    "typescript": "^5.5.0",
     "vite": "^8.3.8"
   },
   "trustedDependencies": [

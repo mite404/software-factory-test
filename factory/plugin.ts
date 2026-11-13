@@ -1,8 +1,9 @@
 import type { PluginAPI, PluginTools } from "@ampcode/plugin";
-import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { DashboardSnapshot } from "./dashboard";
+import type { Run } from "./persistence";
 import {
   configuration,
   createFactory,
@@ -27,6 +28,13 @@ function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" ? { ...value } : undefined;
 }
 
+function repairRequest(input: Record<string, unknown>) {
+  if (input.action !== "resume") return undefined;
+  if (typeof input.ticket !== "string" || typeof input.decision !== "string")
+    throw new Error("Resume requires ticket and decision");
+  return { ticket: input.ticket, decision: input.decision };
+}
+
 function reportedActivity(value: unknown, id: string) {
   const result = record(value);
   const metadata = record(result?.metadata);
@@ -35,6 +43,8 @@ function reportedActivity(value: unknown, id: string) {
 }
 
 const runStatuses = {
+  preparing: "unknown",
+  "preparation-failed": "blocked",
   creating: "unknown",
   running: "unknown",
   blocked: "blocked",
@@ -84,12 +94,14 @@ export default function registerFactory(
   }
 
   const host: NativeHost = {
-    async create(parentThreadID, model, reasoningEffort) {
+    async create(parentThreadID, model, reasoningEffort, role) {
       const agent = amp.createAgent({
         model,
         reasoningEffort,
         instructions:
-          "Implement the assigned factory ticket in its named local repository. Keep tool output concise.",
+          role === "reviewer"
+            ? "Independently review the named post-graft code artifact. Read only code, requirements and coordinator gate evidence. Do not implement or delegate. Write only the requested verdict report."
+            : "Implement the assigned factory ticket in its named local repository. Keep tool output concise.",
         tools: ["shell_command", "shell_command_status", "apply_patch", "Read"],
         features: [],
       });
@@ -127,6 +139,27 @@ export default function registerFactory(
   };
   const factory = createFactory(root, host, openStore);
 
+  async function reviewProjection(
+    title: string,
+    run: Run,
+    row: DashboardSnapshot["tasks"][number],
+    tools?: PluginTools,
+  ) {
+    if (!("review" in run) || !run.review) return row;
+    const review = run.review;
+    row.title = `${title} - post-graft review (${review.delivery})`;
+    row.thread = review.thread ?? null;
+    row.revision = review.revision;
+    if (run.kind === "done") return row;
+    row.status =
+      review.delivery === "creating" || review.delivery === "sending"
+        ? "blocked"
+        : review.thread
+          ? activityStatuses[await observe(review.thread, tools)]
+          : "unknown";
+    return row;
+  }
+
   async function publish(tools?: PluginTools) {
     if (stopped || publishing) return;
     publishing = true;
@@ -145,6 +178,7 @@ export default function registerFactory(
               const row: DashboardSnapshot["tasks"][number] = {
                 id: task.id,
                 title: task.brief,
+                steps: task.steps ?? [],
                 status: "queued",
                 thread: null,
                 revision: null,
@@ -164,15 +198,20 @@ export default function registerFactory(
                   row.status = activityStatuses[activity];
                 }
               }
-              return row;
+              return reviewProjection(task.brief, run, row, tools);
             },
           ),
         ),
       };
       await mkdir(factory.directory, { recursive: true });
       const path = join(factory.directory, "dashboard.json");
-      await writeFile(`${path}.tmp`, JSON.stringify(snapshot));
-      if (!stopped) await rename(`${path}.tmp`, path);
+      const temporary = `${path}.${randomUUID()}.tmp`;
+      try {
+        await writeFile(temporary, JSON.stringify(snapshot));
+        if (!stopped) await rename(temporary, path);
+      } finally {
+        await rm(temporary, { force: true });
+      }
     } catch (error) {
       amp.logger.log("factory dashboard observation failed", String(error));
     } finally {
@@ -188,14 +227,23 @@ export default function registerFactory(
   const suffix = createHash("sha256").update(root).digest("hex").slice(0, 8);
   amp.registerTool({
     name: `factory_control_${suffix}`,
-    description: `Control the factory in ${root}. status is read-only. start requires explicit user authorization and permissions.execute=true in .factory.json. pause stops dispatch. reconcile recovers persisted work without granting permissions.`,
+    description: `Control the factory in ${root}. status is read-only. start requires explicit user authorization and permissions.execute=true in .factory.json. pause stops dispatch. reconcile observes persisted work without granting permissions. retry-setup explicitly reruns parked preparation in the same worktree before creating a worker. resume requires the owning Foreman, a blocked ticket, and a decision explaining the next repair; it queues the same worker without starting a paused factory or accepting code.`,
     inputSchema: {
       type: "object",
       properties: {
         action: {
           type: "string",
-          enum: ["status", "start", "pause", "reconcile"],
+          enum: [
+            "status",
+            "start",
+            "pause",
+            "reconcile",
+            "retry-setup",
+            "resume",
+          ],
         },
+        ticket: { type: "string" },
+        decision: { type: "string" },
       },
       required: ["action"],
       additionalProperties: false,
@@ -206,11 +254,16 @@ export default function registerFactory(
         action !== "status" &&
         action !== "start" &&
         action !== "pause" &&
-        action !== "reconcile"
+        action !== "reconcile" &&
+        action !== "retry-setup" &&
+        action !== "resume"
       )
         throw new Error("Unknown action");
-      const state = await factory.tick(action, ctx.thread.id, (id) =>
-        observe(id, ctx.tools),
+      const state = await factory.tick(
+        action,
+        ctx.thread.id,
+        (id) => observe(id, ctx.tools),
+        repairRequest(input),
       );
       await publish(ctx.tools);
       return JSON.stringify(state);

@@ -13,6 +13,7 @@ function feed(statuses: Task["status"][], extra: Partial<Feed> = {}): Feed {
     tasks: statuses.map((status, i) => ({
       id: `T${i + 1}`,
       title: `ticket ${i + 1}`,
+      steps: [],
       status,
       thread: status === "working" ? "T-abc" : null,
       revision: status === "accepted" ? `${i + 1}`.repeat(40) : null,

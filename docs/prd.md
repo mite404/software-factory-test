@@ -38,10 +38,10 @@ only part of one. Evidence and trial limitations remain in [workflow-trials.md](
 - F05: Private backup implementation is in progress, not accepted. No private repository has been
   provisioned and no production snapshot push is authorized.
 - F06: Replacement-orb restore and exclusive orchestrator ownership remain planned.
-- F07: A file-backed read-only observation API is verified. Direct SQLite reads and full evidence
-  projection remain pending.
+- F07: SQLite-backed read-only status and curated acceptance/review references passed local
+  dogfood, including real cold-review rejection and same-worker repair.
 - F08: The first dashboard is browser-verified against disposable state and labeled samples.
-  SQLite API integration and full evidence views remain pending.
+  SQLite API compatibility is verified; full evidence browsing remains pending.
 - F09: The dashboard backup control is a disabled placeholder.
 - F10: Dashboard steering chat remains planned.
 - F11: Safe worker retirement remains planned.
@@ -134,7 +134,9 @@ required evidence outside that orb, and acknowledgment of the private snapshot c
 accepted outcome and lessons. A link to a file in the worker orb is not preserved evidence.
 Missing delivery permission or failed backup blocks retirement, not a reason to publish implicitly.
 Pending corrections stay with the same worker. Archival, shutdown, and cleanup are idempotent and
-recorded separately from acceptance; a stopped turn alone never triggers retirement.
+recorded separately from acceptance; a stopped turn alone never triggers retirement. Keep each
+ticket's implementation thread unarchived for traceability, including after resource retirement.
+Finished review agents may be archived after their evidence is preserved.
 
 ### R6. Context and shared discoveries
 
@@ -171,6 +173,20 @@ and creates owned repair work. Landing and full-gate success are distinct facts;
 must never be labeled fully verified. The native slice initially runs its configured check before
 local integration; fast-lane policy, scheduled full gates, and post-landing review are later stages.
 
+The next native slice uses one conditional cold post-graft review, not before-and-after reviews.
+Ticket scoping records Small/Medium/Large effort separately from blast-radius risk. Small, low-risk
+first attempts use the full quality gate only. Medium/large or unrated scope, elevated blast radius,
+or any retry requires the one review when enabled. A small diff is not automatically low risk.
+Record affected consumers/shared contracts and the safety fact verification must exercise.
+
+Prepare the integration candidate in an isolated staging worktree. Withhold canonical acceptance
+and dependent dispatch until any required review passes. The reviewer uses the implementation
+worker's opposite provider at high effort: OpenAI author to Fable 5.2, Anthropic author to GPT-6 Astra.
+Give it requirements and exact artifacts, never worker context, rationale, or self-review. Findings
+return to the same worker; changed revisions rerun gates and receive a fresh required review.
+The local native review/rejection/repair loop passed [trial 9](workflow-trials.md). Scheduled
+full gates and the broader post-landing pipeline remain planned.
+
 Adopt these landing invariants without batching; the initial queue accepts one ticket at a time:
 
 - One authorized writer serializes updates to main. Workers submit candidates, never competing
@@ -201,6 +217,32 @@ properties, model, and runnable checks. Record what the model covers and what st
 testing; neither a formal proof nor a fixture-only test replaces the other required gates. Record
 the command, tool or harness version, tested revision, result, and evidence for each required check.
 Project definitions declare which checks are required and which observations are advisory.
+
+#### Coordinator-owned remote monitoring
+
+When remote publication is authorized, the coordinator owns publication and its monitoring together.
+Workers submit candidates; monitoring cannot depend on a worker's hooks, plugin installation, or
+continued activity. Route Amp subscription events to the persistent coordinator thread, not a
+temporary subagent. GitHub Actions runs checks; it does not own Amp thread routing or credentials.
+
+After each confirmed push, ensure an Amp CI subscription covers the exact pushed commit. After
+opening a PR, separately ensure a subscription covers its comments and reviews. Record repository,
+branch, commit, ticket, original worker, coordinator thread, optional PR, and subscription IDs in
+durable delivery state. Reuse Amp's supported subscription APIs and compatible `ci-watch` behavior
+rather than introducing another watcher. Agent instructions are a fallback, not the safety rule.
+
+If registration fails after a push, show "published, monitoring unavailable" and retain ownership.
+Do not mark the delivery fully verified. Reconcile registration without repeating the push or PR
+creation. After restart, confirm subscription coverage or recorded terminal results and restore
+missing monitoring idempotently. A completed CI subscription need not remain active once its result
+is durably recorded. Reconcile missed events against actual remote state.
+
+Route actionable failures and review feedback to the original worker with revision-bound evidence.
+Deduplicate notifications and correction dispatches. Correlate CI events with the commit, check,
+and run attempt; late results cannot verify a newer revision. A repaired commit receives fresh CI
+coverage and reruns the complete required gate under the landing invariants above. Subscription
+registration is not gate evidence and never grants publishing permission. This requirement applies
+when publication is enabled; the current local-only slice remains local-only.
 
 ### Target workflow
 
@@ -280,7 +322,8 @@ SQLite is the target store for coordinator state and project memory; endpoints r
 This replaces the earlier JSON-file direction rather than adding a competing source of truth.
 Generic mutation routes must not bypass coordinator transitions. State changes persist before
 becoming visible as events. Coordinator SQLite persistence and legacy migration are implemented.
-The dashboard still reads a file-backed projection; its direct SQLite API remains pending.
+The read-only status API reads durable state directly from SQLite. A separate file-backed
+observation supplies thread activity and freshness. Full evidence browsing remains pending.
 
 ### R12. Orb-first operation and persistence
 
@@ -513,6 +556,20 @@ new workers, publications, or self-modification. Implementation and usage ingest
   capabilities without duplicate execution or invented success. Missing required tools block
   acceptance; advisory feedback cannot satisfy mandatory gates. Formal and app-level evidence
   retain their declared coverage and tested revision.
+- AC37: With worker hooks absent and the worker idle or disconnected, an authorized push still
+  receives coordinator-owned CI coverage for its exact commit. Opening a PR separately receives
+  comments and reviews coverage. Durable records bind both subscriptions to the ticket and owner.
+- AC38: Fail registration after a successful push or PR creation, then restart the coordinator.
+  The delivery remains visibly published with monitoring unavailable, not fully verified. Recovery
+  restores coverage without another push, PR, worker, or duplicate subscription. Already recorded
+  terminal CI results do not trigger endless resubscription.
+- AC39: Deliver duplicate, missed, and out-of-order CI and review events. Reconcile remote state and
+  return actionable diagnostics to the original worker without duplicate correction dispatches.
+  A repaired commit gets fresh CI coverage and a complete required-gate rerun. Success for the old
+  commit or an older check attempt cannot authorize acceptance of the repair.
+- AC40: Repository CI runs without Amp credentials or a worker subscription hook. Instructions and
+  `ci-watch` can assist, but disabling either cannot bypass coordinator monitoring requirements.
+  Subscription setup and recovery neither enable publishing nor change the local-only slice.
 
 Passing simulations alone does not satisfy native dispatch or restart acceptance. See
 [workflow-trials.md](workflow-trials.md) for observed results and limitations.
@@ -537,8 +594,8 @@ mode and may differ between orchestrator and worker. Comparative model quality r
 - Final bug-rating thresholds beyond the current fixture rubric.
 - Runtime distribution and repository service packaging. `factory/setup-factory.ts` implements
   installation, check-only mode, and explicit refresh; complete service packaging remains pending.
-- Dashboard endpoint authentication and portal setup. A read-only prototype exists; direct SQLite
-  status and full evidence projection remain pending before remote controls.
+- Portable authenticated portal setup and full evidence projection remain pending before remote
+  controls. The SQLite-backed read-only status API passed local dogfood trial 9.
 - Private state-repository configuration and backup verification are in progress. Snapshot retention
   and size limits, orchestrator ownership enforcement, and replacement-orb restoration remain open.
   SQLite persistence and legacy migration are verified, but an orb-local database is not a backup.

@@ -1,10 +1,9 @@
 import type { DashboardSnapshot } from "../factory/dashboard";
 
-// ponytail: steps and evidence are optional until this checkout's /api/status carries them (the
-// factory branch already does). evidence.review is the cold review record bound to the landed
-// revision, null when none was recorded. Drop the intersection then.
+// evidence is added per task by GET /api/status but is not part of the exported snapshot type.
+// evidence.review is the cold review record bound to the task's current revision; null means none
+// is recorded, which on an accepted task is not proof that review was skipped.
 export type Task = DashboardSnapshot["tasks"][number] & {
-  steps?: string[];
   evidence?: { review: object | null };
 };
 
@@ -104,7 +103,7 @@ function steps(status: Cell["status"]): string[] {
 }
 
 // Lay step labels out left to right from the chip column; steps that do not fit are dropped.
-function chips(labels: string[] = []): Chip[] {
+function chips(labels: string[]): Chip[] {
   const placed: Chip[] = [];
   let x = CHIP_X;
   for (const label of labels) {

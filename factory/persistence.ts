@@ -1,10 +1,28 @@
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { validReview, type Review } from "./review";
 
 export type ThreadID = `T-${string}`;
-export type Task = { id: string; brief: string; after: string[] };
+export type Task = {
+  id: string;
+  brief: string;
+  after: string[];
+  steps?: string[];
+  size?: "small" | "medium" | "large";
+  risky?: boolean;
+};
+type Preparation = {
+  base: string;
+  worktree: string;
+  command: string;
+  timeoutMs: number;
+  log: string;
+  pid?: number;
+};
 export type Run =
+  | (Preparation & { kind: "preparing" })
+  | (Preparation & { kind: "preparation-failed"; reason: string })
   | { kind: "creating"; base: string; worktree: string }
   | {
       kind: "running";
@@ -13,10 +31,25 @@ export type Run =
       thread: ThreadID;
       attempt: number;
       delivery: "queued" | "sending" | "sent";
+      review?: Review;
+      workerModel?: string;
+      requirements?: string;
+      feedback?: string;
     }
-  | { kind: "blocked"; reason: string; thread?: ThreadID }
+  | {
+      kind: "blocked";
+      reason: string;
+      thread?: ThreadID;
+      repair?: Extract<Run, { kind: "running" }>;
+    }
   | { kind: "uncertain"; reason: string; thread: ThreadID }
-  | { kind: "done"; revision: string; thread: ThreadID; insight: string };
+  | {
+      kind: "done";
+      revision: string;
+      thread: ThreadID;
+      insight: string;
+      review?: Review;
+    };
 export type State = {
   enabled: boolean;
   owner?: ThreadID;
@@ -34,6 +67,18 @@ function text(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+/** Parse ordered authored labels; missing legacy labels become empty. @throws On malformed labels. */
+export function taskSteps(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || !value.every(text))
+    throw new Error("Invalid ticket steps; expected nonblank string labels");
+  return value;
+}
+
+function positiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
 function thread(value: unknown): value is ThreadID {
   return text(value) && value.startsWith("T-") && value.length > 2;
 }
@@ -42,25 +87,64 @@ function worktreeRun(run: Record<string, unknown>): boolean {
   return text(run.base) && text(run.worktree);
 }
 
+function preparationRun(run: Record<string, unknown>): boolean {
+  return (
+    worktreeRun(run) &&
+    ["command", "log"].every((key) => text(run[key])) &&
+    positiveInteger(run.timeoutMs) &&
+    run.timeoutMs <= 2_147_483_647 &&
+    (run.pid === undefined || positiveInteger(run.pid)) &&
+    ["thread", "attempt"].every((key) => run[key] === undefined)
+  );
+}
+
+function reviewFields(run: Record<string, unknown>): boolean {
+  return (
+    ["workerModel", "requirements", "feedback"].every(
+      (key) => run[key] === undefined || text(run[key]),
+    ) &&
+    (run.review === undefined || validReview(run.review))
+  );
+}
+
 const runValidators: Record<string, (run: Record<string, unknown>) => boolean> =
   {
+    preparing: preparationRun,
+    "preparation-failed": (run) => preparationRun(run) && text(run.reason),
     creating: worktreeRun,
     running: (run) =>
       worktreeRun(run) &&
       thread(run.thread) &&
-      Number.isSafeInteger(run.attempt) &&
-      typeof run.attempt === "number" &&
-      run.attempt > 0 &&
+      positiveInteger(run.attempt) &&
       typeof run.delivery === "string" &&
-      ["queued", "sending", "sent"].includes(run.delivery),
+      ["queued", "sending", "sent"].includes(run.delivery) &&
+      reviewFields(run),
     blocked: (run) =>
-      text(run.reason) && (run.thread === undefined || thread(run.thread)),
+      text(run.reason) &&
+      (run.thread === undefined || thread(run.thread)) &&
+      (run.repair === undefined ||
+        (validRepair(run.repair) && run.repair.thread === run.thread)),
     uncertain: (run) => text(run.reason) && thread(run.thread),
     done: (run) =>
       text(run.revision) &&
       thread(run.thread) &&
-      typeof run.insight === "string",
+      typeof run.insight === "string" &&
+      reviewFields(run),
   };
+
+function validRepair(
+  value: unknown,
+): value is Extract<Run, { kind: "running" }> {
+  const run = record(value);
+  return (
+    run.kind === "running" &&
+    runValidators.running!(run) &&
+    Number(run.attempt) % 2 === 0 &&
+    Number.isSafeInteger(Number(run.attempt) + 1) &&
+    run.delivery === "sent" &&
+    run.review === undefined
+  );
+}
 
 function validateRun(id: string, value: unknown) {
   const run = record(value);
@@ -117,6 +201,7 @@ function database(directory: string, readonly: boolean) {
     strict: true,
   });
   try {
+    db.run("PRAGMA busy_timeout = 5000");
     const version = db
       .query<{ user_version: number }, []>("PRAGMA user_version")
       .get()!.user_version;
@@ -185,6 +270,30 @@ export function factoryStatus(directory: string): State {
   }
 }
 
+/** Read curated SQLite tickets and state together; never import legacy files. @throws On invalid storage. */
+export function factoryRecords(directory: string) {
+  if (!existsSync(join(directory, "state.sqlite"))) return null;
+  const db = database(directory, true);
+  try {
+    return db.transaction(() => {
+      const state = readState(db);
+      const tickets = db
+        .query<{ id: string; data: string }, []>(
+          "SELECT id, data FROM tickets ORDER BY rowid",
+        )
+        .all()
+        .map(({ id, data }) => {
+          if (!/^[a-zA-Z0-9_-]+$/.test(id))
+            throw new Error("Invalid factory ticket identity");
+          return { id, steps: taskSteps(record(JSON.parse(data)).steps) };
+        });
+      return { state, tickets };
+    })();
+  } finally {
+    db.close();
+  }
+}
+
 /** Open storage under the caller's poteto lock; migrate once. @throws On invalid storage or I/O. */
 export function openPersistence(directory: string, queue: Task[]) {
   const imported = existsSync(join(directory, "state.sqlite"))
@@ -198,6 +307,7 @@ export function openPersistence(directory: string, queue: Task[]) {
       })
     : database(directory, false);
   try {
+    db.run("PRAGMA busy_timeout = 5000");
     const state = db.transaction(() => {
       if (imported) {
         db.run(`
@@ -239,7 +349,19 @@ export function openPersistence(directory: string, queue: Task[]) {
       tickets: db
         .query<{ data: string }, []>("SELECT data FROM tickets ORDER BY rowid")
         .all()
-        .map((row) => JSON.parse(row.data) as Task),
+        .map((row) => {
+          const task = JSON.parse(row.data) as Task;
+          taskSteps(task.steps);
+          return task;
+        }),
+      /** Read the latest durable event for explicit pre-upgrade recovery. @throws On storage failure. */
+      lastEvent(ticket: string, action: string) {
+        return db
+          .query<{ detail: string }, [string, string]>(
+            "SELECT detail FROM events WHERE ticket = ? AND action = ? ORDER BY id DESC LIMIT 1",
+          )
+          .get(ticket, action)?.detail;
+      },
       /** Persist state and its event together. @throws On transaction failure; both roll back. */
       commit(state: State, ticket: string, action: string, detail: string) {
         db.transaction(() => {
