@@ -171,6 +171,37 @@ and creates owned repair work. Landing and full-gate success are distinct facts;
 must never be labeled fully verified. The native slice initially runs its configured check before
 local integration; fast-lane policy, scheduled full gates, and post-landing review are later stages.
 
+Adopt these landing invariants without batching; the initial queue accepts one ticket at a time:
+
+- One authorized writer serializes updates to main. Workers submit candidates, never competing
+  writes to main. Remote merge and local synchronization remain separate operations.
+- Gate the exact integration candidate built on current main, not merely the worker's branch.
+  Record its revision and base. If either changes, invalidate the proof, rebuild, and rerun the
+  gate before landing. A green check for a different revision grants no landing permission.
+  After a worker repairs a failed candidate, rerun the complete required landing gate against
+  current main; a passing targeted test alone does not authorize the repaired revision.
+- A failed candidate retains its ticket, original worker, branch, evidence, and diagnostics for
+  correction. Do not discard work, replace its owner, or revert main as routine queue recovery.
+  Independent eligible work may continue; dependents remain blocked until their prerequisites
+  are accepted. Every re-formed candidate passes its own gate before landing.
+
+Batching and automatic failure bisection are not required. Add them only if measured queue delays
+justify the extra coordination; they cannot weaken these invariants.
+
+Discover the project's existing verification capabilities before introducing replacements. The
+preferred stack uses `action-checks` for changed-line feedback during editing, independent Lefthook
+checks before commits, a `verify-<project-name>` CLI for driving and inspecting the app, and
+`ci-watch` for remote CI observation. These roles complement one another: editor feedback is not
+acceptance, and remote observation is not a new gate execution. Resolve installed plugin contracts
+and configured commands rather than assuming a plugin, command name, or credential is available.
+
+Reuse verification harnesses established through the operator's pstack workflow. Where formal
+verification is applicable, use the `create-formal-verification-skill` workflow to define the
+properties, model, and runnable checks. Record what the model covers and what still needs app-level
+testing; neither a formal proof nor a fixture-only test replaces the other required gates. Record
+the command, tool or harness version, tested revision, result, and evidence for each required check.
+Project definitions declare which checks are required and which observations are advisory.
+
 ### Target workflow
 
 This diagram records the intended boundaries, not a claim that every stage is implemented.
@@ -378,6 +409,9 @@ Define the initial measures as follows:
 - Flow: queue-to-start, start-to-first-proof, verification, review wait, and integration durations,
   plus same-worker corrections and blocked time. Show medians, tails, sample counts, and unfinished
   work age separately. Do not infer active coding time from elapsed thread time.
+- Queue recovery: rejected candidates, stale-base rechecks, retained work awaiting correction,
+  and successful repairs, linked to the original ticket and worker. A repaired landing does not
+  erase its first failure or count as a second independent delivery.
 - Human intervention: explicit rescue or correction requests, separate from planned approvals and
   ordinary steering. Automatic notifications are not human interventions; lower counts alone do
   not prove higher quality.
@@ -471,6 +505,14 @@ new workers, publications, or self-modification. Implementation and usage ingest
   estimates, shared overhead, and missing data stay distinct; partial periods are labeled.
 - AC34: Dashboard reads trigger no model calls, evaluations, or CI reruns. Invalid, duplicate, and
   out-of-order events cannot change metric meaning or silently alter execution permissions.
+- AC35: Reject a candidate, repair it with the same worker, and prove that landing remains blocked
+  until the complete required gate passes on the repaired integration revision and current main.
+  Advance main after a successful gate and prove that stale proof cannot authorize landing.
+  Concurrent landing attempts cannot bypass the single writer or lose rejected work.
+- AC36: A project reuses its configured verification CLI and installed feedback/CI-observation
+  capabilities without duplicate execution or invented success. Missing required tools block
+  acceptance; advisory feedback cannot satisfy mandatory gates. Formal and app-level evidence
+  retain their declared coverage and tested revision.
 
 Passing simulations alone does not satisfy native dispatch or restart acceptance. See
 [workflow-trials.md](workflow-trials.md) for observed results and limitations.

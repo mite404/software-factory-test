@@ -203,6 +203,9 @@ Existing `.factory.json`, service declarations, and Markdown prompts are startin
 
 - Define the supported configuration contract for backend services, runners, commands, agent roles,
   verification, discovery, native lifecycle hooks, and dashboard capabilities.
+- Discover existing `action-checks`, `ci-watch`, and `verify-<project-name>` capabilities. Reuse
+  pstack-created app harnesses and applicable formal-verification checks, with required/advisory
+  roles and explicit coverage. Do not create replacement tools or duplicate CI watchers by default.
 - Use YAML for authored operations, Markdown for agent instructions and notes, and JSON for schemas
   and machine contracts. Give each setting one home. Choose paths and schema during implementation.
 - Resolve one validated effective configuration for backend and frontend. Provide a no-side-effect
