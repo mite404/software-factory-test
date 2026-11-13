@@ -32,7 +32,8 @@ Luna remains available for inexpensive workflow fixtures.
 As an operator, I can restart the factory without losing its queue, ownership, or history, so
 recovery does not depend on a model remembering the previous conversation.
 
-Priority: P0. Dependencies: F01. Status: planned; the prototype still uses files.
+Priority: P0. Dependencies: F01. Status: core SQLite persistence and legacy migration verified in
+[Feature 04](features/feature-04/feature-04-impl.md). Evidence and lessons still use existing storage.
 
 - Use Bun SQLite with versioned migrations and separate records for projects, tickets, worker
   runs, events, evidence, and lessons. Preserve explicit thread and revision correlation.

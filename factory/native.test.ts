@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -189,6 +190,9 @@ test.each(["high", undefined])("native dispatch preserves effort %s, same-worker
       factory.tick("start", "T-owner"),
       factory.tick("reconcile"),
     ]);
+    expect(
+      (await readFile(join(factory.directory, "state.sqlite"))).subarray(0, 16).toString(),
+    ).toBe("SQLite format 3\u0000");
     expect(created).toBe(1);
     expect(settings).toEqual([["T-owner", "openai/gpt-6.1-sol", effort]]);
     const worktree = join(root, ".git/factory/worktrees/A");
@@ -245,12 +249,13 @@ test.each(["high", undefined])("native dispatch preserves effort %s, same-worker
       Array.from({ length: 8 }, () => factory.tick("reconcile")),
     );
     expect(created).toBe(3);
-    const events = (
-      await readFile(join(factory.directory, "events.jsonl"), "utf8")
-    )
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
+    const db = new Database(join(factory.directory, "state.sqlite"), { readonly: true });
+    const events = db.query<{ ticket: string; action: string }, []>(
+      "SELECT ticket, action FROM events",
+    ).all();
+    expect(db.query("SELECT detail FROM events WHERE ticket = 'A' AND action = 'accepted'").all())
+      .toEqual([{ detail: git("rev-parse", "HEAD") }]);
+    db.close();
     expect(
       events.filter(
         (event) => event.ticket === "B" && event.action === "blocked",

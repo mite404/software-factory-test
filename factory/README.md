@@ -1,8 +1,26 @@
 # Factory prototype
 
-The current dispatcher uses file persistence and native Amp thread APIs. SQLite, private backups,
-cross-orb code transfer, worker retirement, and dashboard chat are not implemented. Requirements and
-remaining stories live in [the backlog](../docs/backlog.md).
+The dispatcher uses Bun SQLite persistence and native Amp thread APIs. Private backups, cross-orb
+code transfer, worker retirement, and dashboard chat are not implemented. Requirements and remaining
+stories live in [the backlog](../docs/backlog.md).
+
+## Durable coordinator state
+
+The repository Git directory contains `factory/state.sqlite`, with schema version 1. Coordinator
+ownership, retained ticket definitions, worker runs, and ordered events live there. Every lifecycle
+transition commits its state and event in one short transaction. Worker calls and asynchronous
+verification run outside transactions. The existing poteto bookkeeping lock and revision ledger
+remain separate and unchanged. Databases and SQLite journals stay inside Git metadata, not commits.
+
+The first mutating lifecycle operation imports validated `state.json` and `events.jsonl` records.
+The original files remain intact for recovery. Later operations use SQLite and ignore stale legacy
+files. Removing a ticket from the manifest does not discard its claimed worker or accepted evidence.
+Ambiguous creation and delivery stay parked instead of creating replacement workers.
+
+Coordinator status reads existing SQLite or validated legacy state without creating runtime files,
+initializing the lock store, or migrating. The plugin separately refreshes dashboard observations,
+including during status calls. Malformed legacy records, corrupt databases, and unsupported schema
+versions fail visibly before dispatch. Initialization does not grant execution permission.
 
 ## Worker settings
 

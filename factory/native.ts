@@ -2,31 +2,16 @@ import type { AgentReasoningEffort } from "@ampcode/plugin";
 import { execFile, execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import {
-  appendFile,
-  mkdir,
-  readFile,
-  rename,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
-
-type ThreadID = `T-${string}`;
-type Task = { id: string; brief: string; after: string[] };
-type Run =
-  | { kind: "creating"; base: string; worktree: string }
-  | {
-      kind: "running";
-      base: string;
-      worktree: string;
-      thread: ThreadID;
-      attempt: number;
-      delivery: "queued" | "sending" | "sent";
-    }
-  | { kind: "blocked"; reason: string; thread?: ThreadID }
-  | { kind: "uncertain"; reason: string; thread: ThreadID }
-  | { kind: "done"; revision: string; thread: ThreadID; insight: string };
-type State = { enabled: boolean; owner?: ThreadID; runs: Record<string, Run> };
+import {
+  factoryStatus,
+  openPersistence,
+  type ThreadID,
+  type Task,
+  type Run,
+  type State,
+} from "./persistence";
 
 /** The existing poteto store supplies the cross-process lock and revision ledger. */
 export type Bookkeeping = {
@@ -177,12 +162,6 @@ export function tasks(value: unknown): Task[] {
   return rows;
 }
 
-async function atomic(path: string, value: unknown) {
-  const temporary = `${path}.${randomUUID()}.tmp`;
-  await writeFile(temporary, JSON.stringify(value, null, 2) + "\n");
-  await rename(temporary, path);
-}
-
 function git(root: string, ...args: string[]) {
   return execFileSync("git", ["-C", root, ...args], {
     encoding: "utf8",
@@ -199,16 +178,16 @@ export function createFactory(
     git(root, "rev-parse", "--absolute-git-dir"),
     "factory",
   );
-  const statePath = join(directory, "state.json");
   const watched = new Set<ThreadID>();
   let pending = Promise.resolve<unknown>(undefined);
 
   async function event(ticket: string, action: string, detail: string) {
-    await appendFile(
-      join(directory, "events.jsonl"),
-      JSON.stringify({ at: new Date().toISOString(), ticket, action, detail }) +
-        "\n",
-    );
+    const persistence = openPersistence(directory, []);
+    try {
+      persistence.event(ticket, action, detail);
+    } finally {
+      persistence.close();
+    }
   }
 
   async function prompt(
@@ -234,25 +213,25 @@ export function createFactory(
   ) {
     const config = await configuration(root);
     const queue = tasks(JSON.parse(await readFile(config.tickets, "utf8")));
-    if (action === "status" && !existsSync(statePath))
-      return { enabled: false, runs: {} };
+    if (action === "status") return factoryStatus(directory);
     await mkdir(directory, { recursive: true });
     const store = openStore(join(directory, "bookkeeping"));
+    let persistence: ReturnType<typeof openPersistence> | undefined;
     try {
       await store.init();
-      // State is factory-owned. Malformed state fails closed rather than being reset.
-      const state: State = existsSync(statePath)
-        ? JSON.parse(await readFile(statePath, "utf8"))
-        : { enabled: false, runs: {} };
-      if (!state.runs || typeof state.enabled !== "boolean")
-        throw new Error("Invalid factory state");
+      persistence = openPersistence(directory, queue);
+      const state = persistence.state;
+      for (const task of persistence.tickets)
+        if (state.runs[task.id] && !queue.some((row) => row.id === task.id))
+          queue.push(task);
+      const commit = (ticket: string, action: string, detail: string) =>
+        persistence!.commit(state, ticket, action, detail);
       stateCache = state;
       if (
         owner &&
         Object.values(state.runs).some(
           (run) => "thread" in run && run.thread === owner,
-        ) &&
-        action !== "status"
+        )
       )
         throw new Error("Workers cannot control the factory");
       if (action === "start") {
@@ -263,14 +242,13 @@ export function createFactory(
         state.owner ??= owner;
         if (!state.owner) throw new Error("Starting requires an owner thread");
         state.enabled = true;
-        await atomic(statePath, state);
+        commit("factory", "started", state.owner);
       }
       if (action === "pause") {
         state.enabled = false;
-        await atomic(statePath, state);
+        commit("factory", "paused", state.owner ?? "");
       }
-      if (action === "status" || !state.enabled || !config.execute)
-        return state;
+      if (!state.enabled || !config.execute) return state;
       const wake = () => {
         void tick("reconcile").catch((error) =>
           event("factory", "error", String(error)),
@@ -303,17 +281,15 @@ export function createFactory(
             thread: run.thread,
             reason: "Delivery outcome unknown; inspect thread before recovery",
           };
-          await event(task.id, "uncertain", "delivery-unknown");
-          await atomic(statePath, state);
+          commit(task.id, "uncertain", "delivery-unknown");
           return state;
         }
         if (run.delivery === "queued") {
           run.delivery = "sending";
-          await atomic(statePath, state);
+          commit(task.id, "sending", run.thread);
           await host.send(run.thread, await prompt(task, run, config));
           run.delivery = "sent";
-          await atomic(statePath, state);
-          await event(task.id, "sent", run.thread);
+          commit(task.id, "sent", run.thread);
           continue;
         }
         const activity = await observe(run.thread);
@@ -324,8 +300,7 @@ export function createFactory(
             thread: run.thread,
             reason: `Worker ${activity}; inspect before resuming`,
           };
-          await event(task.id, "blocked", activity);
-          await atomic(statePath, state);
+          commit(task.id, "blocked", activity);
           continue;
         }
         const reportPath = join(directory, `${task.id}.report.json`);
@@ -338,8 +313,7 @@ export function createFactory(
             thread: run.thread,
             reason: text(report.reason),
           };
-          await event(task.id, "blocked", text(report.reason));
-          await atomic(statePath, state);
+          commit(task.id, "blocked", text(report.reason));
           continue;
         }
         if (report.kind !== "candidate")
@@ -419,8 +393,7 @@ export function createFactory(
               thread: run.thread,
               reason: "Integration target changed; reconcile before landing",
             };
-            await event(task.id, "blocked", "target-changed");
-            await atomic(statePath, state);
+            commit(task.id, "blocked", "target-changed");
             continue;
           }
           if (target !== revision) git(root, "merge", "--ff-only", revision);
@@ -439,27 +412,26 @@ export function createFactory(
                 ? report.insight.slice(0, 1000)
                 : "",
           };
-          await event(task.id, "accepted", revision);
+          commit(task.id, "accepted", revision);
         } else if (run.attempt < 2) {
           run.attempt++;
           run.delivery = "queued";
-          await event(task.id, "rejected", log);
+          commit(task.id, "rejected", log);
         } else {
           state.runs[task.id] = {
             kind: "blocked",
             thread: run.thread,
             reason: `Verification failed twice: ${log}`,
           };
-          await event(task.id, "blocked", log);
+          commit(task.id, "blocked", log);
         }
-        await atomic(statePath, state);
         if (state.runs[task.id]?.kind === "running") {
           const retry = `Verification rejected attempt ${run.attempt - 1}. Read ${log}, repair the candidate, and submit report attempt ${run.attempt}.\n${await prompt(task, run, config)}`;
           run.delivery = "sending";
-          await atomic(statePath, state);
+          commit(task.id, "sending", run.thread);
           await host.send(run.thread, retry);
           run.delivery = "sent";
-          await atomic(statePath, state);
+          commit(task.id, "sent", run.thread);
           return state;
         }
       }
@@ -476,8 +448,7 @@ export function createFactory(
       const base = git(root, "rev-parse", "HEAD");
       const worktree = join(directory, "worktrees", next.id);
       state.runs[next.id] = { kind: "creating", base, worktree };
-      await atomic(statePath, state);
-      await event(next.id, "creating", base);
+      commit(next.id, "creating", base);
       git(
         root,
         "worktree",
@@ -501,16 +472,16 @@ export function createFactory(
         delivery: "queued",
       };
       state.runs[next.id] = run;
-      await atomic(statePath, state);
+      commit(next.id, "created", thread);
       await watch(thread);
       run.delivery = "sending";
-      await atomic(statePath, state);
+      commit(next.id, "sending", thread);
       await host.send(thread, await prompt(next, run, config));
       run.delivery = "sent";
-      await atomic(statePath, state);
-      await event(next.id, "sent", thread);
+      commit(next.id, "sent", thread);
       return state;
     } finally {
+      persistence?.close();
       await store.close();
     }
   }

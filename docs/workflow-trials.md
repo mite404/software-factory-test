@@ -220,6 +220,21 @@ This proves explicit reconciliation after disconnect. It does not prove automati
 reattachment or context-free server status observation. Full logs and patches remain under
 `.amp/in/scratchpad/factory-feature-03/` and the preserved Feature 02 fixture.
 
+## Trial 7: atomic SQLite persistence and real legacy migration
+
+2026-11-13. One Sol 6.1/medium worker implemented Feature 04. The factory accepted its first
+candidate in the disposable repo. Parent review reran 74 tests, strict SDK TypeScript, and
+whitespace checks. A forced database failure test rolled back both ownership and its claim event.
+
+The parent refreshed the actual adapters for the previously accepted Feature 02 and Feature 03
+fixtures. Both migrated their legacy JSON and JSONL records without changing the original bytes,
+accepted revisions, or Git roots. Reopening and repeated reconciliation retained exactly one
+acceptance each and kept both queues paused. No worker or model call was required for migration.
+
+SQLite state and transition history are now authoritative. Candidate reports, poteto bookkeeping,
+and dashboard projection retain their existing roles. This trial does not prove private backup
+or restore in another orb. Full checks remain under `.amp/in/scratchpad/factory-feature-04/`.
+
 [trial-artifact]:
   https://ampcode.com/artifacts/factory-workflow-trials-36c5101e-8f2e-4e6c-ab3f-0a4425873f7e
 [source-workflow]: https://ampcode.com/threads/T-01a1ce51-ec2c-73cf-9b63-a2eb9f40442b

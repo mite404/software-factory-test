@@ -6,6 +6,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import registerFactory from "./plugin";
+import { openPersistence } from "./persistence";
 
 test.each([
   "valid",
@@ -308,6 +309,9 @@ test.each([
         heartbeat = setInterval(() => {
           if (!existsSync(ready)) return;
           responsive = !existsSync(finished);
+          const storage = openPersistence(join(root, ".git/factory"), []);
+          storage.event("factory", "verification-responsive", "independent write while verification waits");
+          storage.close();
           writeFileSync(release, "");
           clearInterval(heartbeat);
         }, 10);
@@ -339,14 +343,16 @@ test.each([
       dispose();
       disconnected = false;
       watchFails = true;
-      await writeFile(
-        join(root, ".git/factory/state.json"),
-        JSON.stringify({
+      const storage = openPersistence(join(root, ".git/factory"), []);
+      storage.commit(
+        {
           enabled: true,
           owner: "T-owner",
           runs: { A: original },
-        }),
+        },
+        "A", "fixture-restored", "observer recovery",
       );
+      storage.close();
       await rm(reportPath);
       load();
       expect((await control("reconcile")).runs.A).toEqual(original);
