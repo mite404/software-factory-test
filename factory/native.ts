@@ -143,6 +143,22 @@ export function localPath(root: string, value: string): string {
   return path;
 }
 
+function backupTarget(value: unknown) {
+  if (value === undefined) return undefined;
+  const { repository, projectKey } = object(value);
+  if (
+    typeof repository !== "string" ||
+    !/^[a-zA-Z0-9][a-zA-Z0-9-]*\/[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(
+      repository,
+    ) ||
+    repository.includes("..") ||
+    typeof projectKey !== "string" ||
+    !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/.test(projectKey)
+  )
+    throw new Error("Invalid backup repository or project key");
+  return { repository, projectKey };
+}
+
 /** Parse trusted operator configuration; setup does not grant action permissions. @throws On invalid input. */
 export async function configuration(root: string) {
   const raw = object(
@@ -151,6 +167,12 @@ export async function configuration(root: string) {
   if (raw.version !== 1 || raw.capacity !== 1)
     throw new Error("This slice requires version 1 and capacity 1");
   const permissions = object(raw.permissions);
+  const backup = backupTarget(raw.backup);
+  if (
+    permissions.backup !== undefined &&
+    typeof permissions.backup !== "boolean"
+  )
+    throw new Error("Invalid backup permission");
   if (
     typeof permissions.execute !== "boolean" ||
     permissions.publish !== false ||
@@ -197,6 +219,8 @@ export async function configuration(root: string) {
     verify,
     setup,
     execute: permissions.execute,
+    backup,
+    backupAllowed: permissions.backup === true,
   };
 }
 
@@ -475,12 +499,8 @@ function legacyReview(
   return review;
 }
 
-function controlState(
-  state: State,
-  action: string,
-  execute: boolean,
-  owner?: ThreadID,
-) {
+/** Refuse control by persisted workers and reviewers. @throws If the caller owns either role. */
+export function assertControlCaller(state: State, owner?: ThreadID) {
   if (
     owner &&
     Object.values(state.runs).some(
@@ -490,6 +510,15 @@ function controlState(
     )
   )
     throw new Error("Workers cannot control the factory");
+}
+
+function controlState(
+  state: State,
+  action: string,
+  execute: boolean,
+  owner?: ThreadID,
+) {
+  assertControlCaller(state, owner);
   if (action === "start") {
     if (!execute)
       throw new Error(

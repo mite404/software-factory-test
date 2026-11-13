@@ -2,9 +2,11 @@ import type { PluginAPI, PluginTools } from "@ampcode/plugin";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
+import { backup } from "./backup";
 import type { DashboardSnapshot } from "./dashboard";
 import { factoryStatus, type Run } from "./persistence";
 import {
+  assertControlCaller,
   configuration,
   createFactory,
   tasks,
@@ -253,7 +255,7 @@ export default function registerFactory(
   const suffix = createHash("sha256").update(root).digest("hex").slice(0, 8);
   amp.registerTool({
     name: `factory_control_${suffix}`,
-    description: `Control the factory in ${root}. status is read-only. message-foreman delivers message text from a registered worker or reviewer to the owning Foreman without granting control; delivery errors have unknown outcomes, so do not retry blindly. start requires explicit user authorization and permissions.execute=true in .factory.json. pause stops dispatch. reconcile observes persisted work without granting permissions. retry-setup explicitly reruns parked preparation in the same worktree before creating a worker. resume requires the owning Foreman, a blocked ticket, and a decision explaining the next repair; it queues the same worker without starting a paused factory or accepting code.`,
+    description: `Control the factory in ${root}. status is read-only. message-foreman delivers message text from a registered worker or reviewer to the owning Foreman without granting control; delivery errors have unknown outcomes, so do not retry blindly. start requires explicit user authorization and permissions.execute=true in .factory.json. pause stops dispatch. reconcile observes persisted work without granting permissions. retry-setup explicitly reruns parked preparation in the same worktree before creating a worker. resume requires the owning Foreman, a blocked ticket, and a decision explaining the next repair; it queues the same worker without starting a paused factory or accepting code. backup publishes private SQLite state and requires explicit user authorization and permissions.backup=true.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -267,6 +269,7 @@ export default function registerFactory(
             "retry-setup",
             "resume",
             "message-foreman",
+            "backup",
           ],
         },
         ticket: { type: "string" },
@@ -280,6 +283,10 @@ export default function registerFactory(
       const action = input.action;
       if (action === "message-foreman")
         return messageForeman(input.message, ctx.thread.id);
+      if (action === "backup") {
+        assertControlCaller(factoryStatus(factory.directory), ctx.thread.id);
+        return JSON.stringify(await backup(root));
+      }
       if (
         action !== "status" &&
         action !== "start" &&

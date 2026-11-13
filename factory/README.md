@@ -1,7 +1,7 @@
 # Factory prototype
 
-The dispatcher uses Bun SQLite persistence and native Amp thread APIs. Private backups, cross-orb
-code transfer, worker retirement, and dashboard chat are not implemented. Requirements and remaining
+The dispatcher uses Bun SQLite persistence and native Amp thread APIs. Cross-orb code transfer,
+worker retirement, and dashboard chat are not implemented. Requirements and remaining
 stories live in [the backlog](../docs/backlog.md).
 
 The [Foreman prompt](foreman.md) defines the current sequential orchestration procedure. It is a
@@ -32,6 +32,51 @@ Coordinator status reads existing SQLite or validated legacy state without creat
 initializing the lock store, or migrating. The plugin separately refreshes dashboard observations,
 including during status calls. Malformed legacy records, corrupt databases, and unsupported schema
 versions fail visibly before dispatch. Initialization does not grant execution permission.
+
+## Back up private coordinator state
+
+Configure an existing private GitHub repository in `.factory.json` with
+`"backup": { "repository": "owner/name", "projectKey": "stable-key" }` and explicitly grant
+`"backup": true` inside `permissions`. This permission does not grant worker execution or
+application publishing. Authenticate Git and `gh` through your existing credential mechanism.
+Do not put tokens in configuration or repository URLs. The destination must have a default branch
+with an initial commit. Setup does not provision it or grant backup permission.
+
+Run `bun factory/backup.ts /local/project/root`, or invoke the registered factory control tool with
+`action: "backup"`. Both call the same backend. The command accepts no destination overrides.
+Metadata must identify the configured repository as private on GitHub.com before publication
+proceeds, with explicit `PRIVATE` visibility. Enterprise-internal repositories are refused.
+Both the metadata lookup and publication target GitHub.com, regardless of `GH_HOST`.
+
+Only `projects/<projectKey>/state.sqlite` and `manifest.json` are staged. The manifest contains the
+stable project key, schema version, and application revision. SQLite `VACUUM INTO` creates a
+consistent snapshot, then `integrity_check` validates it. Both run asynchronously outside the
+plugin process. The operation works with rollback journals and WAL. In rollback mode, concurrent
+writers can encounter SQLite's normal read-lock contention. It does not change database settings.
+The snapshot subprocess uses the installed `bun` executable on `PATH`, including inside Amp's
+compiled plugin host. It does not depend on `process.execPath` being Bun or on `BUN_BE_BUN`.
+
+The Git directory contains `factory/backup/receipt.json` and a retained publication workspace.
+The receipt records pending, confirmed, failed, or uncertain publication and preserves the last
+confirmed remote revision. That revision describes its snapshot, not later coordinator changes.
+Receipts stay outside SQLite so unchanged input produces no new commit. A filesystem lock rejects
+overlapping requests. After an interrupted process, inspect its receipt and confirm no backup is
+running before removing `factory/backup/lock` and retrying. Retry restores only the selected project
+key's generated snapshot and manifest to their committed versions, removing untracked copies.
+It then regenerates both files, so an interrupted staging or failed commit does not block recovery.
+
+Pushes never force the branch. Confirmation fetches the remote and checks that it contains the
+intended commit, including when a push response is lost. If confirmation is unavailable, the
+receipt stays uncertain. Retry inspects the remote before another push. After a successful fetch,
+a pending revision missing from a recreated workspace is not published on that branch.
+Unpublished local backup commits rebase onto the fetched tip, preserving unrelated project changes.
+A same-path conflict aborts the rebase and refuses publication without discarding either side.
+Changes outside the two generated paths also fail without discarding files. Preserve the workspace
+for inspection. Known safety refusals identify the cause; external diagnostics stay hidden.
+
+Restore is not implemented. A snapshot covers only SQLite coordinator state. Private candidate
+reports, worktrees, lessons, the poteto ledger, and dashboard observations are not included.
+They require separate recovery evidence. Tests use disposable local remotes, never GitHub writes.
 
 ## Worker settings
 
