@@ -33,8 +33,14 @@ export type Run =
       review?: Review;
       workerModel?: string;
       requirements?: string;
+      feedback?: string;
     }
-  | { kind: "blocked"; reason: string; thread?: ThreadID }
+  | {
+      kind: "blocked";
+      reason: string;
+      thread?: ThreadID;
+      repair?: Extract<Run, { kind: "running" }>;
+    }
   | { kind: "uncertain"; reason: string; thread: ThreadID }
   | {
       kind: "done";
@@ -85,7 +91,7 @@ function preparationRun(run: Record<string, unknown>): boolean {
 
 function reviewFields(run: Record<string, unknown>): boolean {
   return (
-    ["workerModel", "requirements"].every(
+    ["workerModel", "requirements", "feedback"].every(
       (key) => run[key] === undefined || text(run[key]),
     ) &&
     (run.review === undefined || validReview(run.review))
@@ -105,7 +111,10 @@ const runValidators: Record<string, (run: Record<string, unknown>) => boolean> =
       ["queued", "sending", "sent"].includes(run.delivery) &&
       reviewFields(run),
     blocked: (run) =>
-      text(run.reason) && (run.thread === undefined || thread(run.thread)),
+      text(run.reason) &&
+      (run.thread === undefined || thread(run.thread)) &&
+      (run.repair === undefined ||
+        (validRepair(run.repair) && run.repair.thread === run.thread)),
     uncertain: (run) => text(run.reason) && thread(run.thread),
     done: (run) =>
       text(run.revision) &&
@@ -113,6 +122,20 @@ const runValidators: Record<string, (run: Record<string, unknown>) => boolean> =
       typeof run.insight === "string" &&
       reviewFields(run),
   };
+
+function validRepair(
+  value: unknown,
+): value is Extract<Run, { kind: "running" }> {
+  const run = record(value);
+  return (
+    run.kind === "running" &&
+    runValidators.running!(run) &&
+    Number(run.attempt) % 2 === 0 &&
+    Number.isSafeInteger(Number(run.attempt) + 1) &&
+    run.delivery === "sent" &&
+    run.review === undefined
+  );
+}
 
 function validateRun(id: string, value: unknown) {
   const run = record(value);
@@ -316,6 +339,14 @@ export function openPersistence(directory: string, queue: Task[]) {
         .query<{ data: string }, []>("SELECT data FROM tickets ORDER BY rowid")
         .all()
         .map((row) => JSON.parse(row.data) as Task),
+      /** Read the latest durable event for explicit pre-upgrade recovery. @throws On storage failure. */
+      lastEvent(ticket: string, action: string) {
+        return db
+          .query<{ detail: string }, [string, string]>(
+            "SELECT detail FROM events WHERE ticket = ? AND action = ? ORDER BY id DESC LIMIT 1",
+          )
+          .get(ticket, action)?.detail;
+      },
       /** Persist state and its event together. @throws On transaction failure; both roll back. */
       commit(state: State, ticket: string, action: string, detail: string) {
         db.transaction(() => {

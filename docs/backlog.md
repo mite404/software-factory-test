@@ -305,10 +305,11 @@ New required pipeline stories are tracked separately from the accepted pre-accep
   repair under AC37-AC40. Local-only execution stays unchanged.
   [Local ticket](feats/remote-monitoring/remote-monitoring-ticket1.md). Status: not implemented.
 
-The active bounded implementation unit is
-[repair-escalation-ticket1](feats/repair-escalation/repair-escalation-ticket1.md), adopting the
-coordinator bootstrap through ordinary native verification and cold review. Shared-launcher repair
-follows before further feature dispatch. Re-scope each later ticket against accepted prerequisites.
+[Repair escalation](feats/repair-escalation/repair-escalation-ticket1.md) is accepted through native
+attempt-two verification and fresh cold review. Parent verification passed 117 tests, all gates
+and guard. Two rejections now preserve an owner-resumable checkpoint rather than a terminal cap.
+The active bounded unit is the shared-launcher repair, before further feature dispatch.
+Re-scope each later ticket against accepted prerequisites.
 
 Finish the existing sequential setup and dispatch trial first. Build F02 and F03 as the persistence
 and Amp foundation, then F05 and F06 for safe recovery. F04, F07, and F08 provide usable memory and

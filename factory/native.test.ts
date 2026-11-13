@@ -668,13 +668,92 @@ test.each(["high", undefined])(
       ]);
       await writeFile(join(root, ".factory.json"), savedConfig);
       expect(await readFile(join(root, "src/value"), "utf8")).toBe("old");
-      await candidate("good", 2, "Use the shared value contract");
+      await candidate("still bad", 2);
+      await factory.tick("reconcile");
+      await factory.tick("pause");
+      factory = createFactory(root, host, openStore);
+      expect((await factory.tick("status")).runs.A?.kind).toBe("blocked");
+      const repair = {
+        ticket: "A",
+        decision: "Correct the value contract, retaining this worker",
+      };
+      expect(
+        factory.tick("resume", "T-fixture-1", host.state, repair),
+      ).rejects.toThrow();
+      expect(
+        factory.tick("resume", "T-stranger", host.state, repair),
+      ).rejects.toThrow();
+      expect(
+        factory.tick("resume", "T-owner", host.state, {
+          ...repair,
+          decision: "  ",
+        }),
+      ).rejects.toThrow(/nonempty/);
+      await writeFile(join(worktree, "unexpected"), "setup dirt");
+      expect(
+        factory.tick("resume", "T-owner", host.state, repair),
+      ).rejects.toThrow(/changed/);
+      await rm(join(worktree, "unexpected"));
+      await writeFile(join(root, "unexpected"), "integration dirt");
+      expect(
+        factory.tick("resume", "T-owner", host.state, repair),
+      ).rejects.toThrow(/changed/);
+      await rm(join(root, "unexpected"));
+      const resumed = await Promise.allSettled([
+        factory.tick("resume", "T-owner", host.state, repair),
+        factory.tick("resume", "T-owner", host.state, repair),
+      ]);
+      expect(resumed.map((result) => result.status)).toEqual([
+        "fulfilled",
+        "rejected",
+      ]);
+      expect((await factory.tick("status")).enabled).toBe(false);
+      expect(created).toBe(1);
+      expect(messages).toHaveLength(2);
+      host.state = async () => "unknown";
+      expect(factory.tick("start", "T-owner")).rejects.toThrow(/idle/);
+      host.state = async () => "idle";
+      const base = git("rev-parse", "HEAD");
+      git("commit", "--allow-empty", "-qm", "base changed while paused");
+      expect(factory.tick("reconcile")).rejects.toThrow(/changed/);
+      expect(messages).toHaveLength(2);
+      git("reset", "--hard", base);
+      await factory.tick("start", "T-owner");
+      expect(messages[2]?.id).toBe("T-fixture-1");
+      await candidate("almost good", 3);
+      await writeFile(join(worktree, "src/value"), "unfinished edit");
+      await writeFile(join(worktree, "unexpected"), "unfinished file");
+      expect((await factory.tick("reconcile")).runs.A).toMatchObject({
+        kind: "running",
+        thread: "T-fixture-1",
+        attempt: 4,
+        delivery: "sent",
+      });
+      expect(messages[3]).toMatchObject({
+        id: "T-fixture-1",
+        text: expect.stringMatching(
+          /Verification rejected attempt 3.*submit report attempt 4/,
+        ),
+      });
+      expect(await readFile(join(worktree, "src/value"), "utf8")).toBe(
+        "unfinished edit",
+      );
+      expect(await readFile(join(worktree, "unexpected"), "utf8")).toBe(
+        "unfinished file",
+      );
+      expect(await readFile(join(root, "src/value"), "utf8")).toBe("old");
+      expect(created).toBe(1);
+      factory = createFactory(root, host, openStore);
+      await factory.tick("reconcile");
+      expect(messages).toHaveLength(4);
+      await rm(join(worktree, "unexpected"));
+      await candidate("good", 4, "Use the shared value contract");
       factory = createFactory(root, host, openStore);
       const state = await factory.tick("reconcile");
       expect(state.runs.A?.kind).toBe("done");
       expect(await readFile(join(root, "src/value"), "utf8")).toBe("good");
       expect(created).toBe(2);
-      expect(messages[2]?.text).toContain("Use the shared value contract");
+      expect(messages[4]?.text).toContain("Use the shared value contract");
       await writeFile(
         join(factory.directory, "B.report.json"),
         JSON.stringify({
@@ -685,7 +764,7 @@ test.each(["high", undefined])(
       );
       await factory.tick("reconcile");
       expect(created).toBe(3);
-      expect(messages[3]?.text).not.toContain("Use the shared value contract");
+      expect(messages[5]?.text).not.toContain("Use the shared value contract");
       await Promise.all(
         Array.from({ length: 8 }, () => factory.tick("reconcile")),
       );

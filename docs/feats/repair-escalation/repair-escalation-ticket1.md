@@ -85,14 +85,22 @@ for verification of the adopted code against the newer preparation implementatio
 
 ## Done when
 
-- [ ] Two rejections preserve evidence and escalate without accepting or replacing the worker.
-- [ ] The owning Foreman records a decision and resumes increasing attempts across reloads.
-- [ ] Paused, uncertain, stale-base and unauthorized operations cannot dispatch or accept code.
-- [ ] Repaired candidates pass normal gates and fresh conditional review before integration.
-- [ ] Adopted source passes full gates and native cold review before coordinator integration.
+- [x] Two rejections preserve evidence and escalate without accepting or replacing the worker.
+- [x] The owning Foreman records a decision and resumes increasing attempts across reloads.
+- [x] Paused, uncertain, stale-base and unauthorized operations cannot dispatch or accept code.
+- [x] Repaired candidates pass normal gates and fresh conditional review before integration.
+- [x] Adopted source passes full gates and native cold review before coordinator integration.
 
 ## Notes
 
 Intentional reconnection tests begin with `[TEST] Intentional reconnection test.` and require a
 `[TEST]` thread-title prefix and opening status. Real outage recovery is not a test. The supplied
 patch includes this Foreman instruction; preserve the distinction without adding a second queue.
+
+Accepted attempt two at `42af9a2fc52cb0116cd5154ffef5312cee5624a5`. Attempt-one cold review found
+dirty-rejection delivery and enabled-resume gaps; the original worker reproduced and repaired both.
+The repaired revision passed native gates and fresh revision/base-bound cold review, then landed
+through native fast-forward integration. Parent source matched byte-for-byte and passed 117 tests,
+all gates and guard. Full output is retained in the coordinator's orb-backup integration log.
+Worker: https://ampcode.com/threads/T-01a1d629-835e-7198-a7d1-a73db307d47b.
+No external publication occurred.

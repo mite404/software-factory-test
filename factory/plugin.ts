@@ -28,6 +28,13 @@ function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" ? { ...value } : undefined;
 }
 
+function repairRequest(input: Record<string, unknown>) {
+  if (input.action !== "resume") return undefined;
+  if (typeof input.ticket !== "string" || typeof input.decision !== "string")
+    throw new Error("Resume requires ticket and decision");
+  return { ticket: input.ticket, decision: input.decision };
+}
+
 function reportedActivity(value: unknown, id: string) {
   const result = record(value);
   const metadata = record(result?.metadata);
@@ -219,14 +226,23 @@ export default function registerFactory(
   const suffix = createHash("sha256").update(root).digest("hex").slice(0, 8);
   amp.registerTool({
     name: `factory_control_${suffix}`,
-    description: `Control the factory in ${root}. status is read-only. start requires explicit user authorization and permissions.execute=true in .factory.json. pause stops dispatch. reconcile recovers persisted work without granting permissions. retry-setup explicitly reruns parked preparation in the same worktree before creating a worker.`,
+    description: `Control the factory in ${root}. status is read-only. start requires explicit user authorization and permissions.execute=true in .factory.json. pause stops dispatch. reconcile observes persisted work without granting permissions. retry-setup explicitly reruns parked preparation in the same worktree before creating a worker. resume requires the owning Foreman, a blocked ticket, and a decision explaining the next repair; it queues the same worker without starting a paused factory or accepting code.`,
     inputSchema: {
       type: "object",
       properties: {
         action: {
           type: "string",
-          enum: ["status", "start", "pause", "reconcile", "retry-setup"],
+          enum: [
+            "status",
+            "start",
+            "pause",
+            "reconcile",
+            "retry-setup",
+            "resume",
+          ],
         },
+        ticket: { type: "string" },
+        decision: { type: "string" },
       },
       required: ["action"],
       additionalProperties: false,
@@ -238,11 +254,15 @@ export default function registerFactory(
         action !== "start" &&
         action !== "pause" &&
         action !== "reconcile" &&
-        action !== "retry-setup"
+        action !== "retry-setup" &&
+        action !== "resume"
       )
         throw new Error("Unknown action");
-      const state = await factory.tick(action, ctx.thread.id, (id) =>
-        observe(id, ctx.tools),
+      const state = await factory.tick(
+        action,
+        ctx.thread.id,
+        (id) => observe(id, ctx.tools),
+        repairRequest(input),
       );
       await publish(ctx.tools);
       return JSON.stringify(state);

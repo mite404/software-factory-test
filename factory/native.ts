@@ -4,7 +4,12 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { reviewPrompt, reviewVerdict, type Review } from "./review";
+import {
+  reviewPrompt,
+  reviewVerdict,
+  validReview,
+  type Review,
+} from "./review";
 import {
   factoryStatus,
   openPersistence,
@@ -450,6 +455,23 @@ async function currentReport(directory: string, task: Task, attempt: number) {
   return report.attempt === attempt ? report : null;
 }
 
+function legacyReview(
+  created: string | undefined,
+  verdict: string | undefined,
+) {
+  const review = object(JSON.parse(text(created)));
+  const rejected = object(JSON.parse(text(verdict)));
+  if (
+    !validReview(review) ||
+    rejected.kind !== "issues" ||
+    !["ticket", "attempt", "revision", "base", "stage"].every(
+      (key) => rejected[key] === review[key],
+    )
+  )
+    throw new Error("Missing pre-upgrade repair evidence");
+  return review;
+}
+
 function controlState(
   state: State,
   action: string,
@@ -517,18 +539,18 @@ export function createFactory(
         ? [`${id}: ${dependency.insight} (${dependency.revision})`]
         : [];
     });
-    return `Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAllowed paths: ${config.scope.join(", ")}. Check: ${config.verify}.\nDependency evidence: ${insights.join("; ") || "none"}.\nUse a local commit for the change. Do not push, deploy, create tickets, edit factory files, or delegate.\nAfter finishing, write JSON to ${join(directory, `${task.id}.report.json`)}: {"attempt":${run.attempt},"kind":"candidate","revision":"<full git HEAD>","insight":"<short verified finding>"}. If blocked, use {"attempt":${run.attempt},"kind":"blocked","reason":"<needed decision>"}. Report briefly here too.`;
+    return `Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAllowed paths: ${config.scope.join(", ")}. Check: ${config.verify}.\nDependency evidence: ${insights.join("; ") || "none"}.\n${run.feedback ? `Repair feedback: ${run.feedback}\n` : ""}Use a local commit for the change. Do not push, deploy, create tickets, edit factory files, or delegate.\nAfter finishing, write JSON to ${join(directory, `${task.id}.report.json`)}: {"attempt":${run.attempt},"kind":"candidate","revision":"<full git HEAD>","insight":"<short verified finding>"}. If blocked, use {"attempt":${run.attempt},"kind":"blocked","reason":"<needed decision>"}. Report briefly here too.`;
   }
 
   let stateCache: State = { enabled: false, runs: {} };
   async function reconcile(
-    action: "status" | "start" | "pause" | "reconcile" | "retry-setup",
+    action: "start" | "pause" | "reconcile" | "retry-setup" | "resume",
     owner?: ThreadID,
     observe: NativeHost["state"] = host.state,
+    repairRequest?: { ticket: string; decision: string },
   ) {
     const config = await configuration(root);
     const queue = tasks(JSON.parse(await readFile(config.tickets, "utf8")));
-    if (action === "status") return factoryStatus(directory);
     await mkdir(directory, { recursive: true });
     const store = openStore(join(directory, "bookkeeping"));
     let persistence: ReturnType<typeof openPersistence> | undefined;
@@ -541,6 +563,94 @@ export function createFactory(
         persistence!.commit(state, ticket, action, detail);
       stateCache = state;
       controlState(state, action, config.execute, owner);
+      async function repairCheckpoint(
+        task: Task,
+        blocked: Extract<Run, { kind: "blocked" }>,
+      ): Promise<Extract<Run, { kind: "running" }>> {
+        if (blocked.repair) return blocked.repair;
+        if (!blocked.thread)
+          throw new Error("No resumable verification checkpoint");
+        const verdict = text(persistence!.lastEvent(task.id, "review-verdict"));
+        const review = legacyReview(
+          persistence!.lastEvent(task.id, "review-created"),
+          verdict,
+        );
+        const report = (await currentReport(directory, task, 2)) ?? {};
+        if (
+          !Object.entries({
+            ticket: task.id,
+            attempt: 2,
+            model: reviewerModel(config.workerModel),
+            revision: report.revision,
+          }).every(([key, value]) => review[key] === value) ||
+          report.kind !== "candidate" ||
+          report.revision !==
+            git(join(directory, "worktrees", task.id), "rev-parse", "HEAD") ||
+          persistence!.lastEvent(task.id, "created") !== blocked.thread ||
+          blocked.reason !== `Verification failed twice: ${verdict}`
+        )
+          throw new Error("Missing pre-upgrade repair evidence");
+        return {
+          kind: "running",
+          thread: blocked.thread,
+          worktree: join(directory, "worktrees", task.id),
+          base: text(review.base),
+          attempt: 2,
+          delivery: "sent",
+          workerModel: config.workerModel,
+          requirements: `${task.brief}\n${await readFile(config.prd, "utf8")}`,
+        };
+      }
+      async function verifyRepair(repair: Extract<Run, { kind: "running" }>) {
+        if ((await observe(repair.thread)) !== "idle")
+          throw new Error(
+            "Original worker must be observed idle before repair",
+          );
+        requireWorktree(root, repair.worktree);
+        if (
+          !unchanged(root, repair.base) ||
+          git(repair.worktree, "status", "--porcelain")
+        )
+          throw new Error("Repair base or registered worker worktree changed");
+      }
+      async function resumeRepair() {
+        if (!config.execute || text(owner) !== state.owner)
+          throw new Error("Only the Foreman may resume an authorized repair");
+        const ticket = text(repairRequest?.ticket);
+        const decision = text(repairRequest?.decision);
+        const task = queue.find((task) => task.id === ticket);
+        const blocked = state.runs[ticket];
+        if (!task || blocked?.kind !== "blocked")
+          throw new Error(
+            "Resume requires a blocked ticket with its original worker",
+          );
+        if (
+          Object.values(state.runs).some(
+            (run) => run.kind !== "blocked" && run.kind !== "done",
+          )
+        )
+          throw new Error(
+            "Resolve active or uncertain work before resuming a repair",
+          );
+        const repair = await repairCheckpoint(task, blocked);
+        await verifyRepair(repair);
+        state.runs[ticket] = {
+          ...repair,
+          attempt: repair.attempt + 1,
+          delivery: "queued",
+          feedback: `${blocked.reason}\nForeman decision: ${decision}`,
+        };
+        commit(
+          ticket,
+          "repair-resumed",
+          JSON.stringify({
+            decision,
+            attempt: repair.attempt + 1,
+            thread: repair.thread,
+          }),
+        );
+      }
+      if (action === "resume") await resumeRepair();
       if (action === "start") commit("factory", "started", state.owner!);
       if (action === "pause") commit("factory", "paused", state.owner ?? "");
       if (!state.enabled || !config.execute) return state;
@@ -580,6 +690,7 @@ export function createFactory(
         run: Extract<Run, { kind: "running" }>,
         message: string,
       ) {
+        if (run.feedback && run.attempt % 2 === 1) await verifyRepair(run);
         run.delivery = "sending";
         commit(task.id, "sending", run.thread);
         await host.send(run.thread, message);
@@ -657,7 +768,7 @@ export function createFactory(
         evidence: string,
       ) {
         delete run.review;
-        if (run.attempt < 2) {
+        if (run.attempt % 2 === 1) {
           run.attempt++;
           run.delivery = "queued";
           commit(task.id, "rejected", evidence);
@@ -665,9 +776,10 @@ export function createFactory(
           state.runs[task.id] = {
             kind: "blocked",
             thread: run.thread,
-            reason: `Verification failed twice: ${evidence}`,
+            reason: `Verification rejected attempt ${run.attempt}; Foreman escalation required: ${evidence}`,
+            repair: run,
           };
-          commit(task.id, "blocked", evidence);
+          commit(task.id, "escalated", evidence);
         }
         if (state.runs[task.id]?.kind === "running") {
           await send(
@@ -945,7 +1057,12 @@ export function createFactory(
       }
 
       async function dispatchNext() {
-        if (Object.values(state.runs).some((run) => run.kind === "running"))
+        if (
+          Object.values(state.runs).some(
+            (run) =>
+              run.kind === "running" || (run.kind === "blocked" && run.repair),
+          )
+        )
           return state;
         const next = queue.find(
           (task) =>
@@ -1010,13 +1127,21 @@ export function createFactory(
 
   /** Serialize local callbacks; the poteto lock excludes other plugin processes. @throws On unsafe state or failed I/O. */
   function tick(
-    action: "status" | "start" | "pause" | "reconcile" | "retry-setup",
+    action:
+      "status" | "start" | "pause" | "reconcile" | "retry-setup" | "resume",
     owner?: ThreadID,
     observe: NativeHost["state"] = host.state,
+    repairRequest?: Parameters<typeof reconcile>[3],
   ): Promise<State> {
     const result = pending
       .catch(() => {})
-      .then(() => reconcile(action, owner, observe));
+      .then(async () => {
+        if (action === "status") {
+          await configuration(root);
+          return factoryStatus(directory);
+        }
+        return reconcile(action, owner, observe, repairRequest);
+      });
     pending = result;
     return result;
   }

@@ -47,18 +47,19 @@ async function damageCandidate(
 }
 
 test.each([
-  "valid",
-  "revision",
-  "dirty",
-  "scope",
-  "verification",
-  "integration",
-  "permission",
-  "responsive",
-  "review",
-])(
+  ["valid", 1],
+  ["revision", 2],
+  ["dirty", 2],
+  ["scope", 2],
+  ["verification", 2],
+  ["integration", 1],
+  ["permission", 1],
+  ["responsive", 1],
+  ["review", 1],
+  ["escalation", 3],
+] as const)(
   "disconnected recovery preserves ownership and the %s gate",
-  async (gate) => {
+  async (gate, attempt) => {
     const root = await mkdtemp(join(tmpdir(), "factory-plugin-"));
     const ready = join(root, ".git/factory/verify-ready");
     const release = join(root, ".git/factory/verify-release");
@@ -119,7 +120,7 @@ test.each([
       let fallbackFails = false;
       let fallbackCalls = 0;
       let execute!: (
-        input: { action: string },
+        input: { action: string; ticket?: string; decision?: string },
         ctx: PluginToolContext,
       ) => Promise<unknown>;
       const subscription = () => {
@@ -320,10 +321,50 @@ test.each([
           delivery: "sent",
         });
         expect(sends).toEqual(["T-worker", "T-worker"]);
+        if (gate === "escalation") {
+          await writeFile(
+            reportPath,
+            JSON.stringify({
+              kind: "candidate",
+              attempt: 2,
+              revision: git(worktree, "rev-parse", "HEAD"),
+            }),
+          );
+          expect((await control("reconcile")).runs.A).toMatchObject({
+            kind: "blocked",
+            thread: "T-worker",
+          });
+          const request = {
+            action: "resume",
+            ticket: "A",
+            decision: "Repair the checked value",
+          };
+          expect(execute({ action: "resume" }, ctx)).rejects.toThrow(
+            /ticket and decision/,
+          );
+          expect(
+            execute(request, {
+              ...ctx,
+              thread: { ...ctx.thread, id: "T-stranger" },
+            }),
+          ).rejects.toThrow(/Foreman/);
+          const resumed = JSON.parse(String(await execute(request, ctx)));
+          expect(resumed.runs.A).toMatchObject({
+            kind: "running",
+            thread: "T-worker",
+            attempt: 3,
+            delivery: "sent",
+          });
+          expect(sends).toEqual(["T-worker", "T-worker", "T-worker"]);
+        }
         git(worktree, "reset", "--hard", revision);
         await writeFile(
           reportPath,
-          JSON.stringify({ kind: "candidate", attempt: 2, revision }),
+          JSON.stringify({
+            kind: "candidate",
+            attempt,
+            revision,
+          }),
         );
       }
       let responsive = false;
@@ -455,11 +496,7 @@ test.each([
         return;
       }
       expect(creates).toBe(1);
-      expect(sends).toEqual(
-        Array(
-          ["valid", "permission", "responsive"].includes(gate) ? 1 : 2,
-        ).fill("T-worker"),
-      );
+      expect(sends).toEqual(Array(attempt).fill("T-worker"));
 
       dispose();
       disconnected = false;

@@ -20,6 +20,14 @@ The original files remain intact for recovery. Later operations use SQLite and i
 files. Removing a ticket from the manifest does not discard its claimed worker or accepted evidence.
 Ambiguous creation and delivery stay parked instead of creating replacement workers.
 
+Every two failed verification or review attempts escalate to the Foreman. The blocked record retains
+the original worker and repair checkpoint. The owning Foreman can call `resume` with `ticket` and a
+nonempty `decision` after inspecting the evidence. This queues the same worker at the next attempt;
+it does not accept code or start a paused factory. Use `start` separately when paused. Resumption
+requires an idle worker, its registered clean worktree, and an unchanged integration base. Old
+two-attempt review blocks can recover from matching durable review events and the candidate report.
+Missing recovery evidence fails closed. Subsequent candidates still require the normal gates.
+
 Coordinator status reads existing SQLite or validated legacy state without creating runtime files,
 initializing the lock store, or migrating. The plugin separately refreshes dashboard observations,
 including during status calls. Malformed legacy records, corrupt databases, and unsupported schema
@@ -121,7 +129,8 @@ Review identity, delivery, verdict evidence, and events live in the existing SQL
 The dashboard's existing title, thread, revision, and activity fields project the pending review.
 Reloads reattach reviewers without replacements. Unknown creation or delivery stays parked for
 operator reconciliation; missing, invalid, blocked, stale, or unavailable verdicts cannot land or
-consume corrections. Issues return to the original worker using the shared one-correction budget.
+consume corrections. Issues return to the original worker, with Foreman escalation after every
+two verification or review rejections. Owner-only `resume` records the next repair decision.
 A repair reruns the full gate and gets a fresh cold reviewer. Changed code or integration base
 blocks landing until revalidation; prior reports and worktrees remain available as evidence.
 

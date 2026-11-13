@@ -136,6 +136,13 @@ async function fixture(
     review,
     verdict,
     submit,
+    resume() {
+      return factory.tick("resume", "T-owner", host.state, {
+        ticket: "A",
+        decision:
+          "Use the review reproduction to repair the shared value contract",
+      });
+    },
     observe(value: typeof activity) {
       activity = value;
     },
@@ -236,26 +243,116 @@ test.each([
   },
 );
 
-test("a gate retry requires review even for small low-risk work; issues exhaust the shared budget", async () => {
-  const f = await fixture({ size: "small" }, undefined, "gate");
-  try {
-    await f.submit(1);
-    expect((await f.tick()).runs.A).toMatchObject({
-      kind: "running",
-      attempt: 2,
-    });
-    expect(f.settings).toHaveLength(1);
-    await f.submit(2);
-    await f.tick();
-    expect(f.settings).toHaveLength(2);
-    await f.verdict("issues");
-    expect((await f.tick()).runs.A?.kind).toBe("blocked");
-    expect((await f.status()).runs.B).toBeUndefined();
-    expect(f.messages.filter((item) => item.thread === "T-1")).toHaveLength(2);
-  } finally {
-    await f.close();
-  }
-});
+test.each([false, true])(
+  "review escalation resumes the same owner beyond two attempts (legacy %s)",
+  async (legacy) => {
+    const f = await fixture({ size: "small" }, undefined, "gate");
+    try {
+      await f.submit(1);
+      expect((await f.tick()).runs.A).toMatchObject({
+        kind: "running",
+        attempt: 2,
+      });
+      expect(f.settings).toHaveLength(1);
+      await f.submit(2);
+      await f.tick();
+      expect(f.settings).toHaveLength(2);
+      await f.verdict("issues");
+      expect((await f.tick()).runs.A?.kind).toBe("blocked");
+      expect((await f.status()).runs.B).toBeUndefined();
+      expect(f.messages.filter((item) => item.thread === "T-1")).toHaveLength(
+        2,
+      );
+      if (legacy) {
+        const db = new Database(join(f.root, ".git/factory/state.sqlite"));
+        try {
+          const verdict = db
+            .query<{ detail: string }, []>(
+              "SELECT detail FROM events WHERE ticket='A' AND action='review-verdict' ORDER BY id DESC LIMIT 1",
+            )
+            .get()!.detail;
+          db.query("UPDATE runs SET data=? WHERE ticket='A'").run(
+            JSON.stringify({
+              kind: "blocked",
+              thread: "T-1",
+              reason: `Verification failed twice: ${verdict}`,
+            }),
+          );
+          db.query(
+            "UPDATE events SET detail=? WHERE ticket='A' AND action='review-verdict'",
+          ).run(
+            JSON.stringify({ ...JSON.parse(verdict), revision: "unrelated" }),
+          );
+          expect(f.resume()).rejects.toThrow(/evidence/);
+          db.query(
+            "UPDATE events SET detail=? WHERE ticket='A' AND action='review-verdict'",
+          ).run(verdict);
+          const reportPath = join(f.root, ".git/factory/A.report.json");
+          const report = await readFile(reportPath, "utf8");
+          await rm(reportPath);
+          expect(f.resume()).rejects.toThrow(/evidence/);
+          await writeFile(reportPath, report);
+        } finally {
+          db.close();
+        }
+      }
+      f.reload();
+      f.observe("unknown");
+      expect(f.resume()).rejects.toThrow(/idle/);
+      f.observe("idle");
+      await f.resume();
+      expect(f.resume()).rejects.toThrow(/blocked/);
+      const db = new Database(join(f.root, ".git/factory/state.sqlite"), {
+        readonly: true,
+      });
+      try {
+        const event = db
+          .query<{ detail: string }, []>(
+            "SELECT detail FROM events WHERE ticket='A' AND action='repair-resumed' ORDER BY id DESC LIMIT 1",
+          )
+          .get();
+        expect(JSON.parse(event!.detail)).toEqual({
+          decision:
+            "Use the review reproduction to repair the shared value contract",
+          attempt: 3,
+          thread: "T-1",
+        });
+      } finally {
+        db.close();
+      }
+      expect((await f.tick()).runs.A).toMatchObject({
+        kind: "running",
+        attempt: 3,
+        thread: "T-1",
+      });
+      expect(f.messages.at(-1)?.message).toContain(
+        "Use the review reproduction",
+      );
+      await f.submit(3);
+      await f.tick();
+      await f.verdict("issues");
+      expect((await f.tick()).runs.A).toMatchObject({
+        kind: "running",
+        attempt: 4,
+        thread: "T-1",
+      });
+      await f.submit(4);
+      await f.tick();
+      await f.verdict("issues");
+      expect((await f.tick()).runs.A?.kind).toBe("blocked");
+      await f.resume();
+      await f.tick();
+      await f.submit(5);
+      await f.tick();
+      expect((await f.status()).runs.A?.kind).toBe("running");
+      await f.verdict();
+      expect((await f.tick()).runs.A?.kind).toBe("done");
+      expect(await readFile(join(f.root, "src/value"), "utf8")).toBe("value 5");
+    } finally {
+      await f.close();
+    }
+  },
+);
 
 test("invalid and unavailable evidence cannot approve or replace a reviewer across reloads", async () => {
   const f = await fixture();
