@@ -96,6 +96,11 @@ export function startDashboard({ root, port }: { root: string; port: number }) {
     { encoding: "utf8" },
   ).trim();
   const html = readFileSync(join(import.meta.dir, "dashboard.html"), "utf8");
+  // The branch candidates fast-forward onto: whatever the root checkout has checked out.
+  const target = () =>
+    execFileSync("git", ["-C", root, "branch", "--show-current"], {
+      encoding: "utf8",
+    }).trim() || "detached HEAD";
   const headers = {
     "cache-control": "no-store",
     "x-content-type-options": "nosniff",
@@ -124,7 +129,11 @@ export function startDashboard({ root, port }: { root: string; port: number }) {
         );
         const age = Date.now() - Date.parse(snapshot.observedAt);
         return Response.json(
-          { ...snapshot, fresh: age >= -5000 && age < 20_000 },
+          {
+            ...snapshot,
+            target: target(),
+            fresh: age >= -5000 && age < 20_000,
+          },
           { headers },
         );
       } catch (error) {
@@ -132,6 +141,7 @@ export function startDashboard({ root, port }: { root: string; port: number }) {
           return Response.json(
             {
               project: basename(root),
+              target: target(),
               observedAt: null,
               enabled: false,
               fresh: false,
