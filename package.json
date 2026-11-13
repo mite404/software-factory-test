@@ -6,8 +6,10 @@
   "scripts": {
     "prepare": "lefthook install",
     "lint": "oxlint --type-aware factory src",
+    "lint:type-aware": "oxlint --type-aware factory src",
+    "lint:type-aware:fix": "oxlint --type-aware --fix factory src",
     "lint:ci": "oxlint --type-aware --type-check --deny-warnings factory src",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "oxlint --type-aware --type-check factory src",
     "format:check": "prettier --check '{src,factory}/**/*.ts' '*.{json,yml}' '.github/workflows/*.yml'",
     "test": "amp --version && bun test",
     "fallow:staged": "git diff --cached --no-ext-diff --unified=0 | fallow audit --base HEAD --diff-stdin",
@@ -21,8 +23,7 @@
     "lefthook": "^2.2.2",
     "oxlint": "^1.93.0",
     "oxlint-tsgolint": "^7.0.2007",
-    "prettier": "^3.3.0",
-    "typescript": "^5.5.0"
+    "prettier": "^3.3.0"
   },
   "trustedDependencies": [
     "@ampcode/cli",

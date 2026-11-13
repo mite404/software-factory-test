@@ -27,7 +27,7 @@ jobs:
         run: bash factory/checks.sh guard
       - run: bun run format:check
       - run: bun run lint:ci
-      - name: TypeScript compiler (tsc)
+      - name: Native TypeScript check (Oxlint)
         run: bun run typecheck
       - run: bun run test
       - name: Check whole-project structure and complexity
