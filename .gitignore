@@ -2,3 +2,4 @@ node_modules
 decisions.tsv
 .amp/
 .fallow/
+web/dist/

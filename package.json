@@ -12,6 +12,7 @@
     "typecheck": "oxlint --type-aware --type-check factory src web",
     "format:check": "prettier --check '{src,factory,web}/**/*.ts' 'web/*.{html,css}' '*.{json,yml}' '.github/workflows/*.yml'",
     "web": "vite web",
+    "web:build": "vite build web",
     "test": "amp --version && bun test",
     "fallow:staged": "git diff --cached --no-ext-diff --unified=0 | fallow audit --base HEAD --diff-stdin",
     "fallow:ci": "fallow --ci --fail-on-parse-error"
