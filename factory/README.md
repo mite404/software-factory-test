@@ -4,6 +4,9 @@ The dispatcher uses Bun SQLite persistence and native Amp thread APIs. Private b
 code transfer, worker retirement, and dashboard chat are not implemented. Requirements and remaining
 stories live in [the backlog](../docs/backlog.md).
 
+The [Foreman prompt](foreman.md) defines the current sequential orchestration procedure. It is a
+reusable prompt, not an automatically installed agent mode or a change to worker instructions.
+
 ## Durable coordinator state
 
 The repository Git directory contains `factory/state.sqlite`, with schema version 1. Coordinator
