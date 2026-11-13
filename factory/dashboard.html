@@ -1,0 +1,1055 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Factory · Activity</title>
+    <style>
+      :root {
+        --bg: #0d1014;
+        --panel: #12161b;
+        --line: #29313b;
+        --text: #dce3eb;
+        --muted: #949fae;
+        --blue: #9dbdd5;
+        --amber: #d8ad76;
+        --green: #a4c7b1;
+        font-family: ui-sans-serif, system-ui, sans-serif;
+        color: var(--text);
+        background: var(--bg);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+      }
+      button,
+      select {
+        font: inherit;
+      }
+      button,
+      a,
+      select {
+        -webkit-tap-highlight-color: transparent;
+      }
+      button,
+      select {
+        color: var(--text);
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 9px 13px;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      a {
+        color: var(--blue);
+        text-underline-offset: 4px;
+      }
+      :focus-visible {
+        outline: 2px solid var(--blue);
+        outline-offset: 4px;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      .shell {
+        max-width: 1220px;
+        margin: auto;
+        padding: 0 40px;
+      }
+      header {
+        height: 90px;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+      }
+      .brand {
+        display: flex;
+        gap: 14px;
+        align-items: center;
+      }
+      .logo {
+        width: 24px;
+        height: 24px;
+        border: 1px solid var(--muted);
+        transform: rotate(30deg);
+        border-radius: 4px;
+        position: relative;
+      }
+      .logo:after {
+        content: "";
+        position: absolute;
+        inset: 5px;
+        border: 1px solid var(--blue);
+        border-radius: 2px;
+      }
+      .brand strong {
+        font-size: 16px;
+        font-weight: 550;
+        letter-spacing: -0.4px;
+      }
+      .divider {
+        color: var(--line);
+        margin: 0 8px;
+      }
+      #project {
+        font-size: 13px;
+        color: var(--muted);
+        overflow-wrap: anywhere;
+      }
+      .actions {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+      }
+      .connection {
+        font-size: 12px;
+        color: var(--muted);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        white-space: nowrap;
+      }
+      .dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--muted);
+      }
+      .connection[data-fresh="true"] .dot {
+        background: var(--green);
+      }
+      main {
+        padding: 44px 0 32px;
+      }
+      .heading {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        margin-bottom: 26px;
+        gap: 20px;
+      }
+      h1 {
+        font-size: 28px;
+        font-weight: 450;
+        letter-spacing: -1px;
+        margin: 0 0 7px;
+      }
+      p {
+        margin: 0;
+        font-size: 13px;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+      .mode {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .mode:before {
+        content: "";
+        width: 6px;
+        height: 6px;
+        border: 1px solid currentColor;
+        border-radius: 50%;
+      }
+      .mode[data-working="true"] {
+        color: var(--amber);
+      }
+      .mode[data-working="true"]:before {
+        background: var(--amber);
+      }
+      .preview-bar {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 16px;
+        padding: 13px 18px;
+        margin-bottom: 20px;
+        background: #20201b;
+        border: 1px solid #45402e;
+        border-radius: 7px;
+        color: var(--amber);
+        font-size: 12px;
+      }
+      .preview-bar span {
+        flex: 1;
+      }
+      .preview-bar select {
+        padding: 6px 10px;
+        background: var(--bg);
+      }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+      }
+      .panel-top {
+        padding: 19px 23px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      h2 {
+        font-size: 13px;
+        font-weight: 500;
+        margin: 0;
+      }
+      .quiet {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .pipeline {
+        position: relative;
+        padding: 33px 25px 20px;
+      }
+      .stages {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        position: relative;
+      }
+      .rail {
+        position: absolute;
+        top: 39px;
+        height: 1px;
+        background: var(--line);
+        left: 12.5%;
+        right: 12.5%;
+      }
+      .stage {
+        text-align: center;
+        position: relative;
+        min-width: 0;
+      }
+      .node {
+        width: 78px;
+        height: 78px;
+        margin: 0 auto 20px;
+        display: grid;
+        place-items: center;
+        background: var(--panel);
+        border: 1px solid #384351;
+        border-radius: 50%;
+        position: relative;
+        color: var(--muted);
+      }
+      .node svg {
+        width: 32px;
+        height: 32px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.1;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+      .builders {
+        border-radius: 15px;
+      }
+      .integrator {
+        border-radius: 20px;
+        transform: rotate(45deg);
+        width: 65px;
+        height: 65px;
+        margin-top: 6px;
+        margin-bottom: 27px;
+      }
+      .integrator svg {
+        transform: rotate(-45deg);
+      }
+      .stage-name {
+        font-size: 13px;
+        margin-bottom: 6px;
+      }
+      .stage-detail {
+        font-size: 11px;
+        color: var(--muted);
+        min-height: 18px;
+      }
+      .stage:last-child .node {
+        color: var(--green);
+        border-color: #3b5046;
+      }
+      .orbit {
+        position: absolute;
+        inset: -7px;
+        border: 1px dashed #6c5b44;
+        border-radius: 21px;
+        opacity: 0;
+      }
+      .pulse {
+        position: absolute;
+        top: 36px;
+        left: calc(12.5% + 45px);
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--amber);
+        opacity: 0;
+      }
+      .working .builders {
+        border-color: #89724e;
+        color: var(--amber);
+      }
+      .working .orbit {
+        opacity: 1;
+        animation: orbit 18s linear infinite;
+      }
+      .working .pulse {
+        animation: signal 4s linear infinite;
+      }
+      .working .pulse.second {
+        animation-delay: -2s;
+      }
+      @keyframes orbit {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @keyframes signal {
+        0% {
+          transform: translateX(0);
+          opacity: 0;
+        }
+        12%,
+        80% {
+          opacity: 0.9;
+        }
+        100% {
+          transform: translateX(95px);
+          opacity: 0;
+        }
+      }
+      .return {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #788596;
+        font-size: 10px;
+        gap: 12px;
+        margin: 28px 9% 0;
+      }
+      .return:before,
+      .return:after {
+        content: "";
+        height: 14px;
+        flex: 1;
+        border-bottom: 1px dashed #33404e;
+      }
+      .return:before {
+        border-left: 1px solid #33404e;
+        border-radius: 0 0 0 8px;
+      }
+      .return:after {
+        border-right: 1px solid #33404e;
+        border-radius: 0 0 8px 0;
+      }
+      .pipeline-note {
+        border-top: 1px solid var(--line);
+        padding: 12px 23px;
+        color: var(--muted);
+        font-size: 11px;
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .lower {
+        display: grid;
+        grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+        gap: 22px;
+        margin-top: 22px;
+      }
+      .queue-header {
+        border-bottom: 1px solid var(--line);
+      }
+      #queue {
+        padding: 7px 10px;
+        max-height: 350px;
+        overflow: auto;
+      }
+      .task {
+        width: 100%;
+        text-align: left;
+        border: 0;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin: 3px 0;
+        padding: 15px 13px;
+        border-radius: 6px;
+      }
+      .task[aria-pressed="true"] {
+        background: #1d242d;
+      }
+      .task-icon {
+        flex: none;
+        width: 24px;
+        height: 24px;
+        display: grid;
+        place-items: center;
+        border: 1px solid #3c4654;
+        border-radius: 50%;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .task[data-status="working"] .task-icon {
+        color: var(--amber);
+        border-color: #7b6549;
+      }
+      .task[data-status="accepted"] .task-icon {
+        color: var(--green);
+      }
+      .task[data-status="blocked"] .task-icon {
+        color: #ddb0a3;
+        border-color: #785b55;
+      }
+      .task-copy {
+        min-width: 0;
+        flex: 1;
+      }
+      .task-title {
+        display: block;
+        font-size: 13px;
+        line-height: 1.5;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .task-subtitle {
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+        margin-top: 3px;
+      }
+      .tag {
+        font-size: 11px;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      .task[data-status="working"] .tag {
+        color: var(--amber);
+      }
+      .empty {
+        padding: 27px 15px;
+        font-size: 13px;
+        line-height: 1.7;
+        color: var(--muted);
+      }
+      .detail {
+        padding: 0 23px 23px;
+      }
+      #detail-title {
+        font-size: 19px;
+        font-weight: 450;
+        line-height: 1.5;
+        letter-spacing: -0.4px;
+        margin: 6px 0 19px;
+        overflow-wrap: anywhere;
+      }
+      dl {
+        display: grid;
+        grid-template-columns: 95px minmax(0, 1fr);
+        font-size: 12px;
+        line-height: 1.7;
+        row-gap: 10px;
+        margin: 0;
+      }
+      dt {
+        color: var(--muted);
+      }
+      dd {
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
+      code {
+        font-family: ui-monospace, monospace;
+        font-size: 11px;
+      }
+      .backup {
+        border-top: 1px solid var(--line);
+        padding: 19px 23px;
+        display: flex;
+        gap: 12px;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .backup p {
+        font-size: 11px;
+        margin-top: 4px;
+      }
+      .backup button {
+        font-size: 12px;
+        white-space: nowrap;
+      }
+      footer {
+        margin-top: 25px;
+        color: #8491a2;
+        font-size: 11px;
+        display: flex;
+        justify-content: space-between;
+        gap: 20px;
+      }
+      #notice {
+        color: var(--amber);
+        font-size: 12px;
+        margin-bottom: 17px;
+      }
+      .motion-button {
+        padding: 0;
+        border: 0;
+        font-size: 11px;
+        color: var(--muted);
+        text-decoration: underline;
+        text-underline-offset: 3px;
+      }
+      .motion-off .orbit,
+      .motion-off .pulse {
+        animation: none !important;
+        opacity: 0 !important;
+      }
+      @media (hover: hover) and (pointer: fine) {
+        button:not(:disabled):hover {
+          background: #242c36;
+        }
+        a:hover {
+          color: #dce9f4;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .working .orbit,
+        .working .pulse {
+          animation: none;
+          opacity: 0;
+        }
+      }
+      @media (max-width: 760px) {
+        .shell {
+          padding: 0 20px;
+        }
+        header {
+          height: auto;
+          min-height: 80px;
+          flex-wrap: wrap;
+          padding: 18px 0;
+        }
+        .brand {
+          gap: 9px;
+        }
+        .brand .divider {
+          margin: 0 2px;
+        }
+        .actions {
+          gap: 10px;
+        }
+        .connection {
+          font-size: 11px;
+        }
+        .actions button {
+          font-size: 11px;
+          padding: 7px 10px;
+        }
+        main {
+          padding-top: 28px;
+        }
+        h1 {
+          font-size: 25px;
+        }
+        .lower {
+          grid-template-columns: minmax(0, 1fr);
+        }
+        .pipeline {
+          padding: 32px 7px 19px;
+        }
+        .node {
+          width: 54px;
+          height: 54px;
+          margin-bottom: 18px;
+        }
+        .node svg {
+          width: 25px;
+          height: 25px;
+        }
+        .integrator {
+          width: 46px;
+          height: 46px;
+          margin-top: 4px;
+          margin-bottom: 22px;
+          border-radius: 14px;
+        }
+        .rail {
+          top: 27px;
+        }
+        .pulse {
+          top: 24px;
+          left: calc(12.5% + 31px);
+        }
+        @keyframes signal {
+          0% {
+            transform: translateX(0);
+            opacity: 0;
+          }
+          12%,
+          80% {
+            opacity: 0.9;
+          }
+          100% {
+            transform: translateX(25px);
+            opacity: 0;
+          }
+        }
+        .stage-name {
+          font-size: 11px;
+        }
+        .stage-detail {
+          font-size: 10px;
+        }
+        .pipeline-note {
+          flex-wrap: wrap;
+          line-height: 1.5;
+        }
+        .return {
+          font-size: 9px;
+          margin: 23px 9% 0;
+          gap: 6px;
+        }
+        .heading {
+          align-items: start;
+        }
+        .mode {
+          margin-top: 7px;
+        }
+        footer {
+          flex-wrap: wrap;
+          line-height: 1.8;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <header>
+        <div class="brand">
+          <span class="logo" aria-hidden="true"></span><strong>Factory</strong
+          ><span class="divider">/</span><span id="project">Connecting</span>
+        </div>
+        <div class="actions">
+          <span class="connection" id="connection"
+            ><span class="dot"></span
+            ><span id="connection-text">Connecting</span></span
+          ><button id="preview-button">Sample preview</button>
+        </div>
+      </header>
+      <main>
+        <div class="heading">
+          <div>
+            <h1>The workbench</h1>
+            <p>Small tasks. Separate threads. One place to watch.</p>
+          </div>
+          <span class="mode" id="mode">Waiting for status</span>
+        </div>
+        <div id="preview-bar" class="preview-bar" hidden>
+          <strong>Sample preview</strong
+          ><span>Illustrative names and states, not live work.</span
+          ><label
+            >State
+            <select id="preview-state">
+              <option value="working">Working</option>
+              <option value="blocked">Blocked</option>
+              <option value="idle">Idle</option>
+              <option value="stale">Disconnected</option>
+              <option value="empty">Empty</option>
+            </select></label
+          >
+        </div>
+        <p id="notice" role="status" hidden></p>
+        <section class="panel" aria-labelledby="pipeline-title">
+          <div class="panel-top">
+            <h2 id="pipeline-title">Execution loop</h2>
+            <span class="quiet" id="pipeline-summary">No active work</span>
+          </div>
+          <div class="pipeline" id="pipeline">
+            <div class="stages">
+              <div class="rail" aria-hidden="true"></div>
+              <span class="pulse" aria-hidden="true"></span
+              ><span class="pulse second" aria-hidden="true"></span>
+              <div class="stage">
+                <div class="node builders">
+                  <span class="orbit" aria-hidden="true"></span
+                  ><svg viewBox="0 0 32 32" aria-hidden="true">
+                    <rect x="4" y="8" width="24" height="17" rx="2" />
+                    <path d="m9 14 4 3-4 3m8 0h6M10 4h12" />
+                  </svg>
+                </div>
+                <div class="stage-name">Builders</div>
+                <div class="stage-detail" id="builders-count">None working</div>
+              </div>
+              <div class="stage">
+                <div class="node">
+                  <svg viewBox="0 0 32 32" aria-hidden="true">
+                    <rect x="8" y="7" width="16" height="19" rx="2" />
+                    <path d="M12 3h8m-8 10h8m-8 5h8m-8 5h5" />
+                  </svg>
+                </div>
+                <div class="stage-name">Handoff</div>
+                <div class="stage-detail" id="queue-count">Nothing queued</div>
+              </div>
+              <div class="stage">
+                <div class="node integrator">
+                  <svg viewBox="0 0 32 32" aria-hidden="true">
+                    <path d="M6 9h7l6 14h7M6 23h7l6-14h7" />
+                    <circle cx="5" cy="9" r="2" />
+                    <circle cx="5" cy="23" r="2" />
+                  </svg>
+                </div>
+                <div class="stage-name">Integrator</div>
+                <div class="stage-detail">One at a time</div>
+              </div>
+              <div class="stage">
+                <div class="node">
+                  <svg viewBox="0 0 32 32" aria-hidden="true">
+                    <path d="m8 16 5 5 11-11" />
+                    <circle cx="16" cy="16" r="13" />
+                  </svg>
+                </div>
+                <div class="stage-name">Accepted</div>
+                <div class="stage-detail" id="accepted-count">
+                  No revisions yet
+                </div>
+              </div>
+            </div>
+            <div class="return">Corrections return to their owner</div>
+          </div>
+          <div class="pipeline-note">
+            <span>Motion indicates activity, not measured progress.</span
+            ><button
+              class="motion-button"
+              id="motion-button"
+              aria-pressed="false"
+            >
+              Pause motion
+            </button>
+          </div>
+        </section>
+        <div class="lower">
+          <section class="panel" aria-labelledby="queue-title">
+            <div class="panel-top queue-header">
+              <h2 id="queue-title">Work queue</h2>
+              <span class="quiet" id="task-count">0 tickets</span>
+            </div>
+            <div id="queue"></div>
+          </section>
+          <section class="panel" aria-labelledby="detail-heading">
+            <div class="panel-top">
+              <h2 id="detail-heading">Selected work</h2>
+              <span class="quiet" id="detail-status"></span>
+            </div>
+            <div class="detail">
+              <h3 id="detail-title">No ticket selected</h3>
+              <dl>
+                <dt>Ticket</dt>
+                <dd id="detail-ticket">None</dd>
+                <dt>Amp thread</dt>
+                <dd id="detail-thread">Not assigned</dd>
+                <dt>Revision</dt>
+                <dd id="detail-revision">Not submitted</dd>
+                <dt>Observation</dt>
+                <dd id="detail-observed">Waiting for the factory plugin</dd>
+              </dl>
+            </div>
+            <div class="backup">
+              <div>
+                <h2>Private checkpoint</h2>
+                <p>Backup is not connected yet.</p>
+              </div>
+              <button
+                disabled
+                title="Requires the SQLite backup implementation"
+              >
+                Back up now
+              </button>
+            </div>
+          </section>
+        </div>
+        <footer>
+          <span>Coordinator observations every 5 seconds. No model calls.</span
+          ><span>Read-only view · No work starts from this page</span>
+        </footer>
+      </main>
+    </div>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const labels = {
+        working: "Working",
+        idle: "Awaiting verification",
+        blocked: "Blocked",
+        queued: "Queued",
+        accepted: "Accepted",
+        unknown: "Unknown",
+      };
+      let preview = new URLSearchParams(location.search).get("preview");
+      if (!["working", "blocked", "idle", "stale", "empty"].includes(preview))
+        preview = null;
+      let selected = null;
+      let last = null;
+      let lost = false;
+      let busy = false;
+      let rowsKey = "";
+      function sample() {
+        const status = ["working", "blocked", "idle"].includes(preview)
+          ? preview
+          : "working";
+        return {
+          project: "sample-project",
+          enabled: true,
+          fresh: preview !== "stale",
+          observedAt: new Date().toISOString(),
+          tasks:
+            preview === "empty"
+              ? []
+              : [
+                  {
+                    id: "F-012",
+                    title: "Restore project memory on startup",
+                    status,
+                    thread: null,
+                    revision: null,
+                  },
+                  {
+                    id: "F-013",
+                    title: "Save a private phase checkpoint",
+                    status: "queued",
+                    thread: null,
+                    revision: null,
+                  },
+                  {
+                    id: "F-011",
+                    title: "Keep corrections with their builder",
+                    status: "accepted",
+                    thread: null,
+                    revision: null,
+                  },
+                ],
+        };
+      }
+      function isFresh() {
+        return (
+          last &&
+          !lost &&
+          last.fresh &&
+          Date.now() - Date.parse(last.observedAt) < 20000
+        );
+      }
+      function showDetail() {
+        const task = last?.tasks.find((t) => t.id === selected);
+        $("detail-title").textContent = task?.title ?? "No ticket selected";
+        $("detail-ticket").textContent = task?.id ?? "None";
+        $("detail-status").textContent = task
+          ? isFresh()
+            ? labels[task.status]
+            : "Last known state"
+          : "";
+        if (task?.thread && $("detail-thread").dataset.thread !== task.thread) {
+          $("detail-thread").replaceChildren();
+          const link = document.createElement("a");
+          link.href = `https://ampcode.com/threads/${encodeURIComponent(task.thread)}`;
+          link.textContent = "Open in Amp";
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          $("detail-thread").append(link);
+          $("detail-thread").dataset.thread = task.thread;
+        } else if (!task?.thread) {
+          delete $("detail-thread").dataset.thread;
+          $("detail-thread").textContent = preview
+            ? "No real thread in sample"
+            : "Not assigned";
+        }
+        $("detail-revision").textContent = task?.revision ?? "Not submitted";
+        $("detail-observed").textContent = last?.observedAt
+          ? new Date(last.observedAt).toLocaleTimeString([], {
+              hour: "2-digit",
+              minute: "2-digit",
+              second: "2-digit",
+            }) + (isFresh() ? " · Current" : " · Stale")
+          : "Waiting for the factory plugin";
+        document
+          .querySelectorAll(".task")
+          .forEach((el) =>
+            el.setAttribute("aria-pressed", String(el.dataset.id === selected)),
+          );
+      }
+      function render() {
+        if (!last) return;
+        const fresh = isFresh();
+        const active = fresh
+          ? last.tasks.filter((t) => t.status === "working").length
+          : 0;
+        const queued = last.tasks.filter((t) => t.status === "queued").length;
+        const accepted = last.tasks.filter(
+          (t) => t.status === "accepted",
+        ).length;
+        const blocked = last.tasks.some((t) => t.status === "blocked");
+        $("project").textContent = last.project;
+        $("connection").dataset.fresh = String(fresh);
+        $("connection-text").textContent = preview
+          ? "Sample data"
+          : fresh
+            ? "Connected"
+            : last.observedAt
+              ? "Status stale"
+              : "Not connected";
+        $("mode").textContent = !fresh
+          ? "Waiting for connection"
+          : active
+            ? "Work in progress"
+            : blocked
+              ? "Needs attention"
+              : last.enabled
+                ? "Standing by"
+                : "Dispatch paused";
+        $("mode").dataset.working = String(active > 0);
+        $("pipeline").classList.toggle("working", active > 0);
+        $("pipeline-summary").textContent = fresh
+          ? `${active} working / ${queued} queued`
+          : "No current observation";
+        $("builders-count").textContent = active
+          ? `${active} working`
+          : fresh
+            ? "None working"
+            : "Unknown";
+        $("queue-count").textContent = `${queued} queued`;
+        $("accepted-count").textContent = `${accepted} accepted`;
+        $("task-count").textContent = `${last.tasks.length} tickets`;
+        $("preview-bar").hidden = !preview;
+        $("preview-button").textContent = preview
+          ? "Live repository"
+          : "Sample preview";
+        if (preview) $("preview-state").value = preview;
+        $("notice").hidden = fresh || !!preview;
+        $("notice").textContent = last.observedAt
+          ? "Connection is stale. Showing the last observation; activity motion is stopped."
+          : "No factory observation yet. Load the installed factory plugin, or explore the sample preview.";
+        const key = JSON.stringify([last.tasks, fresh]);
+        if (key !== rowsKey) {
+          rowsKey = key;
+          const focused = document.activeElement?.dataset?.id;
+          $("queue").replaceChildren();
+          if (!last.tasks.length) {
+            const empty = document.createElement("p");
+            empty.className = "empty";
+            empty.textContent =
+              "No tickets yet. Work appears here after the coordinator records it.";
+            $("queue").append(empty);
+          }
+          for (const task of last.tasks) {
+            const button = document.createElement("button");
+            button.className = "task";
+            button.dataset.id = task.id;
+            button.dataset.status = fresh ? task.status : "unknown";
+            const icon = document.createElement("span");
+            icon.className = "task-icon";
+            icon.textContent =
+              task.status === "accepted"
+                ? "✓"
+                : task.status === "blocked"
+                  ? "!"
+                  : task.status === "working"
+                    ? "·"
+                    : "○";
+            icon.setAttribute("aria-hidden", "true");
+            const copy = document.createElement("span");
+            copy.className = "task-copy";
+            const title = document.createElement("span");
+            title.className = "task-title";
+            title.textContent = task.title;
+            const subtitle = document.createElement("span");
+            subtitle.className = "task-subtitle";
+            subtitle.textContent = task.id;
+            const tag = document.createElement("span");
+            tag.className = "tag";
+            tag.textContent = fresh ? labels[task.status] : "Last known";
+            copy.append(title, subtitle);
+            button.append(icon, copy, tag);
+            button.onclick = () => {
+              selected = task.id;
+              showDetail();
+            };
+            $("queue").append(button);
+            if (focused === task.id) button.focus();
+          }
+        }
+        if (!last.tasks.some((t) => t.id === selected))
+          selected = last.tasks[0]?.id ?? null;
+        showDetail();
+      }
+      async function poll() {
+        if (document.hidden) return;
+        if (preview) {
+          last = sample();
+          lost = false;
+          render();
+          return;
+        }
+        if (busy) return;
+        busy = true;
+        try {
+          const response = await fetch("/api/status", {
+            cache: "no-store",
+            signal: AbortSignal.timeout(4500),
+          });
+          if (!response.ok) throw new Error("Status unavailable");
+          const value = await response.json();
+          if (!Array.isArray(value.tasks) || typeof value.project !== "string")
+            throw new Error("Invalid status");
+          if (preview) return;
+          last = value;
+          lost = false;
+        } catch {
+          if (!preview) lost = true;
+        } finally {
+          busy = false;
+          if (!last)
+            last = {
+              project: "Repository",
+              observedAt: null,
+              fresh: false,
+              enabled: false,
+              tasks: [],
+            };
+          render();
+        }
+      }
+      $("preview-button").onclick = () => {
+        preview = preview ? null : "working";
+        selected = null;
+        poll();
+      };
+      $("preview-state").onchange = (event) => {
+        preview = event.target.value;
+        poll();
+      };
+      $("motion-button").onclick = () => {
+        const paused = document.body.classList.toggle("motion-off");
+        $("motion-button").setAttribute("aria-pressed", String(paused));
+        $("motion-button").textContent = paused
+          ? "Resume motion"
+          : "Pause motion";
+      };
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) poll();
+      });
+      poll();
+      setInterval(poll, 5000);
+      setInterval(render, 1000);
+    </script>
+  </body>
+</html>
