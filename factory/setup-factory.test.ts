@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { createFactory, type NativeHost } from "./native";
+import { configuration, createFactory, type NativeHost } from "./native";
 
 const installer = resolve(import.meta.dir, "setup-factory.ts");
 
@@ -80,6 +80,15 @@ test("installer validates native effort before writes and dispatch rejects inval
       });
       expect(factory.tick("start", "T-owner")).rejects.toThrow(/workerEffort/);
     }
+    for (const review of [null, "true", 1, [], {}]) {
+      await writeFile(configPath, JSON.stringify({ ...config, review }));
+      expect(configuration(root)).rejects.toThrow(/review/);
+    }
+    await writeFile(
+      configPath,
+      JSON.stringify({ ...config, review: true, workerModel: "unknown/model" }),
+    );
+    expect(configuration(root)).rejects.toThrow(/OpenAI or Anthropic/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -110,10 +119,12 @@ test("refresh rebuilds only the adapter in two repositories", async () => {
       ];
       const run = (flags: string[] = []) =>
         spawnSync("bun", [...args, ...flags], { encoding: "utf8" });
-      expect(run().status).toBe(0);
+      expect(run(name === "first" ? ["--review"] : []).status).toBe(0);
       const plugin = join(root, ".amp/plugins/software-factory.js");
       const config = join(root, ".factory.json");
       const saved = await Bun.file(config).json();
+      expect(saved.review).toBe(name === "first");
+      if (name === "second") delete saved.review;
       saved.workerModel = "anthropic/claude-sonnet-4.6";
       if (name === "first") saved.workerEffort = "high";
       else delete saved.workerEffort;

@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { reviewPrompt, reviewVerdict, type Review } from "./review";
 import {
   factoryStatus,
   openPersistence,
@@ -34,6 +35,7 @@ export type NativeHost = {
     parent: ThreadID,
     model: `${string}/${string}`,
     effort?: AgentReasoningEffort,
+    role?: "reviewer",
   ): Promise<ThreadID>;
   send(thread: ThreadID, message: string): Promise<void>;
   /** Observe activity; unavailable evidence is unknown and preserves running ownership. */
@@ -82,6 +84,20 @@ export function parseWorkerEffort(
   }
 }
 
+/** Resolve pstack's opposite-family adversary. @throws On unsupported providers. */
+export function reviewerModel(worker: string): `${string}/${string}` {
+  switch (worker.split("/")[0]) {
+    case "openai":
+      return "anthropic/claude-fable-5-2";
+    case "anthropic":
+      return "openai/gpt-6-astra";
+    default:
+      throw new Error(
+        "Review requires an OpenAI or Anthropic implementation worker",
+      );
+  }
+}
+
 /** Resolve a repository-relative input and reject escapes, including symlinks. @throws On escape. */
 export function localPath(root: string, value: string): string {
   const path = resolve(root, value);
@@ -116,6 +132,10 @@ export async function configuration(root: string) {
   const [provider, ...name] = model.split("/");
   const workerModel: `${string}/${string}` = `${provider}/${name.join("/")}`;
   const workerEffort = parseWorkerEffort(raw.workerEffort);
+  if (raw.review !== undefined && typeof raw.review !== "boolean")
+    throw new Error("Invalid review; expected boolean");
+  const review = raw.review === true;
+  if (review) reviewerModel(workerModel);
   const prd = localPath(root, text(raw.prd));
   const tickets = localPath(root, text(raw.tickets));
   const scope = strings(raw.scope);
@@ -137,6 +157,7 @@ export async function configuration(root: string) {
   return {
     workerModel,
     workerEffort,
+    review,
     prd,
     tickets,
     scope,
@@ -148,11 +169,28 @@ export async function configuration(root: string) {
 /** Parse ticket identities and dependencies at the file boundary. @throws On invalid tickets. */
 export function tasks(value: unknown): Task[] {
   if (!Array.isArray(value)) throw new Error("Tickets must be an array");
-  const rows = value.map((item) => {
+  const rows = value.map((item): Task => {
     const raw = object(item);
     const id = text(raw.id);
     if (!/^[a-zA-Z0-9_-]+$/.test(id)) throw new Error("Invalid ticket ID");
-    return { id, brief: text(raw.brief), after: strings(raw.after) };
+    const size = raw.size;
+    if (
+      size !== undefined &&
+      size !== "small" &&
+      size !== "medium" &&
+      size !== "large"
+    )
+      throw new Error("Invalid ticket size; expected small, medium, or large");
+    const risky = raw.risky;
+    if (risky !== undefined && typeof risky !== "boolean")
+      throw new Error("Invalid ticket risky; expected boolean");
+    return {
+      id,
+      brief: text(raw.brief),
+      after: strings(raw.after),
+      size,
+      risky,
+    };
   });
   if (new Set(rows.map((row) => row.id)).size !== rows.length)
     throw new Error("Duplicate ticket ID");
@@ -197,7 +235,7 @@ function candidate(
   const revision = git(run.worktree, "rev-parse", "HEAD");
   return report.revision === revision &&
     revision !== run.base &&
-    !git(run.worktree, "status", "--porcelain") &&
+    cleanCandidate(run, revision) &&
     allowedChanges(run.worktree, run.base, revision, scope)
     ? revision
     : null;
@@ -240,6 +278,24 @@ function unchanged(worktree: string, revision: string) {
   );
 }
 
+function cleanCandidate(
+  run: Extract<Run, { kind: "running" }>,
+  revision: string,
+) {
+  return (
+    unchanged(run.worktree, revision) &&
+    (!run.review || unchanged(run.review.worktree, revision))
+  );
+}
+
+function reviewIdentity(root: string, worktree: string, review: Review) {
+  return (
+    unchanged(root, review.base) &&
+    unchanged(worktree, review.revision) &&
+    unchanged(review.worktree, review.revision)
+  );
+}
+
 async function candidateEvidence(
   directory: string,
   task: Task,
@@ -277,7 +333,9 @@ function controlState(
   if (
     owner &&
     Object.values(state.runs).some(
-      (run) => "thread" in run && run.thread === owner,
+      (run) =>
+        ("thread" in run && run.thread === owner) ||
+        ("review" in run && run.review?.thread === owner),
     )
   )
     throw new Error("Workers cannot control the factory");
@@ -376,7 +434,10 @@ export function createFactory(
       };
       async function watchRunning() {
         for (const run of Object.values(state.runs))
-          if (run.kind === "running") await watch(run.thread);
+          if (run.kind === "running") {
+            await watch(run.thread);
+            if (run.review?.thread) await watch(run.review.thread);
+          }
       }
       await watchRunning();
       if (
@@ -407,6 +468,8 @@ export function createFactory(
         const target = git(root, "rev-parse", "HEAD");
         if (
           git(root, "status", "--porcelain") ||
+          !cleanCandidate(run, revision) ||
+          !allowedChanges(run.worktree, run.base, revision, config.scope) ||
           (target !== run.base && target !== revision)
         ) {
           state.runs[task.id] = {
@@ -428,6 +491,7 @@ export function createFactory(
           kind: "done",
           thread: run.thread,
           revision,
+          review: run.review,
           insight:
             typeof report.insight === "string"
               ? report.insight.slice(0, 1000)
@@ -449,27 +513,164 @@ export function createFactory(
           config,
         );
         if (revision) {
-          await accept(task, run, report, revision, log);
-        } else if (run.attempt < 2) {
+          if (
+            config.review &&
+            (task.size !== "small" || task.risky || run.attempt > 1)
+          ) {
+            await beginReview(task, run, revision, log);
+          } else await accept(task, run, report, revision, log);
+        } else await reject(task, run, log);
+      }
+
+      async function reject(
+        task: Task,
+        run: Extract<Run, { kind: "running" }>,
+        evidence: string,
+      ) {
+        delete run.review;
+        if (run.attempt < 2) {
           run.attempt++;
           run.delivery = "queued";
-          commit(task.id, "rejected", log);
+          commit(task.id, "rejected", evidence);
         } else {
           state.runs[task.id] = {
             kind: "blocked",
             thread: run.thread,
-            reason: `Verification failed twice: ${log}`,
+            reason: `Verification failed twice: ${evidence}`,
           };
-          commit(task.id, "blocked", log);
+          commit(task.id, "blocked", evidence);
         }
         if (state.runs[task.id]?.kind === "running") {
           await send(
             task,
             run,
-            `Verification rejected attempt ${run.attempt - 1}. Read ${log}, repair the candidate, and submit report attempt ${run.attempt}.\n${await prompt(task, run, config)}`,
+            `Verification rejected attempt ${run.attempt - 1}. Evidence: ${evidence}. Repair the candidate and submit report attempt ${run.attempt}.\n${await prompt(task, run, config)}`,
           );
           return state;
         }
+      }
+
+      async function deliverReview(
+        task: Task,
+        run: Extract<Run, { kind: "running" }>,
+      ) {
+        const review = run.review!;
+        if (!review.thread || review.delivery !== "queued") return;
+        const message = reviewPrompt(review, run.requirements!);
+        review.delivery = "sending";
+        commit(task.id, "review-sending", JSON.stringify(review));
+        await host.send(review.thread, message);
+        review.delivery = "sent";
+        commit(task.id, "review-sent", JSON.stringify(review));
+      }
+
+      async function beginReview(
+        task: Task,
+        run: Extract<Run, { kind: "running" }>,
+        revision: string,
+        log: string,
+      ) {
+        if (!run.workerModel)
+          throw new Error(
+            "Implementation provider is unknown; reconcile before review",
+          );
+        if (
+          git(root, "rev-parse", "HEAD") !== run.base ||
+          git(root, "status", "--porcelain")
+        ) {
+          state.runs[task.id] = {
+            kind: "blocked",
+            thread: run.thread,
+            reason: "Integration target changed; reconcile before landing",
+          };
+          commit(task.id, "blocked", "target-changed");
+          return;
+        }
+        const model = reviewerModel(run.workerModel);
+        const worktree = join(
+          directory,
+          "staging",
+          `${task.id}-${run.attempt}-${revision}`,
+        );
+        const review: Review = {
+          ticket: task.id,
+          attempt: run.attempt,
+          revision,
+          base: run.base,
+          stage: "post-graft",
+          worktree,
+          model,
+          log,
+          command: config.verify,
+          delivery: "creating",
+          report: join(
+            directory,
+            `${task.id}-${run.attempt}-${revision}-post-graft.review.json`,
+          ),
+        };
+        run.review = review;
+        commit(task.id, "review-creating", JSON.stringify(review));
+        git(
+          root,
+          "worktree",
+          "add",
+          "-b",
+          `factory-stage/${task.id}-${randomUUID()}`,
+          worktree,
+          run.base,
+        );
+        git(worktree, "merge", "--ff-only", revision);
+        if (!unchanged(worktree, revision))
+          throw new Error("Staged artifact changed");
+        review.thread = await host.create(
+          state.owner!,
+          model,
+          "high",
+          "reviewer",
+        );
+        review.delivery = "queued";
+        commit(task.id, "review-created", JSON.stringify(review));
+        await watch(review.thread);
+        await deliverReview(task, run);
+      }
+
+      async function settleReview(
+        task: Task,
+        run: Extract<Run, { kind: "running" }>,
+      ) {
+        const review = run.review!;
+        // Unknown creation/delivery remains owned and parked, including after a reload.
+        if (review.delivery !== "sent") {
+          if (review.delivery === "queued") await deliverReview(task, run);
+          return;
+        }
+        if (!reviewIdentity(root, run.worktree, review)) {
+          state.runs[task.id] = {
+            kind: "blocked",
+            thread: run.thread,
+            reason:
+              "Reviewed candidate or integration base changed; revalidate before landing",
+          };
+          commit(task.id, "blocked", "review-identity-changed");
+          return;
+        }
+        if ((await observe(review.thread!)) !== "idle") return;
+        const verdict = await reviewVerdict(review);
+        if (!verdict) return;
+        review.evidence = verdict.evidence;
+        commit(task.id, "review-verdict", verdict.evidence);
+        if (verdict.kind === "issues")
+          return reject(task, run, verdict.evidence);
+        const report = await currentReport(directory, task, run.attempt);
+        if (!report || candidate(run, report, config.scope) !== review.revision)
+          return;
+        await accept(
+          task,
+          run,
+          report,
+          review.revision,
+          `${review.log}; ${review.report}`,
+        );
       }
 
       async function settle(
@@ -552,6 +753,8 @@ export function createFactory(
           thread,
           attempt: 1,
           delivery: "queued",
+          workerModel: config.workerModel,
+          requirements: `${next.brief}\n${await readFile(config.prd, "utf8")}`,
         };
         state.runs[next.id] = run;
         commit(next.id, "created", thread);
@@ -563,7 +766,12 @@ export function createFactory(
       async function settleRunning() {
         for (const task of queue) {
           const run = state.runs[task.id];
-          if (run?.kind === "running" && (await settle(task, run))) return true;
+          if (run?.kind === "running") {
+            const result = run.review
+              ? await settleReview(task, run)
+              : await settle(task, run);
+            if (result) return true;
+          }
         }
         return false;
       }

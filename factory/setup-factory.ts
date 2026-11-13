@@ -15,7 +15,12 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { configuration, localPath, parseWorkerEffort } from "./native";
+import {
+  configuration,
+  localPath,
+  parseWorkerEffort,
+  reviewerModel,
+} from "./native";
 
 function discoverStore() {
   const skill = execFileSync("amp", ["skill", "info", "poteto-mode"], {
@@ -114,11 +119,13 @@ function options() {
       scope: { type: "string", multiple: true },
       "worker-model": { type: "string", default: "openai/gpt-6.1-sol" },
       "worker-effort": { type: "string", default: "medium" },
+      review: { type: "boolean", default: false },
       store: { type: "string" },
       check: { type: "boolean", default: false },
       refresh: { type: "boolean", default: false },
     },
   });
+  if (values.review) reviewerModel(values["worker-model"]);
   return values;
 }
 
@@ -179,6 +186,7 @@ async function main() {
     mode: "bug-finding",
     workerModel: values["worker-model"],
     workerEffort,
+    review: values.review,
     orchestratorModel: "openai/gpt-6.1-sol",
     permissions: {
       execute: false,

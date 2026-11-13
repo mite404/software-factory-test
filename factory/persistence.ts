@@ -1,9 +1,16 @@
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { validReview, type Review } from "./review";
 
 export type ThreadID = `T-${string}`;
-export type Task = { id: string; brief: string; after: string[] };
+export type Task = {
+  id: string;
+  brief: string;
+  after: string[];
+  size?: "small" | "medium" | "large";
+  risky?: boolean;
+};
 export type Run =
   | { kind: "creating"; base: string; worktree: string }
   | {
@@ -13,10 +20,19 @@ export type Run =
       thread: ThreadID;
       attempt: number;
       delivery: "queued" | "sending" | "sent";
+      review?: Review;
+      workerModel?: string;
+      requirements?: string;
     }
   | { kind: "blocked"; reason: string; thread?: ThreadID }
   | { kind: "uncertain"; reason: string; thread: ThreadID }
-  | { kind: "done"; revision: string; thread: ThreadID; insight: string };
+  | {
+      kind: "done";
+      revision: string;
+      thread: ThreadID;
+      insight: string;
+      review?: Review;
+    };
 export type State = {
   enabled: boolean;
   owner?: ThreadID;
@@ -42,6 +58,15 @@ function worktreeRun(run: Record<string, unknown>): boolean {
   return text(run.base) && text(run.worktree);
 }
 
+function reviewFields(run: Record<string, unknown>): boolean {
+  return (
+    ["workerModel", "requirements"].every(
+      (key) => run[key] === undefined || text(run[key]),
+    ) &&
+    (run.review === undefined || validReview(run.review))
+  );
+}
+
 const runValidators: Record<string, (run: Record<string, unknown>) => boolean> =
   {
     creating: worktreeRun,
@@ -52,14 +77,16 @@ const runValidators: Record<string, (run: Record<string, unknown>) => boolean> =
       typeof run.attempt === "number" &&
       run.attempt > 0 &&
       typeof run.delivery === "string" &&
-      ["queued", "sending", "sent"].includes(run.delivery),
+      ["queued", "sending", "sent"].includes(run.delivery) &&
+      reviewFields(run),
     blocked: (run) =>
       text(run.reason) && (run.thread === undefined || thread(run.thread)),
     uncertain: (run) => text(run.reason) && thread(run.thread),
     done: (run) =>
       text(run.revision) &&
       thread(run.thread) &&
-      typeof run.insight === "string",
+      typeof run.insight === "string" &&
+      reviewFields(run),
   };
 
 function validateRun(id: string, value: unknown) {
@@ -117,6 +144,7 @@ function database(directory: string, readonly: boolean) {
     strict: true,
   });
   try {
+    db.run("PRAGMA busy_timeout = 5000");
     const version = db
       .query<{ user_version: number }, []>("PRAGMA user_version")
       .get()!.user_version;
@@ -185,6 +213,28 @@ export function factoryStatus(directory: string): State {
   }
 }
 
+/** Read existing SQLite identity and state together; never import legacy files. @throws On invalid storage. */
+export function factoryRecords(directory: string) {
+  if (!existsSync(join(directory, "state.sqlite"))) return null;
+  const db = database(directory, true);
+  try {
+    return db.transaction(() => {
+      const state = readState(db);
+      const tickets = db
+        .query<{ id: string }, []>("SELECT id FROM tickets ORDER BY rowid")
+        .all()
+        .map(({ id }) => {
+          if (!/^[a-zA-Z0-9_-]+$/.test(id))
+            throw new Error("Invalid factory ticket identity");
+          return id;
+        });
+      return { state, tickets };
+    })();
+  } finally {
+    db.close();
+  }
+}
+
 /** Open storage under the caller's poteto lock; migrate once. @throws On invalid storage or I/O. */
 export function openPersistence(directory: string, queue: Task[]) {
   const imported = existsSync(join(directory, "state.sqlite"))
@@ -198,6 +248,7 @@ export function openPersistence(directory: string, queue: Task[]) {
       })
     : database(directory, false);
   try {
+    db.run("PRAGMA busy_timeout = 5000");
     const state = db.transaction(() => {
       if (imported) {
         db.run(`

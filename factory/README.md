@@ -39,6 +39,46 @@ To change future workers, edit `workerModel` and `workerEffort` in `.factory.jso
 apply only when creating a new worker. Corrections continue on the same worker with its original
 settings, not a replacement.
 
+## Conditional post-graft review
+
+Review is opt-in: pass `--review` during initial setup or set `review: true` in `.factory.json`.
+Missing or false preserves gate-only acceptance. Refresh never enables review or rewrites saved
+configuration. Invalid review, ticket size, or risk values fail parsing.
+
+Tickets may declare `size: "small" | "medium" | "large"` and boolean `risky`. With review enabled,
+only a small, low-risk first attempt skips review. Medium, large, unrated, risky, and retried work
+requires one cold post-graft review, never a pre-graft review or a model call to classify risk.
+
+Scope and risk are separate, following create-linear-ticket's Effort and Risk distinction. Small is
+bounded with local effects; medium spans cooperating components; large changes cross-cutting
+behavior or lifecycle. These describe scope, not elapsed time. In the ticket brief, record affected
+consumers, shared state/contracts, and the safety fact verification must prove. Security, data loss,
+shared persistence, concurrency/recovery, and integration ownership can make even a small change
+risky. Following pstack blast-radius guidance, exercise that safety fact in real code rather than
+treating a plausible writeup as proof. For example, this review lifecycle is large and risky:
+dispatcher, persistence, and adapter share ownership, and recovery must never duplicate a judge or
+accept unbound evidence. The live dogfood successor must retain that assessment in its own scope.
+
+After the complete configured gate passes, the integrator grafts a required-review candidate into
+an isolated staging branch/worktree. A fast-forward retains its genuine SHA. The canonical checkout
+and dependents wait for a validated verdict bound to ticket, attempt, revision, base, and post-graft
+stage. OpenAI implementation workers get Fable 5.2/high; Anthropic workers get GPT-6 Astra/high.
+Unsupported providers fail visibly. The implementation worker's saved provider determines routing,
+not the coordinator's model or subsequently edited worker settings.
+
+The reviewer receives original requirements, staged code/callers, and coordinator gate evidence,
+never worker messages, insights, self-review, or prior reviewer opinions. Its only permitted write
+is its JSON verdict report. Findings require severity, location, concrete evidence, and an actionable
+correction; empty findings can pass. Narrative text and idle state cannot approve a candidate.
+
+Review identity, delivery, verdict evidence, and events live in the existing SQLite run state.
+The dashboard's existing title, thread, revision, and activity fields project the pending review.
+Reloads reattach reviewers without replacements. Unknown creation or delivery stays parked for
+operator reconciliation; missing, invalid, blocked, stale, or unavailable verdicts cannot land or
+consume corrections. Issues return to the original worker using the shared one-correction budget.
+A repair reruns the full gate and gets a fresh cold reviewer. Changed code or integration base
+blocks landing until revalidation; prior reports and worktrees remain available as evidence.
+
 ## Refresh an installed adapter
 
 Run the setup command with `--refresh` to rebuild only the repository's generated plugin:
@@ -89,8 +129,35 @@ available in this checkout, not a published package.
 
 The plugin publishes a sanitized observation file under the target Git directory. Native Amp
 state and title subscriptions trigger updates; a five-second heartbeat refreshes observations.
-The browser polls the read-only `/api/status` endpoint every five seconds. Observations older than
-20 seconds stop activity motion. No model call is used for observation or rendering.
+The browser polls the read-only `/api/status` endpoint every five seconds. SQLite supplies retained
+ticket/run identity, enabled state, and acceptance, even without a heartbeat or current manifest
+entry. Titles and activity remain observations: `observedAt` is never advanced by an HTTP read.
+`fresh` requires an observation less than 20 seconds old and no more than five seconds in the
+future.
+Missing, invalid, or stale observations cannot advertise working agents. Activity must also match
+the durable thread and revision; observations alone cannot accept work or introduce tickets.
+Retained tickets without runs are displayed as queued even after removal from the manifest. They
+can inflate the displayed queue count, but the dispatcher will not start removed tickets. Status
+does not claim to be a current dispatch plan.
+
+The response retains `project`, `observedAt`, `enabled`, `fresh`, and the existing task fields.
+`durable` is `available`, `missing`, `invalid`, or `unavailable`; `observations` independently reports
+`available`, `missing`, or `invalid`. A missing database returns an empty, non-fresh status, not
+legacy acceptance.
+Invalid or unsupported SQLite returns HTTP 503 with `durable: "invalid"`. Malformed observations
+do not hide valid durable acceptance. GET never initializes, imports, migrates, or rewrites storage.
+All storage connections use a connection-local five-second busy timeout so dashboard readers and
+coordinator commits wait for ordinary lock overlap. An exhausted lock wait returns HTTP 503 with
+`durable: "unavailable"`, not invalid storage; retry after the competing transaction finishes.
+
+Each task adds `evidence`: an `acceptance` revision when done, and `gate`/`review` references only
+when a bound review record exists. References include revision, base, and post-graft stage; review
+also includes attempt, pending state, and the available reviewer thread. An absent reference is
+`null`, not an inferred success. Legacy gate-only acceptance has no retained gate reference.
+Private report/log paths, commands, requirements, verdict contents, worker rationale, configuration,
+and event details are not served. Review titles omit paths, including in older observation files.
+Only the existing HTML and GET `/api/status` are served; other paths and write methods are rejected.
+No model call is used for observation, HTTP reads, or rendering.
 
 **Sample preview** switches to clearly labeled illustrative data. It never starts workers or
 modifies the repository. The selector exercises working, blocked, idle, disconnected, and empty
@@ -112,10 +179,11 @@ bun run fallow:ci
 ```
 
 Installation enables Lefthook. Pre-commit runs type-aware correctness and async-safety lint,
-TypeScript over both `src` and `factory`, and a staged-diff Fallow audit. CI additionally rejects
-lint warnings, runs Oxlint's compiler diagnostics alongside standalone `tsc`, checks formatting,
-runs every test, rejects focused tests and conflict markers, and applies strict whole-project
-Fallow checks. Changed-code attribution is restricted to pre-commit; CI does not exempt inherited
+Oxlint's native TypeScript check over both `src` and `factory`, and a staged-diff Fallow audit.
+Use `lint:type-aware:fix` to apply available lint fixes. CI additionally rejects lint warnings,
+checks formatting, runs every test, rejects focused tests and conflict markers, and applies
+strict whole-project Fallow checks. Changed-code attribution is restricted to pre-commit;
+CI does not exempt inherited
 findings. Fallow's built-in CI mode runs dead-code, duplication, and health analysis with failure
 on findings. Three-occurrence duplication detection follows Yaklabs' configuration.
 
@@ -125,7 +193,8 @@ SQLite persistence, verification commands, and installer bundling remain real. T
 prove the external poteto store's cross-process lock or a live authenticated Amp dispatch.
 
 The API check uses a disposable Git repo and real HTTP requests. It covers fresh and stale
-observations, field filtering, malformed input, and rejection of file access and mutation requests.
+observations, durable acceptance without a heartbeat, pending review references, private canaries,
+unchanged SQLite bytes, malformed storage, and rejection of file access and mutation requests.
 Native dispatch tests use real Git worktrees and configured verification commands, replacing remote
 thread operations and external bookkeeping. Live native trials and browser checks are separate
 evidence.

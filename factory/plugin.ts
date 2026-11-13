@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { DashboardSnapshot } from "./dashboard";
+import type { Run } from "./persistence";
 import {
   configuration,
   createFactory,
@@ -84,12 +85,14 @@ export default function registerFactory(
   }
 
   const host: NativeHost = {
-    async create(parentThreadID, model, reasoningEffort) {
+    async create(parentThreadID, model, reasoningEffort, role) {
       const agent = amp.createAgent({
         model,
         reasoningEffort,
         instructions:
-          "Implement the assigned factory ticket in its named local repository. Keep tool output concise.",
+          role === "reviewer"
+            ? "Independently review the named post-graft code artifact. Read only code, requirements and coordinator gate evidence. Do not implement or delegate. Write only the requested verdict report."
+            : "Implement the assigned factory ticket in its named local repository. Keep tool output concise.",
         tools: ["shell_command", "shell_command_status", "apply_patch", "Read"],
         features: [],
       });
@@ -126,6 +129,27 @@ export default function registerFactory(
     },
   };
   const factory = createFactory(root, host, openStore);
+
+  async function reviewProjection(
+    title: string,
+    run: Run,
+    row: DashboardSnapshot["tasks"][number],
+    tools?: PluginTools,
+  ) {
+    if (!("review" in run) || !run.review) return row;
+    const review = run.review;
+    row.title = `${title} - post-graft review (${review.delivery})`;
+    row.thread = review.thread ?? null;
+    row.revision = review.revision;
+    if (run.kind === "done") return row;
+    row.status =
+      review.delivery === "creating" || review.delivery === "sending"
+        ? "blocked"
+        : review.thread
+          ? activityStatuses[await observe(review.thread, tools)]
+          : "unknown";
+    return row;
+  }
 
   async function publish(tools?: PluginTools) {
     if (stopped || publishing) return;
@@ -164,7 +188,7 @@ export default function registerFactory(
                   row.status = activityStatuses[activity];
                 }
               }
-              return row;
+              return reviewProjection(task.brief, run, row, tools);
             },
           ),
         ),

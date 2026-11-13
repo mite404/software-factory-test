@@ -13,7 +13,12 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createFactory, type NativeHost } from "./native";
-import { factoryStatus, openPersistence, type State } from "./persistence";
+import {
+  factoryRecords,
+  factoryStatus,
+  openPersistence,
+  type State,
+} from "./persistence";
 
 const roots: string[] = [];
 const queue = [{ id: "A", brief: "Repair value", after: [] }];
@@ -136,6 +141,31 @@ test("status reads fresh and legacy repositories without runtime writes or locks
   expect(await readFile(join(f.directory, "state.json"), "utf8")).toBe(
     original,
   );
+  expect(f.locks()).toBe(0);
+  expect(f.calls()).toBe(0);
+});
+
+test("durable records retain ticket identity without importing legacy or writing SQLite", async () => {
+  const f = await fixture();
+  expect(factoryRecords(f.directory)).toBeNull();
+  expect(existsSync(f.directory)).toBe(false);
+  await mkdir(f.directory);
+  await writeFile(join(f.directory, "state.json"), JSON.stringify(parked));
+  expect(factoryRecords(f.directory)).toBeNull();
+  expect(await readdir(f.directory)).toEqual(["state.json"]);
+  const storage = openPersistence(f.directory, queue);
+  storage.close();
+  const reopened = openPersistence(f.directory, []);
+  reopened.close();
+  await writeFile(join(f.directory, "state.json"), "invalid legacy");
+  const bytes = await readFile(join(f.directory, "state.sqlite"));
+  const files = await readdir(f.directory);
+  expect(factoryRecords(f.directory)).toEqual({
+    state: parked,
+    tickets: ["A"],
+  });
+  expect(await readFile(join(f.directory, "state.sqlite"))).toEqual(bytes);
+  expect(await readdir(f.directory)).toEqual(files);
   expect(f.locks()).toBe(0);
   expect(f.calls()).toBe(0);
 });
@@ -267,6 +297,7 @@ test.each(["corrupt", "newer", "unversioned"])(
     const bytes = await readFile(path);
     expect(f.factory().tick("start", "T-owner")).rejects.toThrow();
     expect(f.factory().tick("status")).rejects.toThrow();
+    expect(() => factoryRecords(f.directory)).toThrow();
     expect(await readFile(path)).toEqual(bytes);
     expect(f.calls()).toBe(0);
   },

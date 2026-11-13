@@ -5,6 +5,7 @@ import { existsSync, writeFileSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { startDashboard } from "./dashboard";
 import registerFactory from "./plugin";
 import { openPersistence } from "./persistence";
 
@@ -54,6 +55,7 @@ test.each([
   "integration",
   "permission",
   "responsive",
+  "review",
 ])(
   "disconnected recovery preserves ownership and the %s gate",
   async (gate) => {
@@ -63,8 +65,10 @@ test.each([
     const finished = join(root, ".git/factory/verify-finished");
     let heartbeat: ReturnType<typeof setInterval> | undefined;
     let dispose = () => {};
+    let server: ReturnType<typeof startDashboard> | undefined;
     try {
       git(root, "init", "-q");
+      server = startDashboard({ root, port: 0 });
       git(root, "config", "user.name", "Fixture");
       git(root, "config", "user.email", "fixture@example.invalid");
       await mkdir(join(root, "src"));
@@ -80,6 +84,7 @@ test.each([
           version: 1,
           capacity: 1,
           workerModel: "openai/gpt-6.1-sol",
+          review: gate === "review",
           prd: "prd.md",
           tickets: "tickets.json",
           scope: ["src/"],
@@ -97,6 +102,11 @@ test.each([
       git(root, "add", ".");
       git(root, "commit", "-qm", "fixture");
       let creates = 0;
+      const models: {
+        model: string;
+        reasoningEffort?: string;
+        instructions: string;
+      }[] = [];
       const sends: string[] = [];
       const ledger: string[] = [];
       let disconnected = false;
@@ -121,11 +131,16 @@ test.each([
         };
       };
       const amp = {
-        createAgent() {
+        createAgent(options: {
+          model: string;
+          reasoningEffort?: string;
+          instructions: string;
+        }) {
+          models.push(options);
           return {
             async createThread() {
               creates++;
-              return { id: "T-worker" };
+              return { id: ["T-worker", "T-reviewer"][creates - 1] };
             },
           };
         },
@@ -283,7 +298,7 @@ test.each([
         expect((await control("reconcile")).runs.A).toEqual(original);
         expect(ledger).toEqual([]);
         await writeFile(configPath, saved);
-      } else if (!["valid", "responsive"].includes(gate)) {
+      } else if (!["valid", "responsive", "review"].includes(gate)) {
         await damageCandidate(gate, root, worktree, reportPath, original.base);
         const rejected = (await control("reconcile")).runs.A;
         expect(ledger).toEqual([]);
@@ -327,13 +342,77 @@ test.each([
           clearInterval(heartbeat);
         }, 10);
       }
+      async function reviewCandidate() {
+        if (gate !== "review") return;
+        disconnected = false;
+        const pending = (await control("reconcile")).runs.A;
+        expect(pending).toMatchObject({
+          kind: "running",
+          review: {
+            stage: "post-graft",
+            thread: "T-reviewer",
+            delivery: "sent",
+          },
+        });
+        expect(ledger).toEqual([]);
+        expect(await readFile(join(root, "src/value"), "utf8")).toBe("old");
+        expect(models[1]).toMatchObject({
+          model: "anthropic/claude-fable-5-2",
+          reasoningEffort: "high",
+        });
+        expect(models[1]?.instructions).toContain("Do not implement");
+        const dashboard = await Bun.file(
+          join(root, ".git/factory/dashboard.json"),
+        ).json();
+        expect(dashboard.tasks[0]).toMatchObject({
+          thread: "T-reviewer",
+          revision,
+        });
+        expect(dashboard.tasks[0].title).toContain("post-graft review");
+        expect(JSON.stringify(dashboard)).not.toContain(pending.review.report);
+        const status = await (
+          await fetch(`http://localhost:${server!.port}/api/status`)
+        ).json();
+        expect(status).toMatchObject({ durable: "available", fresh: true });
+        expect(status.tasks[0]).toMatchObject({
+          thread: "T-reviewer",
+          revision,
+          evidence: {
+            acceptance: null,
+            gate: { revision, base: original.base, stage: "post-graft" },
+            review: { pending: true, revision, thread: "T-reviewer" },
+          },
+        });
+        expect(JSON.stringify(status)).not.toContain(pending.review.report);
+        expect(JSON.stringify(status)).not.toContain(pending.review.log);
+        dispose();
+        load();
+        await control("reconcile");
+        expect(creates).toBe(2);
+        expect(sends).toEqual(["T-worker", "T-reviewer"]);
+        await writeFile(
+          pending.review.report,
+          JSON.stringify({
+            ticket: "A",
+            attempt: 1,
+            revision,
+            base: original.base,
+            stage: "post-graft",
+            kind: "pass",
+            findings: [],
+          }),
+        );
+      }
+      await reviewCandidate();
       const accepted = (await control("reconcile")).runs.A;
-      if (gate === "responsive") {
+      async function checkResponsiveness() {
+        if (gate !== "responsive") return;
         expect(responsive).toBe(true);
         expect(await readFile(join(root, ".git/factory/A-1.log"), "utf8")).toBe(
           "verified stdoutverified stderr",
         );
       }
+      await checkResponsiveness();
       expect(accepted).toMatchObject({
         kind: "done",
         thread: "T-worker",
@@ -342,6 +421,39 @@ test.each([
       expect(await readFile(join(root, "src/value"), "utf8")).toBe("good");
       expect((await control("reconcile")).runs.A).toEqual(accepted);
       expect(ledger).toEqual([revision]);
+      if (gate === "review") {
+        expect(creates).toBe(2);
+        expect(sends).toEqual(["T-worker", "T-reviewer"]);
+        expect(accepted.review.evidence).toContain('"kind":"pass"');
+        expect(
+          control("pause", {
+            ...ctx,
+            thread: { ...ctx.thread, id: "T-reviewer" },
+          }),
+        ).rejects.toThrow(/cannot control/);
+        const completed = await Bun.file(
+          join(root, ".git/factory/dashboard.json"),
+        ).json();
+        expect(completed.tasks[0]).toMatchObject({
+          status: "accepted",
+          thread: "T-reviewer",
+          revision,
+        });
+        await rm(join(root, ".git/factory/dashboard.json"));
+        const durable = await (
+          await fetch(`http://localhost:${server!.port}/api/status`)
+        ).json();
+        expect(durable).toMatchObject({ fresh: false, observedAt: null });
+        expect(durable.tasks[0]).toMatchObject({
+          status: "accepted",
+          revision,
+          evidence: {
+            acceptance: { revision },
+            review: { pending: false, revision },
+          },
+        });
+        return;
+      }
       expect(creates).toBe(1);
       expect(sends).toEqual(
         Array(
@@ -378,6 +490,7 @@ test.each([
     } finally {
       clearInterval(heartbeat);
       dispose();
+      await server?.stop(true);
       await rm(root, { recursive: true, force: true });
     }
   },

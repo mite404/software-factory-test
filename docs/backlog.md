@@ -21,6 +21,13 @@ The [feature 02 story](features/feature-02/feature-02-story.md) and
 further implementation. Implementation workers use Sol 6.1 at medium effort, one child at a time.
 Luna remains available for inexpensive workflow fixtures.
 
+The [feature 06 story](features/feature-06/feature-06-story.md) and
+[implementation ticket](features/feature-06/feature-06-impl.md) add conditional cold post-graft
+review. This is the accepted workflow prerequisite, not backlog F06 restore. Scope: Large.
+Blast radius: elevated, because reviewer ownership, acceptance, retries, and SQLite recovery must
+agree. Prove that absent or stale review cannot land work or dispatch a dependent, including reload.
+Its live rejection/repair lifecycle passed trial 9; backup/restore acceptance remains separate.
+
 - Setup preserves app files, guidance, configuration, and existing runtime data on repeat runs.
 - Install the coordinator adapter and dashboard service alongside the project, with documented
   start commands and Amp supervised service configuration.
@@ -117,8 +124,9 @@ Priority: P0. Dependencies: F02, F03, F05. Status: planned.
 As the dashboard, I can read a small project snapshot through the coordinator, so refreshing the
 page needs neither model calls nor direct worker or filesystem access.
 
-Priority: P0. Dependencies: F02, F03. Status: file-backed read-only prototype verified; SQLite and
-full evidence projection pending.
+Priority: P0. Dependencies: F02, F03. Status: SQLite-backed read-only projection accepted in
+local dogfood, including cold review and same-worker repair. See [trial 9](workflow-trials.md).
+Evidence browsing and cross-orb proof remain pending.
 
 - Return allowed fields for tickets, accurate titles, thread links, revisions, activity, evidence,
   and observation time. Do not return raw database files, private config, or credentials.
@@ -239,6 +247,25 @@ Priority: P1. Dependencies: F02, F03, F07, F12. Status: planned. See R16 and AC3
 - Read stored reports without model calls. Add no automatic evaluation, rerun, or self-modification.
 - Prove failed-then-green CI, absent/stale checks, direct commits, duplicated/out-of-order events,
   changed rubrics, partial cost periods, child-thread attribution, and no-CI data refusal.
+
+## F14 - Prepare dependencies in every worker worktree
+
+As an operator, I can dispatch a worker into a fully prepared worktree, so baseline gates do not
+depend on tools or package metadata borrowed from an ancestor checkout.
+
+Priority: P0. Dependencies: F01, F03. Status: planned; observed in feature-07 dogfood.
+
+- Run the project's declared setup in the exact worker worktree before delivering implementation
+  work. Use the locked dependency installation; do not assume orb setup prepares later worktrees.
+- Persist setup outcome and logs. Failed setup blocks dispatch with coordinator-owned evidence;
+  recovery retains the same worktree and worker without consuming a code-correction attempt.
+- Make restart recovery safe after partial setup without repeating ambiguous worker creation.
+- Prove a fresh worktree, repeated setup, setup failure/recovery, and independence from ancestor
+  dependencies. Retain the project's required gates without ignores or weakened thresholds.
+- Regression evidence: feature-07 had no local `node_modules`; Fallow 3.42.0 ran from the ancestor
+  installation but flagged `@ampcode/cli` as unused. In the unchanged, clean worker checkout,
+  `bun install --frozen-lockfile` changed `bun run fallow:ci` from exit 1 to exit 0. The current
+  repair is manual, not proof that automatic setup or recovery exists.
 
 ## Delivery order and proof
 

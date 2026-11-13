@@ -38,10 +38,10 @@ only part of one. Evidence and trial limitations remain in [workflow-trials.md](
 - F05: Private backup implementation is in progress, not accepted. No private repository has been
   provisioned and no production snapshot push is authorized.
 - F06: Replacement-orb restore and exclusive orchestrator ownership remain planned.
-- F07: A file-backed read-only observation API is verified. Direct SQLite reads and full evidence
-  projection remain pending.
+- F07: SQLite-backed read-only status and curated acceptance/review references passed local
+  dogfood, including real cold-review rejection and same-worker repair.
 - F08: The first dashboard is browser-verified against disposable state and labeled samples.
-  SQLite API integration and full evidence views remain pending.
+  SQLite API compatibility is verified; full evidence browsing remains pending.
 - F09: The dashboard backup control is a disabled placeholder.
 - F10: Dashboard steering chat remains planned.
 - F11: Safe worker retirement remains planned.
@@ -170,6 +170,20 @@ post-landing review of risky or retried changes. A failed full gate records the 
 and creates owned repair work. Landing and full-gate success are distinct facts; a fast-lane landing
 must never be labeled fully verified. The native slice initially runs its configured check before
 local integration; fast-lane policy, scheduled full gates, and post-landing review are later stages.
+
+The next native slice uses one conditional cold post-graft review, not before-and-after reviews.
+Ticket scoping records Small/Medium/Large effort separately from blast-radius risk. Small, low-risk
+first attempts use the full quality gate only. Medium/large or unrated scope, elevated blast radius,
+or any retry requires the one review when enabled. A small diff is not automatically low risk.
+Record affected consumers/shared contracts and the safety fact verification must exercise.
+
+Prepare the integration candidate in an isolated staging worktree. Withhold canonical acceptance
+and dependent dispatch until any required review passes. The reviewer uses the implementation
+worker's opposite provider at high effort: OpenAI author to Fable 5.2, Anthropic author to GPT-6 Astra.
+Give it requirements and exact artifacts, never worker context, rationale, or self-review. Findings
+return to the same worker; changed revisions rerun gates and receive a fresh required review.
+The local native review/rejection/repair loop passed [trial 9](workflow-trials.md). Scheduled
+full gates and the broader post-landing pipeline remain planned.
 
 Adopt these landing invariants without batching; the initial queue accepts one ticket at a time:
 
