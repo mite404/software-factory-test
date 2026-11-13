@@ -145,3 +145,22 @@ idle-as-acceptance rules. V1 dashboard chat appends only to one configured orche
 through a protected backend endpoint. Reject arbitrary browser-selected targets and client-side
 Amp credentials. Durable request IDs and explicit uncertain-delivery states are required because
 retries can otherwise send the same steering instruction twice.
+
+## ADR-015 - Projects own declarative factory definitions
+
+2026-11-13 - Accepted direction. Schema, migration, and runtime loading are not implemented.
+Keep the engine shared and project-specific factory behavior in versioned repository files. Use
+YAML for operational declarations, Markdown for agent instructions and notes, and JSON for schemas
+and machine contracts. Each value has one authoritative home. Reuse existing service definitions
+rather than copy them into a second configuration system. Exact paths remain an implementation
+decision; `.factory.json` continues to work until an explicit migration is implemented.
+
+The backend validates and resolves one effective definition for execution and frontend capability
+display. Pin its revision or digest to worker runs. Reload changes future work, not active ownership
+or acceptance gates. Hooks use supported native events and bounded, permission-checked actions;
+they cannot replace engine safety rules. Setup and refresh do not execute declared actions.
+
+Rejected: per-project engine forks, configuration duplicated across backend and frontend, and
+encoding the entire engine or arbitrary UI layouts in YAML. Schema validation and migration add
+maintenance, but keep supported customization explicit and upgrades reviewable. Public-safe
+definitions stay separate from private runtime memory and secrets. See R15 and backlog F12.

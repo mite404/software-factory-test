@@ -193,11 +193,39 @@ Priority: P0. Dependencies: F03, F04, F05, F06. Status: planned.
 - Record acceptance and retirement separately. Repeated archive, shutdown, and cleanup requests are
   idempotent; missing evidence must leave recoverable work intact.
 
+## F12 - Define each project's factory as code
+
+As a project owner, I can review and customize my factory through versioned repository files,
+so bespoke workflow details do not require a fork of the shared engine.
+
+Priority: P0. Dependencies: F01, F03. Status: planned. See R15 and AC26-AC29 in [prd.md](prd.md).
+Existing `.factory.json`, service declarations, and Markdown prompts are starting points.
+
+- Define the supported configuration contract for backend services, runners, commands, agent roles,
+  verification, discovery, native lifecycle hooks, and dashboard capabilities.
+- Use YAML for authored operations, Markdown for agent instructions and notes, and JSON for schemas
+  and machine contracts. Give each setting one home. Choose paths and schema during implementation.
+- Resolve one validated effective configuration for backend and frontend. Provide a no-side-effect
+  check and a secret-free configuration view, with explicit errors for unsupported capabilities.
+- Keep runtime SQLite, private memory, secrets, generated adapters, and observations out of authored
+  configuration. Workers receive scoped briefs, not privileged project settings.
+- Pin definition content to runs. Explicit reload affects future work without changing active scope
+  or gates. Upgrade preserves project edits; migrate existing installs without permission changes.
+- Bound hook actions by native event identity, permissions, timeouts, and durable duplicate checks.
+  Hooks cannot override lifecycle safety. Installing or refreshing definitions runs no actions.
+- Prove customization in two disposable projects, invalid-definition refusal, safe repeat setup,
+  reload during active work, backend/frontend agreement, and duplicate-event hook handling.
+
 ## Delivery order and proof
 
 Finish the existing sequential setup and dispatch trial first. Build F02 and F03 as the persistence
 and Amp foundation, then F05 and F06 for safe recovery. F04, F07, and F08 provide usable memory and
 visibility. F09 and F10 add explicit controls. F11 follows once preservation and restore are proven.
+
+Scope F12 after the active backup ticket and before expanding installation and dashboard controls.
+First define the shared contract and migration boundary; implement capabilities in bounded tickets
+as their underlying features become available. Do not create a second concurrent worker or rewrite
+the active backup ticket to introduce this configuration format.
 
 Each story needs its own observed acceptance evidence; the order above is not a completion claim.
 Use small disposable fixtures and Luna workers for workflow trials. End with a cross-orb trial:

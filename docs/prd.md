@@ -45,6 +45,8 @@ only part of one. Evidence and trial limitations remain in [workflow-trials.md](
 - F09: The dashboard backup control is a disabled placeholder.
 - F10: Dashboard steering chat remains planned.
 - F11: Safe worker retirement remains planned.
+- F12: A versioned project-owned factory definition remains planned. Existing `.factory.json`
+  configuration and the documented Foreman prompt are starting points, not the complete system.
 
 Automated discovery, scheduled full gates, and the complete backup, restore, and retirement loop
 remain outstanding. Implementation workers currently use Sol 6.1 at medium effort, one at a time.
@@ -316,6 +318,39 @@ retrying. Show replies and distinguish delivery acknowledgment from model respon
 work.
 Existing action permissions and explicit tool approvals remain in effect. See story F10 for checks.
 
+### R15. Project-owned factory definition
+
+Each installed project owns a versioned, reviewable factory definition in its repository. The shared
+engine implements lifecycle and safety rules; project files select supported capabilities and
+configure project-specific behavior without requiring an engine fork. The definition covers backend
+services and commands, runner requirements, agent roles and instructions, verification gates,
+discovery policy, native lifecycle hooks, and supported dashboard capabilities.
+
+Use YAML for human-edited operational declarations, Markdown for agent instructions and notes, and
+JSON for schemas, machine-facing contracts, and fixtures. Each setting has one authoritative home,
+not equivalent YAML and JSON copies. Reuse existing service declarations where applicable. Keep
+SQLite, generated adapters, receipts, and observations separate from the authored definition.
+Only public-safe instructions belong in a potentially public application repository; private
+lessons, evidence, and credentials retain their existing private storage boundaries.
+
+Validate a schema-versioned definition and its referenced files before execution. Reject unsupported
+capabilities, invalid references, and incompatible versions visibly. The backend resolves one
+effective configuration; the frontend displays its supported capabilities and permission state
+rather than inventing browser-only defaults. Declarative configuration does not replace backend
+code, authorization, or a custom frontend when a project genuinely needs one.
+
+Hooks refer to supported native events and explicit local actions with validated inputs, timeouts,
+and recorded outcomes. They cannot bypass acceptance, worker ownership, permission checks, or
+duplicate-action protection. Merely installing, reading, or refreshing a definition executes no
+hook or command. Repository configuration is not permission to access secrets or publish work.
+
+Record the effective definition revision or content digest with each worker run. Changes apply at
+an explicit reload boundary for future work; active workers retain their accepted scope and gates.
+Workers receive only relevant instructions, not privileged backup configuration or credentials.
+Provide a read-only check and effective-configuration view. Preserve operator edits on upgrade and
+migrate existing `.factory.json` installations explicitly, without silently changing permissions.
+See F12 for acceptance. The configuration engine is not implemented.
+
 ## Acceptance criteria
 
 - AC1: A fixture PRD produces one coherent story and fake ticket with observable acceptance
@@ -353,6 +388,14 @@ Existing action permissions and explicit tool approvals remain in effect. See st
   lessons are preserved outside its orb. Repeated retirement events do not repeat destructive work.
 - AC25: CLI, dashboard, and phase backups share one model-free operation. Duplicate clicks do not
   overlap pushes, unauthorized requests fail, and success requires remote confirmation.
+- AC26: Two projects customize supported factory behavior through versioned definition files without
+  engine source edits. Backend behavior and dashboard capability state use the same configuration.
+- AC27: Definition checks reject invalid versions and references without executing commands or
+  hooks, starting workers, or granting permissions. Effective configuration exposes no secrets.
+- AC28: A recorded definition revision explains a worker's instructions and gates. Reload and
+  upgrade preserve active ownership, project edits, and explicit permissions.
+- AC29: Duplicate native hook events do not repeat side effects. Failed or unauthorized hooks remain
+  visible and cannot bypass revision-bound acceptance or create replacement workers.
 
 Passing simulations alone does not satisfy native dispatch or restart acceptance. See
 [workflow-trials.md](workflow-trials.md) for observed results and limitations.
