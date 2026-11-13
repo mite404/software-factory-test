@@ -322,7 +322,8 @@ SQLite is the target store for coordinator state and project memory; endpoints r
 This replaces the earlier JSON-file direction rather than adding a competing source of truth.
 Generic mutation routes must not bypass coordinator transitions. State changes persist before
 becoming visible as events. Coordinator SQLite persistence and legacy migration are implemented.
-The dashboard still reads a file-backed projection; its direct SQLite API remains pending.
+The read-only status API reads durable state directly from SQLite. A separate file-backed
+observation supplies thread activity and freshness. Full evidence browsing remains pending.
 
 ### R12. Orb-first operation and persistence
 
@@ -593,8 +594,8 @@ mode and may differ between orchestrator and worker. Comparative model quality r
 - Final bug-rating thresholds beyond the current fixture rubric.
 - Runtime distribution and repository service packaging. `factory/setup-factory.ts` implements
   installation, check-only mode, and explicit refresh; complete service packaging remains pending.
-- Dashboard endpoint authentication and portal setup. A read-only prototype exists; direct SQLite
-  status and full evidence projection remain pending before remote controls.
+- Portable authenticated portal setup and full evidence projection remain pending before remote
+  controls. The SQLite-backed read-only status API passed local dogfood trial 9.
 - Private state-repository configuration and backup verification are in progress. Snapshot retention
   and size limits, orchestrator ownership enforcement, and replacement-orb restoration remain open.
   SQLite persistence and legacy migration are verified, but an orb-local database is not a backup.

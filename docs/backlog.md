@@ -62,6 +62,9 @@ passed live acceptance. The status fallback uses a supported Amp tool without mo
 Verification is asynchronous so it does not starve the plugin heartbeat. Automatic local executor
 reattachment remains unimplemented; resuming the same disconnected worker required authorized CLI
 continuation. Idle remains an observation, not acceptance.
+The F14 cold reviewer also lost its executor after the coordinator CLI received SIGTERM on
+2026-11-13 at 15:04 UTC. Authorized CLI recovery later produced a verdict; observation reattachment
+alone did not reconnect its tools. Why the coordinator CLI was terminated remains unverified.
 
 - Store one orchestrator thread ID per project. V1 does not offer an arbitrary thread selector.
 - Observe native Amp thread state and titles without model calls. Distinguish idle, running,
@@ -73,6 +76,9 @@ continuation. Idle remains an observation, not acceptance.
 - For separate worker orbs, prove exact code transfer and return of revision-bound evidence.
   Existing local worktree trials do not prove cross-orb execution.
 - Dispatch remains permission-gated and sequential. Recovery retains the same worker on rejection.
+- Every two failed candidates require a recorded Foreman decision, not a terminal attempt limit.
+  [Repair escalation](feats/repair-escalation/repair-escalation-ticket1.md) has passed local gates;
+  live same-worker attempt-three delivery is recorded. Native acceptance is still required.
 
 ## F04 - Retain phase lessons
 
@@ -92,7 +98,8 @@ Priority: P1. Dependencies: F02, F03. Status: planned; dependency insight protot
 As an operator, I can run `factory backup` to save a project snapshot in a private GitHub repo,
 so my application can remain public without publishing project memory.
 
-Priority: P0. Dependencies: F02. Status: planned; no backup command or private repo provisioned.
+Priority: P0. Dependencies: F02. Status: local backup candidate preserved; refresh against current
+prerequisites and canonical integration remain pending. No private repo has been provisioned.
 
 - Configure a private state repo and a stable project key. Several projects may share that repo.
 - Require backup permission separately from application publishing permission. Credentials stay
@@ -142,7 +149,7 @@ As an operator, I can see named work and its status in a minimal animated pipeli
 understand activity without reading every thread.
 
 Priority: P1. Dependencies: F07. Status: first frontend browser-verified against disposable state
-and labeled samples; full story pending the SQLite API and evidence views.
+and labeled samples. The SQLite API passed trial 9; full evidence views remain pending.
 
 - Show builders, handoff, serialized integration, accepted work, and the same-owner correction path.
 - Actual ticket, commit, PR, and thread names come from recorded sources where available. Do not
@@ -255,7 +262,9 @@ Priority: P1. Dependencies: F02, F03, F07, F12. Status: planned. See R16 and AC3
 As an operator, I can dispatch a worker into a fully prepared worktree, so baseline gates do not
 depend on tools or package metadata borrowed from an ancestor checkout.
 
-Priority: P0. Dependencies: F01, F03. Status: planned; observed in feature-07 dogfood.
+Priority: P0. Dependencies: F01, F03. Status: attempt three accepted through native staging and
+fresh cold review. All gates and guard passed with 115 tests. The exact accepted factory files
+passed parent gates and were committed locally as `f8eda06`; nothing has been pushed.
 
 - Run the project's declared setup in the exact worker worktree before delivering implementation
   work. Use the locked dependency installation; do not assume orb setup prepares later worktrees.
@@ -266,8 +275,14 @@ Priority: P0. Dependencies: F01, F03. Status: planned; observed in feature-07 do
   dependencies. Retain the project's required gates without ignores or weakened thresholds.
 - Regression evidence: feature-07 had no local `node_modules`; Fallow 3.42.0 ran from the ancestor
   installation but flagged `@ampcode/cli` as unused. In the unchanged, clean worker checkout,
-  `bun install --frozen-lockfile` changed `bun run fallow:ci` from exit 1 to exit 0. The current
-  repair is manual, not proof that automatic setup or recovery exists.
+  `bun install --frozen-lockfile` changed `bun run fallow:ci` from exit 1 to exit 0. The original
+  repair was manual. Automatic preparation is now accepted and integrated locally.
+
+The next native dispatch exposed socket-backed command stdin causing nested Bash to reset Bun's
+dependency paths. Configuration redirects stdin without skipping hooks or gates, and explicit
+`retry-setup` recovered the same worktree at implementation attempt one.
+[Shared-launcher repair](feats/noninteractive-launcher/noninteractive-launcher-ticket1.md) remains
+required to remove that configuration workaround.
 
 ## Delivery order and proof
 
@@ -283,14 +298,17 @@ New required pipeline stories are tracked separately from the accepted pre-accep
   Status: scoped, not built.
 - F17, native discovery and intake, P1, depends on F12 and F04. Promote the fixture discovery
   contract into bounded native passes with mode changes, duplicate refusal, exhaustion, cooldown
-  and evidence. PRD R2-R4 and AC1-AC12 remain the acceptance contract. Status: not built natively.
+  and evidence. PRD R2-R4 and AC1-AC12 remain the acceptance contract.
+  [Local ticket](feats/native-discovery/native-discovery-ticket1.md). Status: not built natively.
 - F18, coordinator-owned remote monitoring, P0 when publication is enabled, depends on F12 and F15.
   Implement durable push/PR correlation, native subscription reconciliation and original-owner
-  repair under AC37-AC40. Local-only execution stays unchanged. Status: not implemented.
+  repair under AC37-AC40. Local-only execution stays unchanged.
+  [Local ticket](feats/remote-monitoring/remote-monitoring-ticket1.md). Status: not implemented.
 
-F14's next bounded implementation unit is
-[worktree-setup-ticket1](feats/worktree-setup/worktree-setup-ticket1.md). Fix this observed blocker
-before adding workers for other features. Re-scope each later ticket against accepted prerequisites.
+The active bounded implementation unit is
+[repair-escalation-ticket1](feats/repair-escalation/repair-escalation-ticket1.md), adopting the
+coordinator bootstrap through ordinary native verification and cold review. Shared-launcher repair
+follows before further feature dispatch. Re-scope each later ticket against accepted prerequisites.
 
 Finish the existing sequential setup and dispatch trial first. Build F02 and F03 as the persistence
 and Amp foundation, then F05 and F06 for safe recovery. F04, F07, and F08 provide usable memory and
