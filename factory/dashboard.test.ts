@@ -63,7 +63,7 @@ test("dashboard serves fresh titles, stops stale activity, and never serves priv
       405,
     );
   } finally {
-    server.stop(true);
+    await server.stop(true);
     await rm(root, { recursive: true, force: true });
   }
 });

@@ -8,6 +8,9 @@ import { join } from "node:path";
 import registerFactory from "./plugin";
 import { openPersistence } from "./persistence";
 
+const git = (cwd: string, ...args: string[]) =>
+  execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
+
 test.each([
   "valid",
   "revision",
@@ -21,8 +24,6 @@ test.each([
   "disconnected recovery preserves ownership and the %s gate",
   async (gate) => {
     const root = await mkdtemp(join(tmpdir(), "factory-plugin-"));
-    const git = (cwd: string, ...args: string[]) =>
-      execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
     const ready = join(root, ".git/factory/verify-ready");
     const release = join(root, ".git/factory/verify-release");
     const finished = join(root, ".git/factory/verify-finished");
@@ -310,7 +311,11 @@ test.each([
           if (!existsSync(ready)) return;
           responsive = !existsSync(finished);
           const storage = openPersistence(join(root, ".git/factory"), []);
-          storage.event("factory", "verification-responsive", "independent write while verification waits");
+          storage.event(
+            "factory",
+            "verification-responsive",
+            "independent write while verification waits",
+          );
           storage.close();
           writeFileSync(release, "");
           clearInterval(heartbeat);
@@ -350,7 +355,9 @@ test.each([
           owner: "T-owner",
           runs: { A: original },
         },
-        "A", "fixture-restored", "observer recovery",
+        "A",
+        "fixture-restored",
+        "observer recovery",
       );
       storage.close();
       await rm(reportPath);

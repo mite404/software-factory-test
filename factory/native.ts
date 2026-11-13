@@ -38,6 +38,7 @@ export type NativeHost = {
   send(thread: ThreadID, message: string): Promise<void>;
   /** Observe activity; unavailable evidence is unknown and preserves running ownership. */
   state(
+    this: void,
     thread: ThreadID,
   ): Promise<"idle" | "running" | "awaiting-approval" | "error" | "unknown">;
   watch(thread: ThreadID, wake: () => void): void;

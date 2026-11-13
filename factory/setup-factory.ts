@@ -100,7 +100,9 @@ async function main() {
       minify: false,
     });
     if (!result.success || !result.outputs[0])
-      throw new Error(`Bundle failed: ${result.logs.join("\n")}`);
+      throw new Error(
+        `Bundle failed: ${result.logs.map((log) => log.message).join("\n")}`,
+      );
     const plugin = await result.outputs[0].text();
     const config = refresh
       ? null
