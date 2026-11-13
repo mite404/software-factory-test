@@ -143,3 +143,11 @@ test("COMING rows lay out a ticket's own steps and drop what does not fit", () =
   const last = first!.chips.at(-1)!;
   expect(last.x + last.width).toBeLessThanOrEqual(1233);
 });
+
+test("a tooltip cuts a brief-length title and leaves a short one whole", () => {
+  const next = feed(["working", "idle"]);
+  next.tasks[0]!.title = "x".repeat(649);
+  const [long, short] = derive(null, next, NOW).builders;
+  expect(long!.label).toBe(`T1 · ${"x".repeat(39)}… · working`);
+  expect(short!.label).toBe("T2 · ticket 2 · idle");
+});

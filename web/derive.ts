@@ -81,7 +81,10 @@ function pad<T>(items: T[], length: number): (T | undefined)[] {
 
 function describe(task: Task): string {
   const revision = task.revision ? ` · ${task.revision.slice(0, 7)}` : "";
-  return `${task.id} · ${task.title} · ${task.status}${revision}`;
+  // The tooltip is one unwrapped line, so a brief-length title is cut to fit.
+  const title =
+    task.title.length > 40 ? `${task.title.slice(0, 39)}…` : task.title;
+  return `${task.id} · ${title} · ${task.status}${revision}`;
 }
 
 function cell(task: Task | undefined): Cell {
