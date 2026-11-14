@@ -32,6 +32,26 @@ export type DefinitionPin = {
   tickets: string;
   setup?: { command: string; timeoutMs: number };
 };
+export type StopIncident = {
+  id: string;
+  ticket: string;
+  owner: ThreadID;
+  base: string;
+  attempt: number;
+  reason:
+    | "verification-rejected"
+    | "worker-blocked"
+    | "worker-error"
+    | "approval-required"
+    | "preparation-failed"
+    | "preparation-interrupted"
+    | "delivery-unknown"
+    | "creation-unknown"
+    | "target-changed"
+    | "review-identity-changed";
+  recovery: "resume" | "retry-setup" | "inspect";
+  delivery: "queued" | "sent";
+};
 export type Run = (
   | (Preparation & { kind: "preparing" })
   | (Preparation & { kind: "preparation-failed"; reason: string })
@@ -63,7 +83,7 @@ export type Run = (
       insight: string;
       review?: Review;
     }
-) & { definition?: string };
+) & { definition?: string; incident?: StopIncident };
 export type State = {
   enabled: boolean;
   owner?: ThreadID;
@@ -199,8 +219,40 @@ function definitionFields(value: unknown) {
   );
 }
 
+function validateIncident(id: string, value: unknown) {
+  if (value === undefined) return;
+  const incident = record(value);
+  const enums = {
+    delivery: ["queued", "sent"],
+    recovery: ["resume", "retry-setup", "inspect"],
+    reason: [
+      "verification-rejected",
+      "worker-blocked",
+      "worker-error",
+      "approval-required",
+      "preparation-failed",
+      "preparation-interrupted",
+      "delivery-unknown",
+      "creation-unknown",
+      "target-changed",
+      "review-identity-changed",
+    ],
+  };
+  const valid =
+    [incident.id, incident.base].every(text) &&
+    incident.ticket === id &&
+    thread(incident.owner) &&
+    Number.isSafeInteger(incident.attempt) &&
+    Number(incident.attempt) >= 0 &&
+    Object.entries(enums).every(([key, values]) =>
+      values.includes(String(incident[key])),
+    );
+  if (!valid) throw new Error(`Invalid factory incident ${id}`);
+}
+
 function validateRun(id: string, value: unknown) {
   const run = record(value);
+  validateIncident(id, run.incident);
   if (run.definition !== undefined && !validDigest(run.definition))
     throw new Error(`Invalid definition pin ${id}`);
   const validate =

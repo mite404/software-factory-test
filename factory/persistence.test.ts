@@ -225,10 +225,29 @@ test("migration preserves nonempty ownership and history exactly once across res
     '{"at":"2026-01-02T03:04:05Z","ticket":"D","action":"accepted","detail":"def"}\n';
   await writeFile(join(f.directory, "state.json"), original);
   await writeFile(join(f.directory, "events.jsonl"), history);
-  expect(await f.factory().tick("reconcile")).toEqual(parked);
+  const recovered = await f.factory().tick("reconcile");
+  expect(recovered).toMatchObject(parked);
+  expect(recovered.runs.B!.incident).toMatchObject({
+    reason: "creation-unknown",
+    recovery: "inspect",
+    owner: "T-owner",
+    delivery: "sent",
+  });
+  expect(recovered.runs.C!.incident).toMatchObject({
+    reason: "delivery-unknown",
+    recovery: "inspect",
+  });
+  expect(recovered.runs.E!.incident).toMatchObject({
+    reason: "preparation-interrupted",
+    recovery: "retry-setup",
+  });
+  expect(recovered.runs.F!.incident).toMatchObject({
+    reason: "preparation-failed",
+    recovery: "retry-setup",
+  });
   for (let i = 0; i < 2; i++)
-    expect(await f.factory().tick("reconcile")).toEqual(parked);
-  expect(f.calls()).toBe(0);
+    expect(await f.factory().tick("reconcile")).toEqual(recovered);
+  expect(f.calls()).toBe(4);
   const db = new Database(join(f.directory, "state.sqlite"));
   expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 2 });
   expect(
@@ -259,7 +278,7 @@ test("migration preserves nonempty ownership and history exactly once across res
   await writeFile(join(f.directory, "state.json"), "stale invalid legacy");
   const files = await readdir(f.directory);
   const bytes = await readFile(join(f.directory, "state.sqlite"));
-  expect((await f.factory().tick("status")).runs).toEqual(parked.runs);
+  expect((await f.factory().tick("status")).runs).toEqual(recovered.runs);
   expect(await readdir(f.directory)).toEqual(files);
   expect(await readFile(join(f.directory, "state.sqlite"))).toEqual(bytes);
 });
@@ -309,6 +328,20 @@ test.each([
     { ...parked.runs.E, attempt: 1 },
     { ...parked.runs.E, thread: "T-premature" },
     { ...parked.runs.F, reason: "" },
+    { ...parked.runs.F, incident: null },
+    {
+      ...parked.runs.F,
+      incident: {
+        id: "stop",
+        ticket: "B",
+        owner: "T-owner",
+        base: "abc",
+        attempt: 0,
+        reason: "preparation-failed",
+        recovery: "retry-setup",
+        delivery: "queued",
+      },
+    },
   ].map((run) => JSON.stringify({ enabled: true, runs: { A: run } })),
 ])(
   "invalid legacy state fails closed without overwriting bytes %s",
@@ -380,9 +413,15 @@ test("manifest removal retains the original worker and its delivery recovery", a
     thread: "T-original",
     reason: "Delivery outcome unknown; inspect thread before recovery",
   } as const;
-  expect((await f.factory().tick("reconcile")).runs.A).toEqual(expected);
-  expect((await f.factory().tick("reconcile")).runs.A).toEqual(expected);
-  expect(f.calls()).toBe(2);
+  const uncertain = (await f.factory().tick("reconcile")).runs.A;
+  expect(uncertain).toMatchObject(expected);
+  expect(uncertain!.incident).toMatchObject({
+    reason: "delivery-unknown",
+    recovery: "inspect",
+    attempt: 1,
+  });
+  expect((await f.factory().tick("reconcile")).runs.A).toEqual(uncertain);
+  expect(f.calls()).toBe(3);
 });
 
 test("disabled execution remains disabled through initialization and reopening", async () => {
@@ -421,14 +460,20 @@ test.each(["queued", "sending", "sent"] as const)(
     );
     const result = await f.factory().tick("reconcile");
     if (delivery === "sending") {
-      expect(result.runs.A).toEqual({
+      expect(result.runs.A).toMatchObject({
         kind: "uncertain",
         thread: "T-original",
         reason: "Delivery outcome unknown; inspect thread before recovery",
+        incident: {
+          reason: "delivery-unknown",
+          recovery: "inspect",
+          attempt: 2,
+          base: "abc",
+        },
       });
     } else expect(result.runs.A).toEqual({ ...run, delivery: "sent" });
     expect((await f.factory().tick("reconcile")).runs.A).toEqual(result.runs.A);
-    expect(f.calls()).toBe(delivery === "queued" ? 1 : 0);
+    expect(f.calls()).toBe(delivery === "sent" ? 0 : 1);
   },
 );
 

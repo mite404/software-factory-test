@@ -39,7 +39,12 @@ review feedback, or an answer to a question. Find its current stage and continue
 7. On rejection, return the failure to the same worker. Keep its thread, worktree, and evidence.
    Every two verification or review rejections require a Foreman escalation checkpoint, not a
    terminal attempt limit. Inspect the failed reproductions and record the next repair decision
-   with `resume`, naming the ticket. Retain the original worker and increasing attempt numbers.
+   with `resume`, naming the ticket and the current `incident` ID from factory status. Compare the
+   incident's owner, attempt, base, and recovery action with the notice before deciding. Notices
+   can repeat after ambiguous delivery. A stale notice is evidence to inspect, not a repair command.
+   Use `resume` only for incidents whose recovery action is `resume`. Use `retry-setup` for parked
+   preparation after resolving its cause. Inspect uncertain creation or delivery without repeating
+   the remote action. Retain the original worker and increasing attempt numbers.
    A paused factory still needs `start` after `resume`. Every candidate must pass its normal gates;
    escalation never grants acceptance. Delivery uncertainty, executor recovery, changed
    requirements, permission decisions, and integration conflicts require resolution before

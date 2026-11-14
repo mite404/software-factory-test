@@ -27,8 +27,14 @@ import {
   type Task,
   type Run,
   type DefinitionPin,
+  type StopIncident,
   type State,
 } from "./persistence";
+
+const activityReasons = {
+  error: "worker-error",
+  "awaiting-approval": "approval-required",
+} as const;
 
 /** The existing poteto store supplies the cross-process lock and revision ledger. */
 export type Bookkeeping = {
@@ -724,6 +730,62 @@ function retryAdmission(state: State, action: string) {
   return true;
 }
 
+function checkpointIdentity(run?: Run) {
+  if (!run) return undefined;
+  const checkpoint =
+    run.kind === "blocked" ? (run.repair ?? run.checkpoint) : run;
+  if (!checkpoint || !("base" in checkpoint)) return undefined;
+  return {
+    base: checkpoint.base,
+    attempt: "attempt" in checkpoint ? checkpoint.attempt : 0,
+  };
+}
+
+function stoppedRun(
+  run: Run,
+  reason?: StopIncident["reason"],
+): [StopIncident["reason"], StopIncident["recovery"]] | undefined {
+  if (run.kind === "blocked")
+    return [
+      reason ?? (run.repair ? "verification-rejected" : "worker-blocked"),
+      run.repair || run.checkpoint ? "resume" : "inspect",
+    ];
+  if (run.kind === "preparation-failed")
+    return ["preparation-failed", "retry-setup"];
+  if (run.kind === "uncertain") return ["delivery-unknown", "inspect"];
+  return undefined;
+}
+
+function interruptedRun(run: Run): StopIncident["reason"] | undefined {
+  if (run.kind === "creating") return "creation-unknown";
+  if (run.kind === "preparing") return "preparation-interrupted";
+  if (run.kind !== "running") return undefined;
+  if ([run.delivery, run.review?.delivery].includes("sending"))
+    return "delivery-unknown";
+  if (run.review?.delivery === "creating") return "creation-unknown";
+  return undefined;
+}
+
+function requireIncident(
+  notice: StopIncident | undefined,
+  expected: {
+    id: string | undefined;
+    owner: ThreadID | undefined;
+    ticket: string;
+    attempt: number;
+    base: string;
+  },
+) {
+  if (
+    !notice ||
+    notice.recovery !== "resume" ||
+    !Object.entries(expected).every(
+      ([key, value]) => notice[key as keyof StopIncident] === value,
+    )
+  )
+    throw new Error("Resume requires the exact current stop incident");
+}
+
 /** Create the sequential dispatcher. Unknown remote effects are parked, never retried blindly. */
 export function createFactory(
   root: string,
@@ -768,11 +830,12 @@ export function createFactory(
     action: "start" | "pause" | "reconcile" | "retry-setup" | "resume",
     owner?: ThreadID,
     observe: NativeHost["state"] = host.state,
-    repairRequest?: { ticket: string; decision: string },
+    repairRequest?: { ticket: string; decision: string; incident: string },
   ) {
     await mkdir(directory, { recursive: true });
     const store = openStore(join(directory, "bookkeeping"));
     let persistence: ReturnType<typeof openPersistence> | undefined;
+    let flushNotices = async () => {};
     try {
       await store.init();
       const config = await effectiveConfiguration(root);
@@ -781,10 +844,116 @@ export function createFactory(
       persistence = openPersistence(directory, queue);
       const state = persistence.state;
       restoreTickets(queue, persistence.tickets, state);
-      const commit = (ticket: string, action: string, detail: string) =>
-        persistence!.commit(state, ticket, action, detail);
+      let savedRuns = structuredClone(state.runs);
+      function incident(
+        ticket: string,
+        run: Run,
+        reason: StopIncident["reason"],
+        recovery: StopIncident["recovery"],
+      ) {
+        if (!state.owner || run.incident?.reason === reason) return false;
+        const source = checkpointIdentity(run) ??
+          checkpointIdentity(savedRuns[ticket]) ?? {
+            base: persistence!.lastEvent(ticket, "creating") ?? "unknown",
+            attempt: 0,
+          };
+        run.incident = {
+          id: randomUUID(),
+          ticket,
+          owner: state.owner,
+          ...source,
+          reason,
+          recovery,
+          delivery: "queued",
+        };
+        return true;
+      }
+      function commit(
+        ticket: string,
+        action: string,
+        detail: string,
+        reason?: StopIncident["reason"],
+      ) {
+        const run = state.runs[ticket];
+        if (run && !run.incident) {
+          const stop = stoppedRun(run, reason);
+          if (stop) incident(ticket, run, ...stop);
+        }
+        try {
+          persistence!.commit(state, ticket, action, detail);
+        } catch (error) {
+          // A failed transition must not be repersisted by notice recovery.
+          flushNotices = async () => {};
+          throw error;
+        }
+        savedRuns = structuredClone(state.runs);
+      }
+      function parkedIncidents() {
+        for (const [ticket, run] of Object.entries(state.runs)) {
+          if (run.incident) continue;
+          let stop = stoppedRun(run);
+          const reason = interruptedRun(run);
+          if (reason)
+            stop = [
+              reason,
+              reason === "preparation-interrupted" ? "retry-setup" : "inspect",
+            ];
+          if (stop && incident(ticket, run, ...stop))
+            commit(
+              ticket,
+              "stop-recorded",
+              "Recovery requires Foreman diagnosis",
+            );
+        }
+      }
+      flushNotices = async () => {
+        parkedIncidents();
+        for (const [ticket, run] of Object.entries(state.runs)) {
+          const notice = run.incident;
+          if (!notice || !state.owner) continue;
+          if (notice.owner !== state.owner) {
+            notice.owner = state.owner;
+            notice.id = randomUUID();
+            notice.delivery = "queued";
+            commit(ticket, "notice-reassigned", notice.id);
+          }
+          if (notice.delivery !== "queued") continue;
+          try {
+            await host.send(
+              notice.owner,
+              `Factory stop ${notice.id}. Ticket ${ticket}, attempt ${notice.attempt}, base ${notice.base}. Reason: ${notice.reason}. Recovery: ${notice.recovery}. Read current factory status and private evidence before deciding. ${notice.recovery === "resume" ? `Only the owning Foreman may resume with ticket ${ticket}, incident ${notice.id}, and a diagnosis decision. A paused factory stays paused.` : "Inspect and resolve this stop; this notice does not authorize resume or grant permission."}`,
+            );
+            notice.delivery = "sent";
+            commit(ticket, "notice-sent", notice.id);
+          } catch (error) {
+            notice.delivery = "queued";
+            persistence!.event(
+              ticket,
+              "notice-delivery-unknown",
+              String(error),
+            );
+          }
+        }
+      };
       stateCache = state;
       controlState(state, action, config.execute, owner);
+      async function adoptLegacyCheckpoints() {
+        for (const task of queue) {
+          const run = state.runs[task.id];
+          if (run?.kind === "blocked" && !run.repair && !run.checkpoint) {
+            try {
+              const checkpoint = await repairCheckpoint(task, run);
+              if (checkpoint.attempt === 2) run.repair = checkpoint;
+              else run.checkpoint = checkpoint;
+              delete run.incident;
+            } catch {
+              // Missing legacy evidence permits diagnosis only, never inferred repair.
+            }
+          }
+        }
+      }
+      await adoptLegacyCheckpoints();
+      parkedIncidents();
       function acceptInitialDefinition() {
         if (
           !state.enabled ||
@@ -889,8 +1058,13 @@ export function createFactory(
       async function resumeRepair() {
         if (!config.execute || text(owner) !== state.owner)
           throw new Error("Only the Foreman may resume an authorized repair");
-        const ticket = text(repairRequest?.ticket);
-        const decision = text(repairRequest?.decision);
+        const request = repairRequest ?? {
+          ticket: "",
+          decision: "",
+          incident: "",
+        };
+        const ticket = text(request.ticket);
+        const decision = text(request.decision);
         const task = queue.find((task) => task.id === ticket);
         const blocked = state.runs[ticket];
         if (!task || blocked?.kind !== "blocked")
@@ -906,9 +1080,17 @@ export function createFactory(
             "Resolve active or uncertain work before resuming a repair",
           );
         const repair = await repairCheckpoint(task, blocked);
+        requireIncident(blocked.incident, {
+          id: request.incident,
+          owner,
+          ticket,
+          attempt: repair.attempt,
+          base: repair.base,
+        });
         await verifyRepair(repair);
         state.runs[ticket] = {
           ...repair,
+          incident: undefined,
           attempt: repair.attempt + 1,
           delivery: "queued",
           feedback: `${blocked.reason}\nForeman decision: ${decision}`,
@@ -997,7 +1179,7 @@ export function createFactory(
             thread: run.thread,
             reason: "Integration target changed; reconcile before landing",
           };
-          commit(task.id, "blocked", "target-changed");
+          commit(task.id, "blocked", "target-changed", "target-changed");
           return;
         }
         if (target !== revision) git(root, "merge", "--ff-only", revision);
@@ -1061,7 +1243,7 @@ export function createFactory(
             reason: `Verification rejected attempt ${run.attempt}; Foreman escalation required: ${evidence}`,
             repair: run,
           };
-          commit(task.id, "escalated", evidence);
+          commit(task.id, "escalated", evidence, "verification-rejected");
         }
         if (state.runs[task.id]?.kind === "running") {
           await send(
@@ -1112,7 +1294,7 @@ export function createFactory(
             thread: run.thread,
             reason: "Integration target changed; reconcile before landing",
           };
-          commit(task.id, "blocked", "target-changed");
+          commit(task.id, "blocked", "target-changed", "target-changed");
           return;
         }
         const model = reviewerModel(run.workerModel);
@@ -1163,6 +1345,26 @@ export function createFactory(
         await deliverReview(task, run);
       }
 
+      async function reviewIdle(
+        task: Task,
+        run: Extract<Run, { kind: "running" }>,
+      ) {
+        const activity = await observe(run.review!.thread!);
+        if (activity === "error" || activity === "awaiting-approval") {
+          const created = incident(
+            task.id,
+            run,
+            activityReasons[activity],
+            "inspect",
+          );
+          if (created) commit(task.id, "review-stopped", activity);
+        } else if (activity !== "unknown" && run.incident) {
+          delete run.incident;
+          commit(task.id, "review-recovered", activity);
+        }
+        return activity === "idle";
+      }
+
       async function settleReview(
         task: Task,
         run: Extract<Run, { kind: "running" }>,
@@ -1181,10 +1383,15 @@ export function createFactory(
             reason:
               "Reviewed candidate or integration base changed; revalidate before landing",
           };
-          commit(task.id, "blocked", "review-identity-changed");
+          commit(
+            task.id,
+            "blocked",
+            "review-identity-changed",
+            "review-identity-changed",
+          );
           return;
         }
-        if ((await observe(review.thread!)) !== "idle") return;
+        if (!(await reviewIdle(task, run))) return;
         const verdict = await reviewVerdict(review);
         if (!verdict) return;
         review.evidence = verdict.evidence;
@@ -1218,6 +1425,7 @@ export function createFactory(
           state.runs[task.id] = {
             kind: "uncertain",
             definition: run.definition,
+            incident: run.incident,
             thread: run.thread,
             reason: "Delivery outcome unknown; inspect thread before recovery",
           };
@@ -1238,7 +1446,7 @@ export function createFactory(
             reason: `Worker ${activity}; inspect before resuming`,
             checkpoint: run,
           };
-          commit(task.id, "blocked", activity);
+          commit(task.id, "blocked", activity, activityReasons[activity]);
           return;
         }
         const report = await currentReport(directory, task, run.attempt);
@@ -1441,8 +1649,12 @@ export function createFactory(
       if (!(await settleRuns())) await dispatchNext();
       return state;
     } finally {
-      persistence?.close();
-      await store.close();
+      try {
+        await flushNotices();
+      } finally {
+        persistence?.close();
+        await store.close();
+      }
     }
   }
 

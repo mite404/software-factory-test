@@ -174,7 +174,12 @@ test("plugin and HTTP keep private briefs and native titles out of public titles
     ).rejects.toThrow(/worker/);
     expect(
       execute(
-        { action: "resume", ticket: "native", decision: "Override" },
+        {
+          action: "resume",
+          ticket: "native",
+          decision: "Override",
+          incident: "stale",
+        },
         worker,
       ),
     ).rejects.toThrow(/Workers/);
@@ -305,6 +310,8 @@ test.each([
       let creates = 0;
       const models: Parameters<PluginAPI["createAgent"]>[0][] = [];
       const sends: string[] = [];
+      const notices: string[] = [];
+      let noticeFails = false;
       const ledger: string[] = [];
       let disconnected = false;
       let readFails = false;
@@ -316,7 +323,12 @@ test.each([
       let fallbackFails = false;
       let fallbackCalls = 0;
       let execute!: (
-        input: { action: string; ticket?: string; decision?: string },
+        input: {
+          action: string;
+          ticket?: string;
+          decision?: string;
+          incident?: string;
+        },
         ctx: PluginToolContext,
       ) => Promise<unknown>;
       const subscription = () => {
@@ -340,8 +352,12 @@ test.each([
         threads: {
           get(id: string) {
             return {
-              async appendUserMessage() {
-                sends.push(id);
+              async appendUserMessage(message: { content: string }) {
+                if (id === "T-owner") {
+                  notices.push(message.content);
+                  if (noticeFails)
+                    throw new Error("Append acknowledgment lost");
+                } else sends.push(id);
               },
               get state() {
                 if (disconnected)
@@ -520,6 +536,7 @@ test.each([
         });
         expect(sends).toEqual(["T-worker", "T-worker"]);
         if (gate === "escalation") {
+          noticeFails = true;
           await writeFile(
             reportPath,
             JSON.stringify({
@@ -536,7 +553,24 @@ test.each([
             action: "resume",
             ticket: "A",
             decision: "Repair the checked value",
+            incident: (await control("status")).runs.A!.incident!.id,
           };
+          expect(notices).toEqual([expect.stringContaining(request.incident)]);
+          expect((await control("status")).runs.A.incident.delivery).toBe(
+            "queued",
+          );
+          expect(notices).toHaveLength(1);
+          noticeFails = false;
+          dispose();
+          load();
+          await control("reconcile");
+          expect(notices).toEqual([notices[0]!, notices[0]!]);
+          expect((await control("status")).runs.A.incident.delivery).toBe(
+            "sent",
+          );
+          expect(
+            execute({ ...request, incident: "stale" }, ctx),
+          ).rejects.toThrow(/exact current/);
           expect(execute({ action: "resume" }, ctx)).rejects.toThrow(
             /ticket and decision/,
           );
@@ -769,6 +803,7 @@ test("setup recovery control preserves durable failure and compatible observatio
     );
     let creates = 0;
     let sends = 0;
+    const notices: string[] = [];
     let execute!: (
       input: { action: string },
       ctx: PluginToolContext,
@@ -784,10 +819,11 @@ test("setup recovery control preserves durable failure and compatible observatio
         };
       },
       threads: {
-        get() {
+        get(id: string) {
           return {
-            async appendUserMessage() {
-              sends++;
+            async appendUserMessage(message: { content: string }) {
+              if (id === "T-owner") notices.push(message.content);
+              else sends++;
             },
             state: {
               async get() {
@@ -843,9 +879,11 @@ test("setup recovery control preserves durable failure and compatible observatio
     );
     expect(creates).toBe(0);
     expect(sends).toBe(0);
+    expect(notices).toEqual([expect.stringContaining("Recovery: retry-setup")]);
     dispose();
     load();
     expect((await control("reconcile")).runs.A).toEqual(failed);
+    expect(notices).toHaveLength(1);
     expect(await observed("blocked")).toMatchObject({
       status: "blocked",
       thread: null,
