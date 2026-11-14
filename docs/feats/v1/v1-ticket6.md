@@ -6,7 +6,7 @@
 - Initial priority: P0. Effort: Medium. Risk: elevated; incomplete backups could permit data loss.
 - Depends on: canonical Feature 05, v1-ticket5.
 - Planned at: `62816cf8a6c8c282172754c4a97242e5a4a9eab1`, 2026-11-13.
-- Backlog: F05. Local only; pending adoption and lessons.
+- Backlog: F05. Local only; backup adoption is merged, evidence and lessons remain prerequisites.
 
 ## Why this matters
 
@@ -15,7 +15,7 @@ restoration and safe worker retirement.
 
 ## Current state
 
-Feature 05's candidate snapshots SQLite and a manifest. Current canonical source has not adopted it.
+The adopted Feature 05 command snapshots SQLite and a manifest and is merged through PR #3.
 Evidence layout will be defined by v1-ticket4; do not guess file names before that lands.
 
 ## Approach
@@ -51,7 +51,7 @@ A backup receipt must prove the accepted outcome's artifacts, not merely that so
 
 | Path                                          | Role              | Contains                        | Edit or Read        |
 | --------------------------------------------- | ----------------- | ------------------------------- | ------------------- |
-| `factory/backup.ts`, `factory/backup.test.ts` | Adopted backup    | Proposed accepted command paths | Edit after adoption |
+| `factory/backup.ts`, `factory/backup.test.ts` | Adopted backup    | Accepted command paths          | Edit                |
 | `factory/persistence.ts`                      | Private records   | Evidence and lessons            | Read                |
 | `factory/native.ts`, `factory/plugin.ts`      | Checkpoints       | Authorized requests             | Edit                |
 | `factory/README.md`                           | Operator contract | Coverage and last confirmation  | Edit                |

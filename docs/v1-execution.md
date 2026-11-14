@@ -5,22 +5,19 @@ a scope inventory, not acceptance evidence or authorization for external actions
 
 ## Count and order
 
-The inventory contains 32 acceptance units: 27 bounded tickets and five reused tickets. Two units,
-v1-ticket1 and backup-adoption-ticket1, are accepted in the native factory; 30 remain. The additions
-implement reliable Foreman supervision and planned intake. Feature numbers describe areas, not
-dispatch IDs. Every unit below uses its canonical dispatch ID; the backup unit retains its original
-scoped ticket file.
+The inventory contains 29 remaining acceptance units from the original 32. Public-title privacy
+(v1-ticket1), canonical backup adoption (backup-adoption-ticket1), and the versioned definition
+(v1-ticket2) are accepted natively and no longer appear as implementation work below. Historical
+ticket files remain as evidence. Feature numbers describe areas, not dispatch IDs.
 
-Backup adoption is accepted; next come definition, watchdog and safe admission. Then prioritize
-evidence, gates, recovery and native execution. Services and frontend acceptance follow those
-foundations. This postpones frontend work without dropping any v1 requirement. Dependencies are
-acceptance prerequisites, not permission to dispatch every draft against today's base.
+The definition candidate still needs parent integration and combined verification. Its dependents
+remain blocked until then. Next come watchdog and safe admission, followed by evidence, gates,
+recovery, and native execution. Service packaging and remaining frontend acceptance follow those
+foundations. Dependencies are acceptance prerequisites, not permission to dispatch every draft
+against today's base.
 
 | Unit                                                                                    | Outcome                                       | Prerequisites                                                            | Requirements                      |
 | --------------------------------------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------ | --------------------------------- |
-| [v1-ticket1](feats/v1/v1-ticket1.md)                                                    | Keep private briefs out of public titles      | Accepted observation API                                                 | F07, R9, AC17                     |
-| [backup-adoption-ticket1](features/feature-05/feature-05-impl.md)                       | Adopt preserved backup command                | Current native gates                                                     | F05, AC22, AC25                   |
-| [v1-ticket2](feats/v1/v1-ticket2.md)                                                    | Versioned definition and explicit migration   | backup-adoption-ticket1                                                  | F12, AC26-AC28                    |
 | [foreman-watchdog-ticket1](feats/foreman-watchdog/foreman-watchdog-ticket1.md)          | Durable Foreman wake-up and incident identity | v1-ticket2                                                               | F03, owner-approved supervision   |
 | [foreman-watchdog-ticket2](feats/foreman-watchdog/foreman-watchdog-ticket2.md)          | Progress-based nudges and alert intent        | foreman-watchdog-ticket1                                                 | F03, owner-approved supervision   |
 | [foreman-watchdog-ticket3](feats/foreman-watchdog/foreman-watchdog-ticket3.md)          | Outside-orb wake-up and alert delivery        | foreman-watchdog-ticket2                                                 | F03, owner-approved supervision   |
@@ -45,7 +42,7 @@ acceptance prerequisites, not permission to dispatch every draft against today's
 | [v1-ticket20](feats/v1/v1-ticket20.md)                                                  | Authorized usage observations                 | v1-ticket2, v1-ticket18                                                  | F13, AC33                         |
 | [v1-ticket3](feats/v1/v1-ticket3.md)                                                    | Repeat-safe repository services               | v1-ticket2                                                               | F01, AC13-AC16, AC20              |
 | [v1-ticket23](feats/v1/v1-ticket23.md)                                                  | Curated lifecycle feed and replay             | v1-ticket1, v1-ticket4, planned-intake-ticket1, foreman-watchdog-ticket2 | F07, R9, AC17                     |
-| [v1-ticket13](feats/v1/v1-ticket13.md)                                                  | Workbench evidence and actual lifecycle       | v1-ticket23, frontend merge                                              | F08, AC17, AC20                   |
+| [v1-ticket13](feats/v1/v1-ticket13.md)                                                  | Workbench evidence and actual lifecycle       | v1-ticket23                                                              | F08, AC17, AC20                   |
 | [v1-ticket14](feats/v1/v1-ticket14.md)                                                  | Protected dashboard backup command            | v1-ticket6, v1-ticket13                                                  | F09, AC25                         |
 | [v1-ticket16](feats/v1/v1-ticket16.md)                                                  | Steering replies and delivery UI              | v1-ticket13, v1-ticket15                                                 | F10, R14                          |
 | [v1-ticket21](feats/v1/v1-ticket21.md)                                                  | Read-only effectiveness views                 | v1-ticket13, v1-ticket19, v1-ticket20                                    | F13, AC30-AC34                    |
@@ -54,11 +51,11 @@ acceptance prerequisites, not permission to dispatch every draft against today's
 ## Runtime admission
 
 This ordered backlog is not the runtime queue. Until planned-intake-ticket1 lands, copying draft
-units into `.factory-tickets.json` would make them dispatchable. Retain accepted records and admit
-only v1-ticket2 next, then each newly scoped ready unit in the order above. Never change an active
-candidate's pinned base. Frontend entries are not next. After planned intake is accepted, persist
-all remaining units as planned under these canonical IDs. Promotion still needs a Foreman admission
-decision and accepted prerequisites.
+units into `.factory-tickets.json` would make them dispatchable. Retain accepted records. Integrate
+accepted v1-ticket2 without redispatching implementation, then admit each newly scoped ready unit
+in the order above. Never change an active candidate's pinned base. Frontend entries are not next.
+After planned intake is accepted, persist all remaining units as planned under these canonical IDs.
+Promotion still needs a Foreman admission decision and accepted prerequisites.
 
 ## Execution contract shared by these tickets
 
@@ -70,8 +67,8 @@ Foreman checkpoint, not abandonment or automatic replacement.
 
 Use existing modules before adding files. Future module names in tickets are proposals, not claims
 of installed APIs. Revalidate the effective definition and allowed paths after dependencies land.
-Keep frontend ownership with the pipeline-view thread until its integration is accepted. Frontend
-tickets below specify its acceptance work, not permission for a second concurrent writer.
+The pipeline-view integration is merged. Frontend tickets below cover remaining acceptance and
+evidence work, not another frontend implementation or permission for concurrent writers.
 
 No live remote pushes, private-repository provisioning, external ticket filing, production writes,
 deployments, or worker-orb deletion are authorized. The approved watchdog scope permits its owned
@@ -110,12 +107,15 @@ work, also render and inspect affected states and record changed interactions.
 
 The privacy regression passed native gates, cold review, and parent verification with 127 tests.
 Public titles now use ticket IDs and review labels, not private briefs or observed thread titles.
-Canonical backup adoption passed fresh cold review at attempt six and landed as `b649c8a` in the
-native factory. Full gates and guard passed again before next intake, with 129 tests. Transfer to
-the parent source checkout remains pending; neither checkout has been pushed. The older candidate
-remains preserved at `fb46845e` in its original fixture. Keep both backup owners until preservation
-and parent transfer are confirmed. Definition v1-ticket2 is next, followed by the three watchdog
-tickets and safe planned intake.
+Canonical backup adoption passed fresh cold review at attempt six. Backup, privacy, and dashboard
+integration are merged through [PR #3](https://github.com/mite404/software-factory-test/pull/3).
+The combined local gate passed 140 tests and all required checks; post-merge main CI passed.
+
+Definition [v1-ticket2](feats/v1/v1-ticket2.md) passed native gates and fresh cold review at attempt
+four on candidate `901ae38e20fc3517170b43c8b9bea78f6920add1`. It is accepted in the dogfood
+repository, not integrated into parent source. Integrate that candidate and verify combined behavior
+before the three watchdog tickets and safe planned intake. Keep preserved backup owners until
+required evidence preservation is confirmed. Native acceptance does not authorize retirement.
 
 Local sequential steel-thread evidence exists in workflow trials 8 and 9 and subsequent native
 acceptances. Cross-orb transfer, replacement restore, remote monitoring, and retirement still need
@@ -126,11 +126,11 @@ their own proof. This inventory does not change that delivery state.
 The pipeline-view owner requested twelve backend capabilities. Map them to this inventory rather
 than adding a parallel feed or allowing browser inference:
 
-- Stable daily feed access: v1-ticket3's co-located supervised same-origin service. The temporary
-  cross-orb signed-in relay is a development connection, not permanent service authentication.
-- A pushed branch: still requires owner authorization; the verified bundle preserves history now.
+- Same-origin dashboard and API integration: merged in PR #3. Repeat-safe repository service
+  packaging remains v1-ticket3; a running supervised orb service does not complete that scope.
+- A pushed branch and frontend history integration: satisfied by merged PR #3.
 - Next-dispatch notice: coordinator sends it when actual native dispatch occurs.
-- Short safe titles: v1-ticket1. A ticket ID is safer than truncated private briefing text.
+- Short safe titles: accepted v1-ticket1. A ticket ID replaces private briefing text.
 - Stage, check outcomes, review outcome, recorded skip reason, attempt, blocked reason, event
   replay, report receipts, and escalation references: v1-ticket23, sourced from durable transitions.
 - Full gate runs: existing scheduled-gates-ticket1. Its box remains planned until acceptance.

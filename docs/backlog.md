@@ -4,95 +4,66 @@ Updated 2026-11-14. These are local user stories, not filed Linear tickets. No s
 remote provisioning, pushes, application delivery, or worker deletion. Status describes observed
 implementation, not acceptance of the design. See [PRD](prd.md) and [decisions](adr.md).
 
-The [remaining v1 execution inventory](v1-execution.md) scopes 32 acceptance units, including 27
-bounded tickets and five reused tickets. It is the current dispatch/dependency plan; historical
-feature stories below retain their evidence and may describe superseded sequencing. Public-title
-privacy (v1-ticket1) and canonical backup adoption are accepted natively; 30 remain. No extra
-execution or remote permission is granted by the inventory.
+This backlog lists remaining work only. Completed installation basics, worker effort, SQLite
+ownership, native cold review, worktree preparation (F14), repair escalation, launcher recovery,
+title privacy, the backup command, and the first live dashboard are not new implementation tasks.
+Their contracts and evidence remain in [factory/README.md](../factory/README.md), the linked ticket
+records, and [workflow trials](workflow-trials.md). The integrated source and dashboard shipped in
+[PR #3](https://github.com/mite404/software-factory-test/pull/3), with 140 local tests passing and
+successful PR and post-merge CI.
+
+The [remaining v1 execution inventory](v1-execution.md) retains 29 implementation/acceptance units
+from the original 32. Public-title privacy, canonical backup adoption, and definition v1-ticket2 are
+accepted natively. Definition still needs parent integration and combined verification before its
+dependents can start. Historical feature tickets retain their original scope; they are not the
+active queue. No extra execution or remote permission is granted by the inventory.
 
 Core-first order after accepted backup adoption: definition v1-ticket2, three
 [Foreman watchdog tickets](feats/foreman-watchdog/foreman-watchdog-ticket1.md), then
 [safe planned intake](feats/planned-intake/planned-intake-ticket1.md). Evidence, gates, recovery and
 native execution follow; service/frontend acceptance comes afterward. The owner approved this
 priority and the watchdog's owned Amp schedule/user alerts, not unrelated external infrastructure.
-Only definition v1-ticket2 is next for runtime admission. Full ordering and admission rules live in
-the inventory, not in these older feature narratives.
+Integrate the accepted definition before admitting its dependents. Full ordering and admission
+rules live in the inventory, not in these older feature narratives.
 
 ## F01 - Install the factory as a repository service
 
 As an operator, I can install and check the factory in an existing repo without changing my app or
 starting workers, so I can adopt it project by project.
 
-Priority: P0. Dependencies: none. Status: install and explicit refresh verified locally; service
-packaging incomplete.
+Priority: P0. Dependencies: integrated definition. Remaining unit: v1-ticket3. Repeat-safe setup,
+check-only mode, adapter refresh, and same-origin dashboard hosting are implemented.
 
-First bounded ticket: [feature 01 story](features/feature-01/feature-01-story.md) and
-[worker implementation ticket](features/feature-01/feature-01-impl.md). Expand later backlog items
-into the same paired format when they become the next implementation unit.
-
-The [feature 02 story](features/feature-02/feature-02-story.md) and
-[implementation ticket](features/feature-02/feature-02-impl.md) add explicit worker effort before
-further implementation. Implementation workers use Sol 6.1 at medium effort, one child at a time.
-Luna remains available for inexpensive workflow fixtures.
-
-The [feature 06 story](features/feature-06/feature-06-story.md) and
-[implementation ticket](features/feature-06/feature-06-impl.md) add conditional cold post-graft
-review. This is the accepted workflow prerequisite, not backlog F06 restore. Scope: Large. Blast
-radius: elevated, because reviewer ownership, acceptance, retries, and SQLite recovery must agree.
-Prove that absent or stale review cannot land work or dispatch a dependent, including reload. Its
-live rejection/repair lifecycle passed trial 9; backup/restore acceptance remains separate.
-
-- Setup preserves app files, guidance, configuration, and existing runtime data on repeat runs.
-- Install the coordinator adapter and dashboard service alongside the project, with documented start
-  commands and Amp supervised service configuration.
-- Check mode reports missing prerequisites without writes or model calls. Execution remains off.
-- The same installation works in two disposable repos without source edits or remote provisioning.
+- Package coordinator and dashboard startup as repeat-safe repository services, not a one-off orb
+  service invocation. Preserve the existing setup and permission guarantees.
+- Prove the packaged services in two disposable repositories without source edits or provisioning.
 
 ## F02 - Persist coordinator state in SQLite
 
 As an operator, I can restart the factory without losing its queue, ownership, or history, so
 recovery does not depend on a model remembering the previous conversation.
 
-Priority: P0. Dependencies: F01. Status: core SQLite persistence and legacy migration verified in
-[Feature 04](features/feature-04/feature-04-impl.md). Evidence and lessons still use existing
-storage.
+Priority: P0. Dependencies: integrated definition. Core SQLite ownership, atomic events, legacy
+migration, and ambiguous-operation recovery are implemented. Remaining unit: v1-ticket4.
 
-- Use Bun SQLite with versioned migrations and separate records for projects, tickets, worker runs,
-  events, evidence, and lessons. Preserve explicit thread and revision correlation.
-- Persist each state transition and its event atomically. Enforce unique ticket claims.
-- Migrate existing prototype records without erasing them. Invalid or incompatible data fails
-  visibly rather than becoming an empty database.
-- Restart reconciliation does not repeat ambiguous creation, message delivery, or integration.
-- Live database files and journals remain git-ignored; public application history stays clean.
+- Preserve private, revision-bound evidence outside disposable worker storage, with protected
+  references and schema migration. Existing coordinator tables do not preserve external artifacts.
+- Retain structured lessons through F04. Preserve existing atomic transitions, unique claims,
+  corruption refusal, and private-storage boundaries when extending the schema.
 
 ## F03 - Connect the coordinator to Amp
 
 As an operator, I can bind the factory to one orchestrator thread and observe its workers, so
 execution and the dashboard agree about which agents own the work.
 
-Priority: P0. Dependencies: F01, F02. Status: native local-worker adapter prototype only. Feature 02
-model and effort forwarding and Feature 03 explicit disconnected-worker reconciliation passed live
-acceptance. The status fallback uses a supported Amp tool without model calls. Verification is
-asynchronous so it does not starve the plugin heartbeat. Automatic local executor reattachment
-remains unimplemented; resuming the same disconnected worker required authorized CLI continuation.
-Idle remains an observation, not acceptance. The F14 cold reviewer also lost its executor after the
-coordinator CLI received SIGTERM on 2026-11-13 at 15:04 UTC. Authorized CLI recovery later produced
-a verdict; observation reattachment alone did not reconnect its tools. Why the coordinator CLI was
-terminated remains unverified.
+Priority: P0. Dependencies: F01, F02. Local dispatch, model and effort, native observations,
+observer reattachment, asynchronous gates, cold review, same-worker repairs, and Foreman escalation
+are implemented. Observation reattachment is not executor recovery.
 
-- Store one orchestrator thread ID per project. V1 does not offer an arbitrary thread selector.
-- Observe native Amp thread state and titles without model calls. Distinguish idle, running,
-  awaiting approval, and errors from acceptance.
-- Use Amp-native event subscriptions and supported APIs, independent of model or provider. Do not
-  depend on Claude hooks, provider-specific payloads, or parsing assistant prose for lifecycle
-  state.
-- Reattach observations on restart and distinguish unavailable observations from idle workers.
-- For separate worker orbs, prove exact code transfer and return of revision-bound evidence.
-  Existing local worktree trials do not prove cross-orb execution.
-- Dispatch remains permission-gated and sequential. Recovery retains the same worker on rejection.
-- Every two failed candidates require a recorded Foreman decision, not a terminal attempt limit.
-  [Repair escalation](feats/repair-escalation/repair-escalation-ticket1.md) has passed local gates;
-  native same-worker repair and fresh cold review are accepted and integrated locally.
+- Implement supported executor reconnection and prove exact cross-orb code/evidence transfer in
+  v1-ticket10 and v1-ticket9. A disconnected worker must not be replaced because tools are absent.
+- Add durable Foreman wake-up, stall diagnosis, nudges, and permitted alerts through the three
+  watchdog tickets. An observer subscription alone does not supervise the Foreman.
 
 ## F04 - Retain phase lessons
 
@@ -112,17 +83,14 @@ Priority: P1. Dependencies: F02, F03. Status: planned; dependency insight protot
 As an operator, I can run `factory backup` to save a project snapshot in a private GitHub repo, so
 my application can remain public without publishing project memory.
 
-Priority: P0. Dependencies: F02. Status: local backup candidate preserved; refresh against current
-prerequisites and canonical integration remain pending. No private repo has been provisioned.
+Priority: P0. Dependencies: F02, F04. CLI and native-tool backup are accepted and merged.
+Private destination checks, isolated project keys, consistent SQLite snapshots, separate permission,
+serialized/no-op publication, receipts, and uncertain-push reconciliation are implemented.
 
-- Configure a private state repo and a stable project key. Several projects may share that repo.
-- Require backup permission separately from application publishing permission. Credentials stay
-  server-side and are not included in snapshots or worker briefs.
-- Create a consistent SQLite snapshot, including project identity, schema, and source revisions.
-  Preserve required private evidence alongside it or through durable protected references.
-- Serialize requests. No-op unchanged snapshots; never force-push or merge conflicting databases.
-- Confirm the remote commit before reporting success. Ambiguous outcomes are reconciled first.
-- Show pending, failed, and last-confirmed backup state; disclose that later local work is unbacked.
+- Extend snapshots to preserve required private evidence and lessons, including authorized phase
+  checkpoints and exact preservation coverage. Remaining unit: v1-ticket6.
+- Keep live private-remote acceptance explicitly pending until separately authorized. Disposable
+  local Git remotes prove command behavior, not production publication or replacement-orb recovery.
 
 ## F06 - Restore safely in a replacement orchestrator orb
 
@@ -146,34 +114,27 @@ Priority: P0. Dependencies: F02, F03, F05. Status: planned.
 As the dashboard, I can read a small project snapshot through the coordinator, so refreshing the
 page needs neither model calls nor direct worker or filesystem access.
 
-Priority: P0. Dependencies: F02, F03. Status: SQLite-backed read-only projection accepted in local
-dogfood, including cold review and same-worker repair. See [trial 9](workflow-trials.md). Evidence
-browsing and cross-orb proof remain pending.
+Priority: P0. Dependencies: F02, F03. The SQLite-backed read-only API, curated review references,
+safe ticket-ID titles, freshness handling, and same-origin built frontend are accepted and merged.
 
-- Return allowed fields for tickets, accurate titles, thread links, revisions, activity, evidence,
-  and observation time. Do not return raw database files, private config, or credentials.
-- A missing or stale source is explicit and never reported as current activity.
-- Use an authenticated Amp portal and same-origin API requests. Development may use a Vite proxy;
-  the built frontend needs no separate Vite process.
-- Expose explicit commands separately from reads. Reject arbitrary state mutations and file paths.
+- Add explicit lifecycle stages, gate outcomes, review/skip decisions, durable attempt/checkpoint
+  identity, and bounded missed-poll replay through v1-ticket23.
+- Project accepted planned-intake and watchdog facts without read side effects. Expose private
+  evidence only through the protected references from v1-ticket4, never raw reports or secrets.
 
 ## F08 - Show the abstract factory workbench
 
 As an operator, I can see named work and its status in a minimal animated pipeline, so I can
 understand activity without reading every thread.
 
-Priority: P1. Dependencies: F07. Status: first frontend browser-verified against disposable state
-and labeled samples. The SQLite API passed trial 9; full evidence views remain pending.
+Priority: P1. Dependencies: F07. The live pipeline, builder/accepted-work links, labeled replay,
+attempt label, status colors, freshness handling, and reduced-motion support are merged. Pending
+review keeps its doors closed with looping mist and releases a packet once on an observed outcome.
 
-- Show builders, handoff, serialized integration, accepted work, and the same-owner correction path.
-- Actual ticket, commit, PR, and thread names come from recorded sources where available. Do not
-  invent missing names or links. Explicit sample mode is labeled as illustrative, never live data.
-- Loop lightweight motion while a fresh observation says a thread is working. Do not drive motion
-  frame by frame from database events or imply measured progress through pipeline stages.
-- Stop activity motion for idle, blocked, disconnected, or stale observations. Support reduced
-  motion and a manual motion toggle.
-- Selecting work shows its identity and available evidence links. Verify narrow layouts, keyboard
-  access, long names, empty queues, stale status, and active work in a real browser.
+- Show inspectable evidence and explicit lifecycle facts from v1-ticket23 through v1-ticket13.
+  Preserve unknown and missing proof rather than inventing progress or success.
+- Add a manual motion toggle and complete keyboard/evidence interaction and narrow-layout checks.
+  Capture actual newly observed transitions, separately from labeled fixture animation checks.
 
 ## F09 - Trigger backups from the dashboard
 
@@ -229,26 +190,21 @@ Priority: P0. Dependencies: F03, F04, F05, F06. Status: planned.
 As a project owner, I can review and customize my factory through versioned repository files, so
 bespoke workflow details do not require a fork of the shared engine.
 
-Priority: P0. Dependencies: F01, F03. Status: planned. See R15 and AC26-AC29 in [prd.md](prd.md).
-Existing `.factory.json`, service declarations, and Markdown prompts are starting points.
+Priority: P0. Dependencies: F01, F03. Definition v1-ticket2 passed gates and fresh cold review
+at attempt four. Parent integration is pending, not a new definition implementation. YAML/schema
+loading, explicit migration, safe checks, durable reload, and pinned worker briefs are in that
+accepted candidate. See R15 and AC26-AC29 in [prd.md](prd.md).
 
-- Define the supported configuration contract for backend services, runners, commands, agent roles,
-  verification, discovery, native lifecycle hooks, and dashboard capabilities.
+- Integrate the accepted definition and rerun combined gates before dependent work.
+- Extend the contract only when service, discovery, verification-tool, hook, and dashboard
+  capabilities exist. Unimplemented capabilities must remain explicit refusals.
 - Discover existing `action-checks`, `ci-watch`, and `verify-<project-name>` capabilities. Reuse
   pstack-created app harnesses and applicable formal-verification checks, with required/advisory
   roles and explicit coverage. Do not create replacement tools or duplicate CI watchers by default.
-- Use YAML for authored operations, Markdown for agent instructions and notes, and JSON for schemas
-  and machine contracts. Give each setting one home. Choose paths and schema during implementation.
-- Resolve one validated effective configuration for backend and frontend. Provide a no-side-effect
-  check and a secret-free configuration view, with explicit errors for unsupported capabilities.
-- Keep runtime SQLite, private memory, secrets, generated adapters, and observations out of authored
-  configuration. Workers receive scoped briefs, not privileged project settings.
-- Pin definition content to runs. Explicit reload affects future work without changing active scope
-  or gates. Upgrade preserves project edits; migrate existing installs without permission changes.
 - Bound hook actions by native event identity, permissions, timeouts, and durable duplicate checks.
   Hooks cannot override lifecycle safety. Installing or refreshing definitions runs no actions.
-- Prove customization in two disposable projects, invalid-definition refusal, safe repeat setup,
-  reload during active work, backend/frontend agreement, and duplicate-event hook handling.
+- Prove required/advisory tool coverage and duplicate-event hook handling in v1-ticket11 and
+  v1-ticket12. Preserve accepted migration, reload, permission, and privacy checks as regressions.
 
 ## F13 - Measure factory effectiveness from evidence
 
@@ -271,33 +227,6 @@ Priority: P1. Dependencies: F02, F03, F07, F12. Status: planned. See R16 and AC3
 - Prove failed-then-green CI, absent/stale checks, direct commits, duplicated/out-of-order events,
   changed rubrics, partial cost periods, child-thread attribution, and no-CI data refusal.
 
-## F14 - Prepare dependencies in every worker worktree
-
-As an operator, I can dispatch a worker into a fully prepared worktree, so baseline gates do not
-depend on tools or package metadata borrowed from an ancestor checkout.
-
-Priority: P0. Dependencies: F01, F03. Status: attempt three accepted through native staging and
-fresh cold review. All gates and guard passed with 115 tests. The exact accepted factory files
-passed parent gates and were committed locally as `f8eda06`; nothing has been pushed.
-
-- Run the project's declared setup in the exact worker worktree before delivering implementation
-  work. Use the locked dependency installation; do not assume orb setup prepares later worktrees.
-- Persist setup outcome and logs. Failed setup blocks dispatch with coordinator-owned evidence;
-  recovery retains the same worktree and worker without consuming a code-correction attempt.
-- Make restart recovery safe after partial setup without repeating ambiguous worker creation.
-- Prove a fresh worktree, repeated setup, setup failure/recovery, and independence from ancestor
-  dependencies. Retain the project's required gates without ignores or weakened thresholds.
-- Regression evidence: feature-07 had no local `node_modules`; Fallow 3.42.0 ran from the ancestor
-  installation but flagged `@ampcode/cli` as unused. In the unchanged, clean worker checkout,
-  `bun install --frozen-lockfile` changed `bun run fallow:ci` from exit 1 to exit 0. The original
-  repair was manual. Automatic preparation is now accepted and integrated locally.
-
-The next native dispatch exposed socket-backed command stdin causing nested Bash to reset Bun's
-dependency paths. Explicit `retry-setup` recovered the same worktree at implementation attempt one.
-[Shared-launcher repair](feats/noninteractive-launcher/noninteractive-launcher-ticket1.md) is now
-accepted through same-worker repair and fresh cold review. Parent verification passed 123 tests, all
-gates and guard. Ordinary setup and verification commands no longer need stdin redirections.
-
 ## Delivery order and proof
 
 New required pipeline stories are tracked separately from the accepted pre-acceptance review slice:
@@ -319,24 +248,10 @@ New required pipeline stories are tracked separately from the accepted pre-accep
   repair under AC37-AC40. Local-only execution stays unchanged.
   [Local ticket](feats/remote-monitoring/remote-monitoring-ticket1.md). Status: not implemented.
 
-[Repair escalation](feats/repair-escalation/repair-escalation-ticket1.md) is accepted through native
-attempt-two verification and fresh cold review. Parent verification passed 117 tests, all gates and
-guard. Two rejections now preserve an owner-resumable checkpoint rather than a terminal cap. The
-shared-launcher repair is also accepted and integrated locally. Re-scope each later ticket against
-accepted prerequisites.
-
-Finish the existing sequential setup and dispatch trial first. Build F02 and F03 as the persistence
-and Amp foundation, then F05 and F06 for safe recovery. F04, F07, and F08 provide usable memory and
-visibility. F09 and F10 add explicit controls. F11 follows once preservation and restore are proven.
-
-Scope F12 after the active backup ticket and before expanding installation and dashboard controls.
-First define the shared contract and migration boundary; implement capabilities in bounded tickets
-as their underlying features become available. Do not create a second concurrent worker or rewrite
-the active backup ticket to introduce this configuration format.
-
-Build F13 in bounded slices after the observation API and definition contract. Collect source
-evidence before adding charts or comparing factories; do not start another implementation worker
-while the current backup ticket is active.
+Use [v1-execution.md](v1-execution.md) as the sole dispatch order. Do not recreate accepted setup,
+worker effort, review, escalation, launcher, privacy, backup-command, or dashboard-integration work.
+Keep existing checks when extending those capabilities. F13 needs stored delivery and usage
+evidence before charts; F11 still requires preservation and replacement restore before retirement.
 
 Each story needs its own observed acceptance evidence; the order above is not a completion claim.
 Use small disposable fixtures and Luna workers for workflow trials. End with a cross-orb trial:

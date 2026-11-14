@@ -1,7 +1,7 @@
 # Software factory
 
 Status: Draft requirements with a locally verified sequential native-worker prototype. The full
-unattended factory and cross-orb recovery remain incomplete. Updated 2026-11-13.
+unattended factory and cross-orb recovery remain incomplete. Updated 2026-11-14.
 
 ## Problem
 
@@ -35,18 +35,18 @@ only part of one. Evidence and trial limitations remain in [workflow-trials.md](
   disconnected-state observations, and asynchronous verification are implemented. Automatic executor
   reattachment and cross-orb execution remain unproven. An idle worker is not accepted work.
 - F04: Dependency insights exist. Structured phase lessons and relevant retrieval remain planned.
-- F05: Private backup implementation is in progress, not accepted. No private repository has been
-  provisioned and no production snapshot push is authorized.
+- F05: The private backup command is accepted and merged. Evidence/lesson coverage and phase
+  checkpoints remain planned. No private repository provisioning or production push is authorized.
 - F06: Replacement-orb restore and exclusive orchestrator ownership remain planned.
 - F07: SQLite-backed read-only status and curated acceptance/review references passed local
   dogfood, including real cold-review rejection and same-worker repair.
-- F08: The first dashboard is browser-verified against disposable state and labeled samples.
-  SQLite API compatibility is verified; full evidence browsing remains pending.
+- F08: The live same-origin dashboard and SQLite API are merged and browser-verified, including
+  labeled animation fixtures. Evidence browsing and actual-transition acceptance remain pending.
 - F09: The dashboard backup control is a disabled placeholder.
 - F10: Dashboard steering chat remains planned.
 - F11: Safe worker retirement remains planned.
-- F12: A versioned project-owned factory definition remains planned. Existing `.factory.json`
-  configuration and the documented Foreman prompt are starting points, not the complete system.
+- F12: The versioned project-owned definition passed native gates and fresh cold review at attempt
+  four. Parent integration and combined verification remain pending. Tools and hooks remain planned.
 - F13: Evidence-based effectiveness, scorecards, and spending reports remain planned.
 
 Automated discovery, scheduled full gates, and the complete backup, restore, and retirement loop

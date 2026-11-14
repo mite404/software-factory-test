@@ -4,9 +4,9 @@
 
 - Goal: finish the workbench against actual lifecycle and inspectable evidence.
 - Initial priority: P1. Effort: Medium. Risk: elevated; misleading activity hides blocked work.
-- Depends on: v1-ticket23 and acceptance of the pipeline-view branch integration.
+- Depends on: v1-ticket23. Pipeline-view branch integration is merged.
 - Planned at: `62816cf8a6c8c282172754c4a97242e5a4a9eab1`, 2026-11-13.
-- Backlog: F08. Local only; frontend owned by the existing pipeline-view thread.
+- Backlog: F08. Remaining evidence, lifecycle, accessibility, and motion acceptance only.
 
 ## Why this matters
 
@@ -15,14 +15,14 @@ yet observed a new live landing, rejection, or repair transition.
 
 ## Current state
 
-The frontend thread's unpushed merge `dc3dfe8` includes backend commits through `62816cf`. Its live
-read-only relay observes six accepted dogfood tasks. No frontend code is in this parent.
+The frontend and same-origin API are merged through PR #3, with 140 combined tests and successful
+CI. Live reads, safe titles, freshness, status colors, review waiting/release animation, and reduced
+motion are implemented. Fixture captures do not replace actual-transition acceptance.
 
 ## Approach
 
-Integrate the exact frontend commits after combined gates, then show evidence through curated
-backend reads. Distinguish actual active observations, recorded acceptance, pending review, missing
-review evidence, stale state, and explicit samples.
+Show evidence through curated backend reads. Distinguish actual active observations, recorded
+acceptance, pending review, missing review evidence, stale state, and explicit samples.
 
 ## Scope
 
@@ -31,9 +31,9 @@ progress, worker connections, mutation endpoints, and concurrent edits by a new 
 
 ## Steps
 
-1. **Integrate exact frontend history**. Preserve both branches and rerun combined project gates.
-2. **Show recorded evidence honestly**. Display real identities without treating missing proof as
+1. **Show recorded evidence honestly**. Display real identities without treating missing proof as
    pass.
+2. **Complete operator controls**. Add a motion toggle and verify keyboard and evidence access.
 3. **Observe actual worker transitions**. Capture a newly recorded event without data copying.
 
 ## Test plan
@@ -50,8 +50,8 @@ A live endpoint plus a newly observed event proves connection; copied state prov
 
 | Path                       | Role      | Contains                            | Edit or Read           |
 | -------------------------- | --------- | ----------------------------------- | ---------------------- |
-| `web/` in frontend branch  | Workbench | Existing UI and tests               | Edit by existing owner |
-| `package.json`, `bun.lock` | Tooling   | Existing combined frontend scripts  | Edit after merge       |
+| `web/`                    | Workbench | Existing UI and tests               | Edit                   |
+| `package.json`, `bun.lock` | Tooling   | Existing combined frontend scripts  | Read                   |
 | `factory/dashboard.ts`     | Feed      | Curated evidence API                | Read                   |
 | `factory/README.md`        | Operation | Live source and sample distinctions | Edit                   |
 
@@ -59,13 +59,13 @@ Inspect the merged frontend's actual files before allocating edit scope.
 
 ## Initial state / preflight
 
-Run common preflight from `docs/v1-execution.md` plus frontend scripts after merge. No additional
-browser verification is claimed by authoring this ticket.
+Run common preflight from `docs/v1-execution.md` plus frontend scripts. No additional browser
+verification is claimed by authoring this ticket.
 
 | Command              | Expected result / action                          |
 | -------------------- | ------------------------------------------------- |
 | `git rev-parse HEAD` | Record actual combined frontend/backend revision. |
-| `git status --short` | Preserve the frontend owner's work before merge.  |
+| `git status --short` | Preserve unrelated frontend work.                 |
 
 ## Done when
 
