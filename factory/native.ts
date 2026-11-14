@@ -505,7 +505,9 @@ function candidate(
 function verify(
   worktree: string,
   command: string,
-  timeout = 120_000,
+  // ponytail: fixed gate budget; the full gate already takes ~95s. Make it a definition
+  // setting when a project's gate legitimately needs longer than ten minutes.
+  timeout = 600_000,
   onSpawn?: (pid: number) => void,
   log?: string,
 ) {
