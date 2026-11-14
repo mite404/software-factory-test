@@ -116,9 +116,11 @@ four on candidate `901ae38e20fc3517170b43c8b9bea78f6920add1`. It was transferred
 coordinator orb as a checksum-verified Git bundle, merged onto parent main by the Foreman, and
 passed the combined gate with 150 tests. foreman-watchdog-ticket1 was then accepted natively at
 attempt two and merged through PR #8; see workflow trial 11. foreman-watchdog-ticket2 was accepted
-at attempt one and merged through PR #12; see workflow trial 12. foreman-watchdog-ticket3 and safe
-planned intake are next. Keep preserved backup owners until required evidence preservation is
-confirmed. Native acceptance does not authorize retirement.
+at attempt one and merged through PR #12; see workflow trial 12. foreman-watchdog-ticket3 was
+accepted at attempt four and merged through PR #18; see workflow trial 13. Its live proof is still
+pending: the plugin tool bridge, a scheduled wake of a sleeping orb, and real alert delivery.
+F001-backup-commit-identity and safe planned intake are next. Keep preserved backup owners until
+required evidence preservation is confirmed. Native acceptance does not authorize retirement.
 
 Local sequential steel-thread evidence exists in workflow trials 8 and 9 and subsequent native
 acceptances. Cross-orb transfer, replacement restore, remote monitoring, and retirement still need

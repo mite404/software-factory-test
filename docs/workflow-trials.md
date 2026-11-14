@@ -377,6 +377,48 @@ Edge cases this run exposed:
 - The coordinator database has never been backed up. The backup command needs a private
   repository that does not exist yet.
 
+## Trial 13 passed: watchdog ticket 3 through three rejections and executor loss
+
+2026-11-14. `foreman-watchdog-ticket3` ran through the native factory on the dogfood clone. One
+Sol 6.1 medium worker kept its thread and worktree for all four attempts; each candidate went to
+a fresh Fable 5.2 reviewer.
+
+- Attempt 1 at `a43ae47` passed the gate and was rejected with six warnings and one nit, all on
+  paths where the watchdog schedule cannot install.
+- Attempt 2 at `ebdb8e2` was rejected with one critical finding, two warnings and two nits. The
+  code sent `notify_user` a `message` field where the live tool takes `body`, and compared
+  schedule fields the live result does not have.
+- After that second rejection the Foreman made the required checkpoint with `resume` on the exact
+  incident, and supplied result shapes it had observed live.
+- Attempt 3 at `6d1e1a1` was rejected with one warning and one nit: a failed schedule read after
+  dispatch disabled the factory.
+- Attempt 4 at `250a8ba` passed cold review with no findings. The Foreman cherry-picked it onto
+  parent main, reran the full gate (183 tests) and merged PR #18 only after the `quality` check
+  passed on its exact head.
+
+From the factory's `events` table, dispatch to accepted took 8 h 41 min 48 s. About 6 h 12 min of
+that was the worker sitting disconnected while the Foreman waited for the operator.
+
+The watchdog itself is not proven live. Every test used controlled adapters. The plugin tool
+bridge, a scheduled wake of a sleeping orb, and real alert delivery remain pending.
+
+Edge cases this run exposed:
+
+- Worker threads run on the Foreman orb's Amp CLI. That CLI restarted during attempt 2 and the
+  worker lost every tool. It could not write a report, so the factory saw only an idle thread.
+- Each later factory delivery reached the worker with no executor attached. The Foreman
+  reconnected the same worker three times with a one-shot `amp threads continue`. The factory
+  neither detects this nor records it; `factory/foreman.md` now carries the operator's standing
+  authorization and the procedure.
+- The Foreman paused the factory during the outage so the old candidate would not be read as the
+  new attempt. That was unnecessary: the factory ignores a report whose attempt is not current.
+- The worker's brief forbade live effects and its own capability probe returned `No such tool`,
+  so it guessed the schedule and notification shapes and its fixtures echoed the guess. The
+  Foreman probed the live tools only after the second rejection. Probe live tool shapes before
+  dispatch and put them in the brief.
+- A factory stop notice for the attempt 2 incident arrived again after that incident had been
+  resumed. The Foreman treated it as stale evidence and took no action.
+
 [trial-artifact]:
   https://ampcode.com/artifacts/factory-workflow-trials-36c5101e-8f2e-4e6c-ab3f-0a4425873f7e
 [source-workflow]: https://ampcode.com/threads/T-01a1ce51-ec2c-73cf-9b63-a2eb9f40442b
