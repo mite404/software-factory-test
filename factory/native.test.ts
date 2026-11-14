@@ -77,6 +77,9 @@ async function preparationFixture(
   const git = (...args: string[]) =>
     execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim();
   git("init", "-q");
+  // CI runners have no global Git identity; every fixture commit uses this one.
+  git("config", "user.name", "Fixture");
+  git("config", "user.email", "fixture@example.invalid");
   for (const file of ["package.json", "bun.lock", "lefthook.yml"])
     await copyFile(join(import.meta.dir, "..", file), join(root, file));
   await writeFile(join(root, "prd.md"), "Fixture");
