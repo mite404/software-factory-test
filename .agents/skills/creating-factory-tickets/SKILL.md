@@ -14,17 +14,21 @@ It creates local Markdown, optionally one matching Linear issue. It creates no G
 
 Before creating tickets, ask: "Would you like a Linear & local ticket to be created, or local
 ticket only? Do you have a preferred local path? Otherwise I'll use
-`docs/feats/<name-of-feat>/<name-of-feat-ticket><#>.md`."
+`docs/feats/<name-of-feat>/F<NNN>-<ticket-name>.md`."
 
 An explicit mode/path in the user's request already answers that part. Reuse a choice explicitly
 made for the current batch; do not ask per ticket. If no path preference is supplied, use the
 default. If the mode is unanswered, wait rather than silently creating an external issue.
 Local-only mode needs no Linear connection, GitHub remote, or network calls.
 
-Choose one searchable ticket name, such as `review-policy-ticket1`. The local filename without
-`.md`, its H1, and the Linear title must match exactly. The feature directory is `review-policy`.
-Use the next unused positive number within the feature directory; inspect existing local tickets
-and, in paired mode, existing Linear issues before allocating. Never overwrite a collision.
+Name each ticket `F<NNN>-<ticket-name>`, such as `F001-review-policy-gate`: a capital `F`, a
+three-digit zero-padded number, then a short lowercase hyphenated slug for the work. The local
+filename without `.md`, its H1, the queue `id`, and the Linear title must match exactly. The
+feature directory, here `review-policy`, groups related tickets and is not part of the name.
+Numbers form one sequence across all of `docs/feats/`, starting at `F001`. Use the next unused
+number; inspect every existing `F<NNN>-` ticket and, in paired mode, existing Linear issues before
+allocating. Never reuse a number or overwrite a collision. Tickets named `<feature>-ticket<#>`
+predate this format and keep their names.
 Keep the Linear identifier in metadata, not as a prefix that makes the two names differ.
 Honor a supplied filename; derive the shared title from its stem before creating either artifact.
 Leave existing ticket names/locations unchanged unless the user asks for migration.
