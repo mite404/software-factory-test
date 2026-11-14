@@ -20,9 +20,9 @@ import {
   tasks,
   type NativeHost,
 } from "./native";
-import { openStore } from "./bookkeeping.fixture";
+import { openStore, watchdogFixture } from "./bookkeeping.fixture";
 import { startDashboard } from "./dashboard";
-import { openPersistence } from "./persistence";
+import { factoryStatus, openPersistence } from "./persistence";
 
 const installer = resolve(import.meta.dir, "setup-factory.ts");
 const preparationRoots: string[] = [];
@@ -132,8 +132,27 @@ async function preparationFixture(
     },
     watch() {},
   };
-  const factory = (now?: () => number) =>
-    createFactory(root, host, openStore, now);
+  const { tools } = watchdogFixture();
+  const factory = (now?: () => number) => {
+    const engine = createFactory(root, host, openStore, now);
+    return {
+      ...engine,
+      tick(...args: Parameters<typeof engine.tick>) {
+        const saved = factoryStatus(engine.directory);
+        const [action, owner = saved.owner ?? "T-owner", observe, request] =
+          args;
+        return engine.tick(
+          action,
+          owner,
+          observe,
+          request,
+          action === "status" || (!saved.owner && action !== "start")
+            ? undefined
+            : tools,
+        );
+      },
+    };
+  };
   return {
     root,
     worktree,
@@ -148,6 +167,470 @@ afterEach(async () => {
   for (const root of preparationRoots.splice(0))
     await rm(root, { recursive: true, force: true });
 });
+
+test("connected watchdog gates start, restores registration on reload and denies nonowners before effects", async () => {
+  const f = await preparationFixture(() => "");
+  let at = 1000;
+  const engine = createFactory(f.root, f.host, openStore, () => at);
+  let calls = 0;
+  const unavailable = {
+    async call() {
+      calls++;
+      throw new Error("Schedule bridge disconnected");
+    },
+  };
+  expect(
+    await engine
+      .tick("start", "T-owner", f.host.state, undefined, unavailable)
+      .catch(String),
+  ).toMatch(/disconnected/);
+  expect(await engine.tick("status")).toMatchObject({
+    enabled: false,
+    monitor: { schedule: "unknown" },
+    runs: {},
+  });
+  expect(f.counts()).toEqual({ creates: 0, sends: 0 });
+  expect(calls).toBe(1);
+  expect((await engine.tick("status")).owner).toBeUndefined();
+  const foreign = watchdogFixture().tools;
+  await foreign.call("amp.set_schedule", {
+    title: "Unrelated",
+    prompt: "Keep",
+  });
+  expect(
+    await engine
+      .tick("start", "T-refused", f.host.state, undefined, foreign)
+      .catch(String),
+  ).toMatch(/unrelated/);
+  expect((await engine.tick("status")).owner).toBeUndefined();
+  const { tools, notifications } = watchdogFixture();
+  const started = await engine.tick(
+    "start",
+    "T-owner",
+    f.host.state,
+    undefined,
+    tools,
+  );
+  expect(started).toMatchObject({
+    enabled: true,
+    monitor: { schedule: "installed" },
+  });
+  expect(f.counts()).toEqual({ creates: 1, sends: 1 });
+  await tools.call("amp.clear_schedule", {});
+  const reloaded = await engine.tick(
+    "reload",
+    "T-owner",
+    f.host.state,
+    undefined,
+    tools,
+  );
+  expect(reloaded.monitor?.schedule).toBe("installed");
+  expect(await tools.call("amp.get_schedule", {})).toMatchObject({
+    enabled: true,
+  });
+  const bytes = await readFile(join(engine.directory, "state.sqlite"));
+  for (const caller of ["T-prepared", "T-stranger"] as const) {
+    for (const action of ["start", "pause", "reload", "reconcile"] as const)
+      expect(
+        await engine
+          .tick(action, caller, f.host.state, undefined, unavailable)
+          .catch(String),
+      ).toMatch(/Workers|Foreman/);
+  }
+  expect(
+    await engine
+      .tick("status", "T-owner", f.host.state, undefined, unavailable)
+      .catch(String),
+  ).toMatch(/Foreman/);
+  expect(calls).toBe(1);
+  expect(await readFile(join(engine.directory, "state.sqlite"))).toEqual(bytes);
+  at += 1_800_000;
+  const nudges: string[] = [];
+  f.host.send = async (_id, message) => {
+    nudges.push(message);
+  };
+  await engine.tick("reconcile");
+  expect(nudges).toEqual([]);
+  expect(notifications).toEqual([]);
+  const diagnosed = await engine.tick(
+    "reconcile",
+    "T-owner",
+    f.host.state,
+    undefined,
+    tools,
+  );
+  expect(nudges).toEqual([expect.stringContaining("Diagnose current status")]);
+  expect(notifications).toHaveLength(1);
+  expect(diagnosed.runs.A).toMatchObject({
+    kind: "running",
+    thread: "T-prepared",
+    attempt: 1,
+  });
+  const storage = openPersistence(engine.directory, []);
+  storage.state.runs.A = {
+    kind: "done",
+    thread: "T-prepared",
+    revision: "accepted",
+    insight: "Fixture",
+  };
+  storage.commit(storage.state, "A", "accepted", "Fixture");
+  storage.close();
+  await engine.tick("reconcile", "T-owner", f.host.state, undefined, tools);
+  expect(await tools.call("amp.get_schedule", {})).toBeNull();
+  expect((await engine.tick("status")).monitor?.schedule).toBe("cleared");
+});
+
+test("post-dispatch inspection failure retains enabled execution and its watchdog", async () => {
+  const f = await preparationFixture(() => "");
+  const engine = createFactory(f.root, f.host, openStore, () => 1000);
+  const fixture = watchdogFixture();
+  const effects: string[] = [];
+  let lost = false;
+  let reads = 0;
+  const tools = {
+    async call(name: string, input: Record<string, unknown>) {
+      if (name === "amp.get_schedule") {
+        reads++;
+        if (!lost && f.counts().sends === 1) {
+          lost = true;
+          throw new Error("Post-dispatch inspection unavailable");
+        }
+      } else effects.push(name);
+      return fixture.tools.call(name, input);
+    },
+  };
+  const started = await engine.tick(
+    "start",
+    "T-owner",
+    f.host.state,
+    undefined,
+    tools,
+  );
+  expect(lost).toBe(true);
+  expect(started).toMatchObject({
+    enabled: true,
+    owner: "T-owner",
+    monitor: {
+      schedule: "unknown",
+      problem: expect.stringContaining("Post-dispatch inspection unavailable"),
+    },
+  });
+  expect(started.runs.A).toMatchObject({
+    kind: "running",
+    thread: "T-prepared",
+    attempt: 1,
+  });
+  expect((await engine.tick("status")).enabled).toBe(true);
+  const storage = openPersistence(engine.directory, []);
+  try {
+    expect(storage.lastEvent("factory", "started")).toBe("T-owner");
+    expect(
+      storage.lastEvent("factory", "watchdog-installation-failed"),
+    ).toBeUndefined();
+    expect(storage.lastEvent("factory", "watchdog-unconfirmed")).toContain(
+      "Post-dispatch inspection unavailable",
+    );
+  } finally {
+    storage.close();
+  }
+  const inspected = reads;
+  const recovered = await engine.tick(
+    "reconcile",
+    "T-owner",
+    f.host.state,
+    undefined,
+    tools,
+  );
+  expect(reads).toBeGreaterThan(inspected);
+  expect(recovered).toMatchObject({
+    enabled: true,
+    monitor: { schedule: "installed" },
+  });
+  expect(recovered.runs.A).toMatchObject({
+    kind: "running",
+    thread: "T-prepared",
+    attempt: 1,
+  });
+  expect(await fixture.tools.call("amp.get_schedule", {})).toMatchObject({
+    enabled: true,
+  });
+  expect(effects).toEqual(["amp.set_schedule"]);
+  expect(f.counts()).toEqual({ creates: 1, sends: 1 });
+});
+
+test("reload retains monitoring for unfinished persisted tickets removed from the authored queue", async () => {
+  const f = await preparationFixture(() => "");
+  const engine = createFactory(f.root, f.host, openStore, () => 1000);
+  const fixture = watchdogFixture();
+  const effects: string[] = [];
+  const tools = {
+    async call(name: string, input: Record<string, unknown>) {
+      if (name !== "amp.get_schedule") effects.push(name);
+      return fixture.tools.call(name, input);
+    },
+  };
+  await engine.tick("start", "T-owner", f.host.state, undefined, tools);
+  await writeFile(join(f.root, "tickets.json"), "[]");
+  for (const action of ["reload", "reconcile"] as const) {
+    const state = await engine.tick(
+      action,
+      "T-owner",
+      f.host.state,
+      undefined,
+      tools,
+    );
+    expect(state.monitor?.schedule).toBe("installed");
+    expect(state.runs.A).toMatchObject({
+      kind: "running",
+      thread: "T-prepared",
+    });
+  }
+  expect(effects).toEqual(["amp.set_schedule"]);
+});
+
+test("watchdog persistence failures still abort before remote effects or dispatch", async () => {
+  const f = await preparationFixture(() => "");
+  const engine = createFactory(f.root, f.host, openStore, () => 1000);
+  await mkdir(engine.directory, { recursive: true });
+  openPersistence(engine.directory, []).close();
+  const db = new Database(join(engine.directory, "state.sqlite"));
+  db.run(`CREATE TRIGGER fail_monitor BEFORE INSERT ON events
+    WHEN NEW.action = 'watchdog-schedule'
+    BEGIN SELECT RAISE(ABORT, 'monitor-save-failed'); END`);
+  db.close();
+  const fixture = watchdogFixture();
+  expect(
+    await engine
+      .tick("start", "T-owner", f.host.state, undefined, fixture.tools)
+      .catch(String),
+  ).toMatch(/monitor-save-failed/);
+  expect(await fixture.tools.call("amp.get_schedule", {})).toBeNull();
+  expect(await engine.tick("status")).toMatchObject({
+    enabled: false,
+    runs: {},
+  });
+  expect(f.counts()).toEqual({ creates: 0, sends: 0 });
+});
+
+test.each(["unavailable", "unrecognized"])(
+  "owner recovery and stop notices survive %s inspection",
+  async (fault) => {
+    const f = await preparationFixture(() => "");
+    const engine = createFactory(f.root, f.host, openStore, () => 1000);
+    const fixture = watchdogFixture();
+    await engine.tick(
+      "start",
+      "T-owner",
+      f.host.state,
+      undefined,
+      fixture.tools,
+    );
+    await writeFile(
+      join(engine.directory, "A.report.json"),
+      JSON.stringify({ kind: "blocked", attempt: 1, reason: "Private" }),
+    );
+    f.host.state = async () => "idle";
+    f.host.send = async () => {
+      throw new Error("Notice unavailable");
+    };
+    const stopped = await engine.tick("reconcile");
+    const incident = stopped.runs.A!.incident!;
+    const notices: string[] = [];
+    f.host.send = async (_id, message) => {
+      notices.push(message);
+    };
+    const tools = {
+      async call(name: string) {
+        expect(name).toBe("amp.get_schedule");
+        if (fault === "unavailable") throw new Error("Inspection unavailable");
+        return "{unexpected bridge response";
+      },
+    };
+    const reconciled = await engine.tick(
+      "reconcile",
+      "T-owner",
+      f.host.state,
+      undefined,
+      tools,
+    );
+    expect(reconciled.runs.A!.incident?.delivery).toBe("sent");
+    expect(notices).toEqual([expect.stringContaining(incident.id)]);
+    await engine.tick("pause", "T-owner", f.host.state, undefined, tools);
+    expect(
+      await engine.tick("reload", "T-owner", f.host.state, undefined, tools),
+    ).toMatchObject({
+      enabled: false,
+      monitor: { schedule: "unknown", problem: expect.any(String) },
+    });
+    const resumed = await engine.tick(
+      "resume",
+      "T-owner",
+      f.host.state,
+      {
+        ticket: "A",
+        incident: incident.id,
+        decision: "Root cause resolved",
+      },
+      tools,
+    );
+    expect(resumed).toMatchObject({
+      enabled: false,
+      monitor: {
+        schedule: "unknown",
+        problem: expect.stringContaining("inspection failed"),
+      },
+    });
+    expect(resumed.runs.A).toMatchObject({
+      kind: "running",
+      thread: "T-prepared",
+      attempt: 2,
+    });
+    expect(f.counts()).toEqual({ creates: 1, sends: 1 });
+    expect(fixture.notifications).toEqual([]);
+  },
+);
+
+test("paused foreign schedule preserves notices and exact-incident resume", async () => {
+  const f = await preparationFixture(() => "");
+  const engine = createFactory(f.root, f.host, openStore, () => 1000);
+  const { tools } = watchdogFixture();
+  const sync = (action: "start" | "pause" | "reconcile") =>
+    engine.tick(action, "T-owner", f.host.state, undefined, tools);
+  await sync("start");
+  await writeFile(
+    join(engine.directory, "A.report.json"),
+    JSON.stringify({
+      kind: "blocked",
+      attempt: 1,
+      reason: "Private failure",
+    }),
+  );
+  f.host.state = async () => "idle";
+  f.host.send = async () => {
+    throw new Error("Notice unavailable");
+  };
+  const stopped = await sync("reconcile");
+  const incident = stopped.runs.A!.incident!;
+  const notices: string[] = [];
+  f.host.send = async (_id, message) => {
+    notices.push(message);
+  };
+  const foreign = { title: "Unrelated reminder", prompt: "Preserve me" };
+  await tools.call("amp.set_schedule", foreign);
+  expect((await sync("pause")).enabled).toBe(false);
+  expect(notices).toEqual([expect.stringContaining(incident.id)]);
+  expect((await sync("reconcile")).monitor?.schedule).toBe("cleared");
+  const resumed = await engine.tick(
+    "resume",
+    "T-owner",
+    f.host.state,
+    {
+      ticket: "A",
+      incident: incident.id,
+      decision: "Root cause resolved",
+    },
+    tools,
+  );
+  expect(resumed.enabled).toBe(false);
+  expect(resumed.runs.A).toMatchObject({
+    kind: "running",
+    thread: "T-prepared",
+    attempt: 2,
+  });
+  expect(await tools.call("amp.get_schedule", {})).toMatchObject(foreign);
+  expect(f.counts()).toEqual({ creates: 1, sends: 1 });
+});
+
+test.each(["fingerprint", "inspection"])(
+  "pause persists despite watchdog %s failure",
+  async (fault) => {
+    const f = await preparationFixture(() => "");
+    const engine = createFactory(f.root, f.host, openStore, () => 1000);
+    const fixture = watchdogFixture();
+    await engine.tick(
+      "start",
+      "T-owner",
+      f.host.state,
+      undefined,
+      fixture.tools,
+    );
+    if (fault === "fingerprint") {
+      const storage = openPersistence(engine.directory, []);
+      storage.state.monitor!.fingerprint = "copied-from-another-root";
+      storage.commit(storage.state, "factory", "fixture-copy", "");
+      storage.close();
+    }
+    const tools =
+      fault === "fingerprint"
+        ? fixture.tools
+        : {
+            async call() {
+              throw new Error("Inspection unavailable");
+            },
+          };
+    const paused = await engine.tick(
+      "pause",
+      "T-owner",
+      f.host.state,
+      undefined,
+      tools,
+    );
+    expect(paused.monitor?.problem).toMatch(/fingerprint|Inspection/);
+    const saved = await engine.tick("status");
+    expect(saved.enabled).toBe(false);
+    expect(saved.monitor?.schedule).toBe(
+      fault === "fingerprint" ? "conflict" : "unknown",
+    );
+    expect((await engine.tick("reconcile")).enabled).toBe(false);
+    expect(f.counts()).toEqual({ creates: 1, sends: 1 });
+  },
+);
+
+test.each(["start", "pause"] as const)(
+  "uncertain first registration stays thread-bound until %s",
+  async (action) => {
+    const f = await preparationFixture(() => "");
+    const engine = createFactory(f.root, f.host, openStore, () => 1000);
+    const fixture = watchdogFixture();
+    let disconnected = false;
+    const tools = {
+      async call(name: string, input: Record<string, unknown>) {
+        if (disconnected) throw new Error("Inspection unavailable");
+        if (name === "amp.set_schedule")
+          expect(factoryStatus(engine.directory).owner).toBeUndefined();
+        const result = await fixture.tools.call(name, input);
+        if (name === "amp.set_schedule") disconnected = true;
+        return result;
+      },
+    };
+    expect(
+      await engine
+        .tick("start", "T-first", f.host.state, undefined, tools)
+        .catch(String),
+    ).toMatch(/Inspection/);
+    expect((await engine.tick("status")).owner).toBeUndefined();
+    const other = watchdogFixture();
+    expect(
+      await engine
+        .tick("start", "T-other", f.host.state, undefined, other.tools)
+        .catch(String),
+    ).toMatch(/T-first/);
+    expect(await other.tools.call("amp.get_schedule", {})).toBeNull();
+    disconnected = false;
+    const recovered = await engine.tick(
+      action,
+      "T-first",
+      f.host.state,
+      undefined,
+      tools,
+    );
+    expect(recovered.monitor?.schedule).toBe(
+      action === "start" ? "installed" : "cleared",
+    );
+    expect(recovered.owner).toBe(action === "start" ? "T-first" : undefined);
+    expect(f.counts().creates).toBe(action === "start" ? 1 : 0);
+  },
+);
 
 test("watchdog bounds suspicion across reload, diagnostics, unknown activity and read-only reads", async () => {
   const f = await preparationFixture(() => "");
@@ -231,12 +714,13 @@ test("a crash after nudge reservation retains alert intent without immediate red
     `
       import { createFactory } from ${JSON.stringify(join(import.meta.dir, "native.ts"))};
       import { openStore } from ${JSON.stringify(join(import.meta.dir, "bookkeeping.fixture.ts"))};
+      import { watchdogFixture } from ${JSON.stringify(join(import.meta.dir, "bookkeeping.fixture.ts"))};
       const host = {
         async create() { throw new Error("No replacement"); },
         async send() { process.exit(23); },
         async state() { return "unknown"; }, watch() {},
       };
-      await createFactory(${JSON.stringify(f.root)}, host, openStore, () => 1801000).tick("reconcile");
+      await createFactory(${JSON.stringify(f.root)}, host, openStore, () => 1801000).tick("reconcile", "T-owner", host.state, undefined, watchdogFixture().tools);
     `,
   ]);
   expect(child.status).toBe(23);
@@ -251,7 +735,8 @@ test("a crash after nudge reservation retains alert intent without immediate red
   expect(nudges).toEqual([]);
   const retried = (await f.factory(() => 3_601_000).tick("reconcile")).runs.A!;
   expect(nudges).toHaveLength(1);
-  expect(retried.watchdog!.alerts).toEqual(reserved.watchdog!.alerts);
+  expect(retried.watchdog!.alerts).toMatchObject(reserved.watchdog!.alerts);
+  expect(retried.watchdog!.alerts[0]?.acknowledgedAt).toBe(1_801_000);
   expect(retried).toMatchObject({
     kind: "running",
     attempt: 1,

@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { startDashboard } from "./dashboard";
 import registerFactory from "./plugin";
 import { openPersistence } from "./persistence";
+import { watchdogFixture } from "./bookkeeping.fixture";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
@@ -138,6 +139,7 @@ test("plugin and HTTP keep private briefs and native titles out of public titles
         },
       },
       logger: { log() {} },
+      on() {},
       registerTool(tool: { execute: typeof execute }) {
         execute = tool.execute;
       },
@@ -389,6 +391,7 @@ test.each([
           },
         },
         logger: { log() {} },
+        on() {},
         registerTool(tool: { execute: typeof execute }) {
           execute = tool.execute;
         },
@@ -396,10 +399,13 @@ test.each([
           dispose = fn;
         },
       } as unknown as PluginAPI;
+      const watchdog = watchdogFixture();
       const ctx = {
         thread: { id: "T-owner" },
         tools: {
-          async call(name: string, input: unknown) {
+          async call(name: string, input: Record<string, unknown>) {
+            if (name !== "amp.get_thread_status")
+              return watchdog.tools.call(name, input);
             expect(name).toBe("amp.get_thread_status");
             expect(input).toEqual({ thread: "T-worker" });
             fallbackCalls++;
@@ -804,6 +810,11 @@ test("setup recovery control preserves durable failure and compatible observatio
     let creates = 0;
     let sends = 0;
     const notices: string[] = [];
+    let workerActivity = "running";
+    let wake!: (
+      event: { thread: { id: string } },
+      ctx: PluginToolContext,
+    ) => Promise<unknown>;
     let execute!: (
       input: { action: string },
       ctx: PluginToolContext,
@@ -827,7 +838,7 @@ test("setup recovery control preserves durable failure and compatible observatio
             },
             state: {
               async get() {
-                return "running";
+                return workerActivity;
               },
               subscribe: subscription,
             },
@@ -841,6 +852,9 @@ test("setup recovery control preserves durable failure and compatible observatio
         },
       },
       logger: { log() {} },
+      on(_event: string, handler: typeof wake) {
+        wake = handler;
+      },
       registerTool(tool: { execute: typeof execute }) {
         execute = tool.execute;
       },
@@ -848,7 +862,19 @@ test("setup recovery control preserves durable failure and compatible observatio
         dispose = fn;
       },
     } as unknown as PluginAPI;
-    const ctx = { thread: { id: "T-owner" } } as unknown as PluginToolContext;
+    const fixture = watchdogFixture();
+    let bridgeFailed = true;
+    let toolCalls = 0;
+    const ctx = {
+      thread: { id: "T-owner" },
+      tools: {
+        async call(name: string, input: Record<string, unknown>) {
+          toolCalls++;
+          if (bridgeFailed) throw new Error("Schedule bridge unavailable");
+          return fixture.tools.call(name, input);
+        },
+      },
+    } as unknown as PluginToolContext;
     const control = async (action: string) =>
       JSON.parse(String(await execute({ action }, ctx)));
     const load = () =>
@@ -868,7 +894,40 @@ test("setup recovery control preserves durable failure and compatible observatio
       }
       throw new Error(`Observation never reached ${status}`);
     }
+    const directory = join(root, ".git/factory");
+    await mkdir(directory, { recursive: true });
+    const storage = openPersistence(directory, []);
+    storage.state.enabled = true;
+    storage.state.owner = "T-owner";
+    storage.commit(storage.state, "factory", "fixture-legacy", "");
+    storage.close();
     load();
+    await control("status");
+    expect((await control("status")).runs).toEqual({});
+    expect(creates).toBe(0);
+    expect(toolCalls).toBe(0);
+    const recovery = await wake({ thread: { id: "T-owner" } }, ctx);
+    expect(recovery).toMatchObject({
+      message: {
+        display: true,
+        content: expect.stringContaining(
+          "Monitored execution is not confirmed",
+        ),
+      },
+    });
+    expect(creates).toBe(0);
+    expect(toolCalls).toBe(1);
+    const stranger = {
+      ...ctx,
+      thread: { id: "T-stranger" },
+    } as unknown as PluginToolContext;
+    for (const action of ["pause", "reconcile", "reload"]) {
+      const stopped = JSON.parse(String(await execute({ action }, stranger)));
+      expect(stopped.enabled).toBe(false);
+    }
+    expect(toolCalls).toBe(1);
+    expect(creates).toBe(0);
+    bridgeFailed = false;
     const failed = (await control("start")).runs.A;
     expect(failed).toMatchObject({
       kind: "preparation-failed",
@@ -882,6 +941,13 @@ test("setup recovery control preserves durable failure and compatible observatio
     expect(notices).toEqual([expect.stringContaining("Recovery: retry-setup")]);
     dispose();
     load();
+    await ctx.tools.call("amp.clear_schedule", {});
+    await wake({ thread: { id: "T-worker" } }, ctx);
+    expect(await ctx.tools.call("amp.get_schedule", {})).toBeNull();
+    await wake({ thread: { id: "T-owner" } }, ctx);
+    expect(await ctx.tools.call("amp.get_schedule", {})).toMatchObject({
+      enabled: true,
+    });
     expect((await control("reconcile")).runs.A).toEqual(failed);
     expect(notices).toHaveLength(1);
     expect(await observed("blocked")).toMatchObject({
@@ -902,6 +968,7 @@ test("setup recovery control preserves durable failure and compatible observatio
       await server.stop(true);
     }
     await writeFile(join(root, ".git/setup-ready"), "ready");
+    bridgeFailed = true;
     expect((await control("retry-setup")).runs.A).toMatchObject({
       kind: "running",
       worktree: failed.worktree,
@@ -914,6 +981,42 @@ test("setup recovery control preserves durable failure and compatible observatio
       status: "working",
       thread: "T-worker",
     });
+    expect((await control("status")).monitor.problem).toContain("unavailable");
+    bridgeFailed = false;
+    workerActivity = "idle";
+    const report = join(directory, "A.report.json");
+    await writeFile(report, "not-json");
+    const invalidReport = await wake({ thread: { id: "T-owner" } }, ctx);
+    expect(invalidReport).toMatchObject({
+      message: {
+        display: true,
+        content: expect.stringContaining("Factory reconciliation failed."),
+      },
+    });
+    expect(JSON.stringify(invalidReport)).not.toContain(
+      "Monitored execution is not confirmed",
+    );
+    await rm(report);
+    workerActivity = "running";
+    const beforePause = toolCalls;
+    const worker = {
+      ...ctx,
+      thread: { id: "T-worker" },
+    } as unknown as PluginToolContext;
+    expect(await execute({ action: "pause" }, worker).catch(String)).toMatch(
+      /Workers/,
+    );
+    expect(toolCalls).toBe(beforePause);
+    expect(
+      JSON.parse(String(await execute({ action: "pause" }, stranger))).enabled,
+    ).toBe(false);
+    expect(toolCalls).toBe(beforePause);
+    expect(await fixture.tools.call("amp.get_schedule", {})).toMatchObject({
+      enabled: true,
+    });
+    await wake({ thread: { id: "T-owner" } }, ctx);
+    expect((await control("status")).monitor.schedule).toBe("cleared");
+    expect(await fixture.tools.call("amp.get_schedule", {})).toBeNull();
   } finally {
     dispose();
     await rm(root, { recursive: true, force: true });

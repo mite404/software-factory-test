@@ -98,8 +98,109 @@ Attempts six, ten, fourteen and so on independently record non-blocking spending
 parking safe work or resetting the progress clock. Existing two-rejection checkpoints still apply.
 
 Alert IDs, kind, episode, attempt, intent time and optional `acknowledgedAt` survive reload and
-repair for connected delivery in the next ticket. This unit does not deliver user alerts or
-schedule wake-ups. Detection latency depends on the next mutating lifecycle reconciliation.
+repair. Connected owner reconciliation delivers these intents through `amp.notify_user`. It
+reserves each ID in SQLite before sending and acknowledges only a successful tool result. Sending
+or unknown reservations remain held across reload. The installed API exposes no notification
+receipt lookup, so an ambiguous send is not automatically retried. Inspect the actual delivery
+with the owner before deciding any manual recovery. A new bounded diagnosis nudge is not a retry
+of an uncertain alert. Nudge delivery also requires a connected owner context.
+
+The factory reserves at most ten notification attempts in a rolling hour on its owning thread,
+including ambiguous attempts. Amp independently enforces its thread-wide ten-per-hour limit,
+including unrelated notifications. A platform rejection stays unknown rather than spending more
+attempts on blind retries. Deferred unsent intents are eligible on the next connected
+reconciliation.
+Only curated ticket ID, attempt, alert kind and episode appear in push/email text, never private
+briefs, observed thread titles or failure reports.
+
+Authorized `start` installs one existing-thread watchdog, every 30 minutes, before dispatch. The
+stable SHA-256 fingerprint binds the software factory identity, root and Git storage directory.
+Ownership uses the fingerprint in the title or prompt, not the prompt wording or echoed settings.
+Repeated start accepts its owned, enabled registration. An owned schedule with changed recurrence,
+run mode or enabled state is drifted, not foreign: it stays safe to clear, but is not reported as
+installed. Inspect those settings before further execution; pause can clear it before a new start.
+An unrelated schedule or second root is never replaced; start visibly refuses monitored execution.
+Other owner actions report the registration problem without blocking incident recovery. When
+paused or finished, a foreign schedule means our watchdog is absent, not a conflict. Installation
+failure parks start disabled, leaves a first-time owner unset and must not
+be reported as monitored execution. Schedule reads, writes and SQLite commits are
+separate effects. Every create or clear is followed by inspection, even after a lost acknowledgment.
+If inspection is unavailable, status records `monitor.schedule=unknown`; the next connected
+reconciliation inspects before taking any remote action. `monitor.problem` explains the failure.
+Reconcile, retry-setup, exact-incident resume and pause continue under their normal gates, including
+queued stop-notice delivery, but withhold watchdog nudges, alerts and further schedule effects for
+that turn. A registration failure alone does not pause dispatch. SQLite failures still abort.
+Only the initial, pre-dispatch start admission can refuse execution for unconfirmed monitoring.
+An inspection failure while flushing after dispatch records `watchdog-unconfirmed`; it does not
+disable the factory, label the completed start as failed or authorize clearing a live watchdog.
+A pending effect records its thread even before the first owner claim: return to that thread to
+inspect via start, or pause there to clear.
+Do not switch threads while that effect is uncertain. A refused start with no pending effect leaves
+another schedule-free thread eligible to start.
+
+Connected owner `reload`, `reconcile` and owner turn startup recover a missing registration.
+Intentional pause and completed queues clear only the matching watchdog. Context-free plugin
+callbacks cannot install schedules or deliver alerts. A reload without a connected owner must wait
+for that owner's next turn to restore monitoring. Automatic plugin-load recovery defers while an
+enabled factory lacks confirmed registration, including legacy state without monitor metadata.
+That guard applies only to automatic plugin-load recovery: explicit tool-less reconciles and
+subscription callbacks still settle and dispatch under their normal gates without watchdog effects.
+No keepAlive lease, global scheduler or hosted
+monitor is installed. Legacy SQLite opens unchanged; monitor metadata is added transactionally on
+the first connected lifecycle effect without changing existing definition pins or incident IDs.
+
+Pause persists the local stop before inspecting or clearing any remote schedule. Non-worker,
+non-reviewer threads can pause, reconcile or reload without schedule or alert effects; the owning
+Foreman's next connected turn clears its watchdog after such a pause. This local stop remains
+available if the owner cannot start. Only the connected owner can start monitored execution or
+resume a repair. A changed root/Git path after copy or restore records a durable fingerprint
+conflict, not an installed monitor. Pause still persists even if its tool result reports that
+conflict. Restore the original root and Git storage paths before connected recovery. Automatic
+fingerprint migration to a new path is unsupported: inspect the old thread's schedule and seek an
+explicit adoption decision rather than editing the fingerprint or clearing an unrelated schedule.
+
+**Unsupported coverage boundary.** An unstartable Foreman cannot independently notify its owner
+through this plugin. A platform outage or failure before the connected owner can run its tools is
+not covered. No independent platform failure notification was observed or is promised. Sleeping-orb
+wake and real push/email delivery remain pending for the Foreman after acceptance. Controlled
+adapter tests do not prove those live criteria.
+
+The worker inspected `node_modules/@ampcode/plugin/index.d.ts`. `PluginTools.call(name, input)`
+returns `Promise<unknown>`, requires a connected thread, applies normal permissions and
+confirmations, rejects execution failures and never retries after a lost connection. `agent.start`
+provides the active thread ID and connected tools. Read-only CLI capability inspection returned
+`No such tool` for `amp.get_schedule`, `get_schedule` and `notify_user` in this worker environment.
+This is not evidence about the connected Foreman's web tools. The worker performed no live
+schedule or notification calls.
+
+**Foreman-observed contract, 2026-11-14.** The Foreman inspected and exercised these tools through
+`code_exec`, not the plugin `tools.call` bridge:
+
+- `notify_user` requires `title` (at most 100 characters) and `body` (at most 300 characters).
+  There is no `message` input. This was signature inspection, not proof of real alert delivery.
+- `get_schedule` returns `null` when no schedule exists.
+- `set_schedule` with the 30-minute RRULE and `run_mode: "existing"`, followed by `get_schedule`,
+  returned an object containing `id`, `title`, `targetThreadID`, `prompt`, `enabled: true`,
+  `runMode: "existing"` and `trigger`. The trigger contained `provider: "schedule"`,
+  `scheduleLabel: "Every 30 minutes"` and this schedule value:
+
+  ```text
+  DTSTART:20261114T143900Z
+  RRULE:FREQ=MINUTELY;INTERVAL=30
+  ```
+
+  The object also contained `agentMode`, `reasoningEffort`, `disabledReason`, `nextRunAt`,
+  `lastRunAt`, `lastRunError`, `createdAt` and `updatedAt`. There were no top-level `schedule`
+  or `run_mode` fields. Compare the parsed RRULE frequency and interval in `trigger.schedule`,
+  `runMode` and `enabled`; ignore the platform anchor and unknown metadata. Fingerprint alone
+  determines ownership, even when those settings drift.
+- `clear_schedule` returned `{"deleted":true}`; the next `get_schedule` returned `null`.
+
+Plugin bridge result wrapping remains unobserved. The adapter accepts parsed objects and JSON
+strings; other shapes leave monitoring unconfirmed without replacing a schedule. Controlled
+fixtures reproduce this observed contract and reject invalid notification input. They do not prove
+sleeping-orb wake, plugin bridge wrapping or actual push/email delivery.
+
 Explicitly paused factories, completed runs and planned/dependency-only work produce no watchdog
 nudges or alerts. Status, heartbeat publishing and HTTP reads remain read-only and do not deliver
 messages.

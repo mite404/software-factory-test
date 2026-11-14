@@ -75,6 +75,59 @@ review feedback, or an answer to a question. Find its current stage and continue
    missing information or permission that tools cannot resolve, and ask for the one concrete
    action needed. Failed checks stay on the current ticket.
 
+## Saved watchdog turn
+
+The factory watchdog runs on this owning Foreman thread, not on a fresh child thread. On a wake,
+read `get_schedule` and its saved prompt. Match its factory/root fingerprint and root to durable
+factory status before acting. A schedule conflict or unknown registration is not monitored
+execution. The saved prompt carries this safety contract inline; the managed repository need not
+contain `factory/foreman.md`. Ownership follows the fingerprint, not exact prompt or settings.
+Owned but drifted settings are not confirmed monitoring; pause can still clear that watchdog.
+Preserve unrelated schedules and second factory roots; report the conflict instead of
+replacing them. Only authorized `start` installs this watchdog. Connected owner `reload` and
+`reconcile` recover a missing registration. Use `pause` to stop dispatch and clear only this
+watchdog. Completed queues clear it on the next connected reconciliation.
+
+Read `monitor.problem` when registration is unconfirmed. Only pre-dispatch start admission refuses
+on that failure; an inspection failure after dispatch leaves execution enabled. Reconcile,
+retry-setup, exact-incident resume and pause still run their normal gates and flush
+queued stop notices. Watchdog effects are withheld for that turn, not retried blindly. A watchdog
+failure does not itself pause dispatch or grant permission. Report the monitoring problem separately
+from the recovery result; an unrelated reconcile error does not invalidate confirmed registration.
+
+Pause commits the local stop even if schedule inspection or clearing fails. A non-worker thread
+can pause without owner tools; the owner's next connected turn clears the watchdog. Preserve a
+foreign schedule while paused or finished: our watchdog is absent, not in conflict. A refused
+first start does not claim the factory owner. If `monitor.pendingThread` records an uncertain
+effect, inspect through start or clear through pause on that original thread before switching
+threads. After a repository copy changes the root/Git fingerprint, pause remains durable, and
+status records conflict rather than installed. Restore the original root and Git storage paths
+before connected recovery. Adoption at a new path needs an explicit migration decision; do not
+edit the fingerprint to bypass ownership checks.
+
+Read current factory status, then run the supported factory `reconcile` action in this connected
+owner context. It reconciles durable progress, registration and reserved alert delivery under the
+factory lock. Diagnose each current incident against private evidence and worker activity. Use
+the incident's supported recovery action only after resolving its cause. For `resume`, supply
+the ticket, exact current incident ID and a diagnosis decision. Running or unknown activity keeps
+the existing worker. A stale alert is evidence to inspect, not permission to resume.
+
+Do not blindly resume, grant permission, replace a worker, accept code yourself or repeat an
+uncertain remote effect. Normal gates, cold review and same-worker repair still govern candidates.
+After an ambiguous schedule create or clear, inspect the actual schedule before any further
+action. After an ambiguous alert send, inspect durable `monitor.notifications` and actual delivery
+with the owner. `sending` and `unknown` reservations are held, not retry instructions. Do not call
+`notify_user` separately for an intent already reserved by the factory. Its rolling budget is ten
+attempts per thread per hour, and Amp also counts notifications outside this factory.
+
+Report the current incident and next safe action briefly. If nothing changed, give one short
+no-change update. Keep private briefs, thread titles and raw failure reports out of push/email.
+Do not claim sleeping-orb wake or real delivery from adapter tests. Both live proofs remain pending
+for the Foreman after acceptance. An unstartable Foreman cannot independently notify its owner
+through this plugin; platform outages and failures before connected tools run are unsupported
+coverage, not a green monitoring guarantee. A separate monitor needs a provider and permission
+decision, not an automatic fallback.
+
 ## Boundaries
 
 - Keep secrets server-side. Frontend steering targets the single configured orchestrator thread;
