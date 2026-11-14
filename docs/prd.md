@@ -46,7 +46,7 @@ only part of one. Evidence and trial limitations remain in [workflow-trials.md](
 - F10: Dashboard steering chat remains planned.
 - F11: Safe worker retirement remains planned.
 - F12: The versioned project-owned definition passed native gates and fresh cold review at attempt
-  four. Parent integration and combined verification remain pending. Tools and hooks remain planned.
+  four and is integrated into parent source. Tools and hooks remain planned.
 - F13: Evidence-based effectiveness, scorecards, and spending reports remain planned.
 
 Automated discovery, scheduled full gates, and the complete backup, restore, and retirement loop

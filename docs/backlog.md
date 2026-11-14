@@ -14,17 +14,16 @@ successful PR and post-merge CI.
 
 The [remaining v1 execution inventory](v1-execution.md) retains 29 implementation/acceptance units
 from the original 32. Public-title privacy, canonical backup adoption, and definition v1-ticket2 are
-accepted natively. Definition still needs parent integration and combined verification before its
-dependents can start. Historical feature tickets retain their original scope; they are not the
-active queue. No extra execution or remote permission is granted by the inventory.
+accepted natively. The definition is integrated into parent source with a passing combined gate, so
+its dependents can be admitted in order. Historical feature tickets retain their original scope;
+they are not the active queue. No extra execution or remote permission is granted by the inventory.
 
-Core-first order after accepted backup adoption: definition v1-ticket2, three
-[Foreman watchdog tickets](feats/foreman-watchdog/foreman-watchdog-ticket1.md), then
-[safe planned intake](feats/planned-intake/planned-intake-ticket1.md). Evidence, gates, recovery and
-native execution follow; service/frontend acceptance comes afterward. The owner approved this
-priority and the watchdog's owned Amp schedule/user alerts, not unrelated external infrastructure.
-Integrate the accepted definition before admitting its dependents. Full ordering and admission
-rules live in the inventory, not in these older feature narratives.
+Core-first order after accepted backup adoption: definition v1-ticket2, three [Foreman watchdog
+tickets](feats/foreman-watchdog/foreman-watchdog-ticket1.md), then [safe planned
+intake](feats/planned-intake/planned-intake-ticket1.md). Evidence, gates, recovery and native
+execution follow; service/frontend acceptance comes afterward. The owner approved this priority and
+the watchdog's owned Amp schedule/user alerts, not unrelated external infrastructure. Full ordering
+and admission rules live in the inventory, not in these older feature narratives.
 
 ## F01 - Install the factory as a repository service
 
@@ -190,12 +189,11 @@ Priority: P0. Dependencies: F03, F04, F05, F06. Status: planned.
 As a project owner, I can review and customize my factory through versioned repository files, so
 bespoke workflow details do not require a fork of the shared engine.
 
-Priority: P0. Dependencies: F01, F03. Definition v1-ticket2 passed gates and fresh cold review
-at attempt four. Parent integration is pending, not a new definition implementation. YAML/schema
-loading, explicit migration, safe checks, durable reload, and pinned worker briefs are in that
-accepted candidate. See R15 and AC26-AC29 in [prd.md](prd.md).
+Priority: P0. Dependencies: F01, F03. Definition v1-ticket2 passed gates and fresh cold review at
+attempt four and is integrated into parent source. YAML/schema loading, explicit migration, safe
+checks, durable reload, and pinned worker briefs are implemented. See R15 and AC26-AC29 in
+[prd.md](prd.md).
 
-- Integrate the accepted definition and rerun combined gates before dependent work.
 - Extend the contract only when service, discovery, verification-tool, hook, and dashboard
   capabilities exist. Unimplemented capabilities must remain explicit refusals.
 - Discover existing `action-checks`, `ci-watch`, and `verify-<project-name>` capabilities. Reuse

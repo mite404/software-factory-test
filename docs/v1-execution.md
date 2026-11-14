@@ -10,11 +10,10 @@ The inventory contains 29 remaining acceptance units from the original 32. Publi
 (v1-ticket2) are accepted natively and no longer appear as implementation work below. Historical
 ticket files remain as evidence. Feature numbers describe areas, not dispatch IDs.
 
-The definition candidate still needs parent integration and combined verification. Its dependents
-remain blocked until then. Next come watchdog and safe admission, followed by evidence, gates,
-recovery, and native execution. Service packaging and remaining frontend acceptance follow those
-foundations. Dependencies are acceptance prerequisites, not permission to dispatch every draft
-against today's base.
+The definition candidate is integrated into parent source and passed the combined gate. Next come
+watchdog and safe admission, followed by evidence, gates, recovery, and native execution. Service
+packaging and remaining frontend acceptance follow those foundations. Dependencies are acceptance
+prerequisites, not permission to dispatch every draft against today's base.
 
 | Unit                                                                                    | Outcome                                       | Prerequisites                                                            | Requirements                      |
 | --------------------------------------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------ | --------------------------------- |
@@ -112,10 +111,11 @@ integration are merged through [PR #3](https://github.com/mite404/software-facto
 The combined local gate passed 140 tests and all required checks; post-merge main CI passed.
 
 Definition [v1-ticket2](feats/v1/v1-ticket2.md) passed native gates and fresh cold review at attempt
-four on candidate `901ae38e20fc3517170b43c8b9bea78f6920add1`. It is accepted in the dogfood
-repository, not integrated into parent source. Integrate that candidate and verify combined behavior
-before the three watchdog tickets and safe planned intake. Keep preserved backup owners until
-required evidence preservation is confirmed. Native acceptance does not authorize retirement.
+four on candidate `901ae38e20fc3517170b43c8b9bea78f6920add1`. It was transferred from the previous
+coordinator orb as a checksum-verified Git bundle, merged onto parent main by the Foreman, and
+passed the combined gate with 150 tests. The three watchdog tickets and safe planned intake are
+next. Keep preserved backup owners until required evidence preservation is confirmed. Native
+acceptance does not authorize retirement.
 
 Local sequential steel-thread evidence exists in workflow trials 8 and 9 and subsequent native
 acceptances. Cross-orb transfer, replacement restore, remote monitoring, and retirement still need

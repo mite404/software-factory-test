@@ -300,6 +300,26 @@ unattended setup recovery, private backup/restore, or retirement. Token usage wa
 [observation-review-one]: https://ampcode.com/threads/T-01a1d436-2aa9-7670-a305-683b483040eb
 [observation-review-two]: https://ampcode.com/threads/T-01a1d444-bc60-756a-be19-4f5653043df3
 
+## Trial 10: accepted candidate stranded in a replaced coordinator orb
+
+2026-11-14. A new Foreman thread started in a fresh orb to integrate accepted v1-ticket2. Candidate
+`901ae38` existed only in the previous orb's dogfood repository; origin answered `not our ref` and
+no patch or bundle had been preserved. Every remaining unit was blocked on it.
+
+- The previous Foreman thread exported a read-only Git bundle, patch, review receipt, gate log and
+  report on request. Native thread file transfer delivered them; all seven SHA-256 values matched,
+  the bundle verified, and the regenerated diff matched the transferred patch byte for byte.
+- Parent main had moved 363 lines in `factory/` since the candidate's base, including the
+  `message-foreman` action and preflight resume. A three-way apply conflicted in four files. The
+  Foreman kept both behaviors; this merge was not cold-reviewed.
+- The combined gate passed in the parent: 150 tests, strict lint, type check, formatting, Fallow
+  and the guard. `/api/definition` answered through a real dashboard process.
+
+This recovery depended on the old orb still existing and its thread answering. It is manual
+evidence for v1-ticket9 and v1-ticket17, not proof of either: accepted work must leave the
+coordinator orb at acceptance, not when a successor asks for it. Handoff files remain under
+`.amp/in/orb-backup/v1-ticket2-handoff/`. Nothing was pushed or retired.
+
 [trial-artifact]:
   https://ampcode.com/artifacts/factory-workflow-trials-36c5101e-8f2e-4e6c-ab3f-0a4425873f7e
 [source-workflow]: https://ampcode.com/threads/T-01a1ce51-ec2c-73cf-9b63-a2eb9f40442b

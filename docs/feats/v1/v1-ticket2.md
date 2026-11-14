@@ -7,7 +7,7 @@
 - Depends on: canonical Feature 05 adoption.
 - Planned at: `62816cf8a6c8c282172754c4a97242e5a4a9eab1`, 2026-11-13.
 - Backlog: F12. Native accepted at attempt four.
-  Parent integration and combined verification remain pending.
+  Integrated into parent source on 2026-11-14; the combined gate passed with 150 tests.
 - Accepted candidate: `901ae38e20fc3517170b43c8b9bea78f6920add1` in the dogfood repository.
 - Proof: native full gates and fresh cold-review pass, with no findings. Review receipt:
   `.git/factory/v1-ticket2-4-901ae38e20fc3517170b43c8b9bea78f6920add1-post-graft.review.json`.
@@ -77,4 +77,4 @@ Execute `docs/v1-execution.md` dispatch preflight; authoring did not run impleme
 - [x] Two projects use one validated authoritative definition with no engine fork.
 - [x] Checks and normal reads execute nothing; migration and reload preserve active ownership.
 - [x] Full gates and fresh required cold review pass on the exact native candidate revision.
-- [ ] Integrate the accepted candidate into parent source and rerun combined gates.
+- [x] Integrate the accepted candidate into parent source and rerun combined gates.
