@@ -143,6 +143,10 @@ function applyObservation(
     row.status = observed.status;
 }
 
+function attemptOf(run: Run | undefined): number | null {
+  return run && "attempt" in run ? (run.attempt ?? null) : null;
+}
+
 function projectTask(
   id: string,
   steps: string[],
@@ -173,6 +177,8 @@ function projectTask(
   applyObservation(row, observed, fresh);
   return {
     ...row,
+    // The owning worker's current attempt; a repair after rejection raises it.
+    attempt: attemptOf(run),
     evidence: {
       acceptance: run?.kind === "done" ? { revision: row.revision } : null,
       gate,

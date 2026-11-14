@@ -355,6 +355,8 @@ All storage connections use a connection-local five-second busy timeout so dashb
 coordinator commits wait for ordinary lock overlap. An exhausted lock wait returns HTTP 503 with
 `durable: "unavailable"`, not invalid storage; retry after the competing transaction finishes.
 
+Each task adds `attempt`, the owning worker's current attempt from its durable run, or `null` when
+no worker run carries one. A repair after a rejection raises it; it is not a review verdict.
 Each task adds `evidence`: an `acceptance` revision when done, and `gate`/`review` references only
 when a bound review record exists. References include revision, base, and post-graft stage; review
 also includes attempt, pending state, and the available reviewer thread. An absent reference is

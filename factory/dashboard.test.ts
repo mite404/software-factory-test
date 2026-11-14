@@ -416,6 +416,7 @@ test("HTTP reads durable acceptance without a heartbeat and never discloses priv
         status: "unknown",
         thread: "T-review",
         revision,
+        attempt: 1,
         evidence: {
           review: {
             pending: true,
@@ -427,7 +428,7 @@ test("HTTP reads durable acceptance without a heartbeat and never discloses priv
           gate: { revision, base: review.base, stage: "post-graft" },
         },
       },
-      { id: "C", status: "queued" },
+      { id: "C", status: "queued", attempt: null },
     ]);
     expect(missing).toMatchObject({
       durable: "available",

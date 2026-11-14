@@ -80,6 +80,7 @@ export function feedAt(n: number): Feed {
         status: landed ? "accepted" : frame.status,
         thread: null,
         revision: attempt || landed ? ticket.revision : null,
+        attempt: attempt ?? null,
         evidence: { review: attempt ? { pending: !landed, attempt } : null },
       };
     }),

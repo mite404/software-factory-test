@@ -221,6 +221,10 @@ test("a pending review is never drawn blocked, and a vanished review is a reject
   expect(derive(working, dispatching, NOW).next).toBe(
     "T2, WORKING · ATTEMPT 2",
   );
+  working.tasks[1]!.attempt = 3; // repairing after a rejection: no review record
+  expect(derive(dispatching, working, NOW).next).toBe(
+    "T2, WORKING · ATTEMPT 3",
+  );
   const second = derive(dispatching, feed(["accepted", "blocked"]), NOW);
   expect(second.backRow).toBe(1);
   expect(derive(working, working, NOW).backRow).toBe(0);
