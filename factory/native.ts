@@ -29,6 +29,7 @@ import {
   factoryDefinition,
   openPersistence,
   taskSteps,
+  ticketIntake,
   defaultWatchdog,
   validWatchdogPolicy,
   type ThreadID,
@@ -501,10 +502,12 @@ export function tasks(value: unknown): Task[] {
     const risky = raw.risky;
     if (risky !== undefined && typeof risky !== "boolean")
       throw new Error("Invalid ticket risky; expected boolean");
+    const intake = ticketIntake(raw, true);
     return {
       id,
       brief: text(raw.brief),
       after: strings(raw.after),
+      ...intake,
       ...(raw.steps === undefined ? {} : { steps: taskSteps(raw.steps) }),
       size,
       risky,
@@ -802,6 +805,11 @@ function assertWatchdogCaller(
     throw new Error("Watchdog effects require the connected owning Foreman");
 }
 
+function assertAdmissionOwner(state: State, owner?: ThreadID) {
+  if (!owner || state.owner !== owner)
+    throw new Error("Admission requires the owning Foreman");
+}
+
 function controlState(
   state: State,
   action: string,
@@ -827,9 +835,12 @@ function controlState(
 }
 
 function restoreTickets(queue: Task[], persisted: Task[], state: State) {
-  for (const task of persisted)
-    if (state.runs[task.id] && !queue.some((row) => row.id === task.id))
+  for (const task of persisted) {
+    const index = queue.findIndex((row) => row.id === task.id);
+    if (index >= 0 && task.intake) queue[index] = task;
+    else if (index < 0 && (task.intake || state.runs[task.id]))
       queue.push(task);
+  }
 }
 
 function retryAdmission(state: State, action: string) {
@@ -1882,6 +1893,7 @@ export function createFactory(
           return state;
         const next = queue.find(
           (task) =>
+            task.intake !== "planned" &&
             !state.runs[task.id] &&
             task.after.every((id) => state.runs[id]?.kind === "done"),
         );
@@ -1961,35 +1973,51 @@ export function createFactory(
       | "retry-setup"
       | "retry-create"
       | "resume"
+      | "admit"
       | "reload",
     owner?: ThreadID,
     observe: NativeHost["state"] = host.state,
     repairRequest?: Parameters<typeof reconcile>[3],
     tools?: PluginTools,
+    admissionTicket?: string,
   ): Promise<State> {
     const result = pending
       .catch(() => {})
       .then(async () => {
         const initial = factoryStatus(directory);
-        if (action !== "status") assertControlCaller(initial, owner);
+        if (action === "status") {
+          assertWatchdogCaller(initial, action, owner, tools);
+          await configuration(root);
+          return factoryStatus(directory);
+        }
+        assertControlCaller(initial, owner);
         assertWatchdogCaller(initial, action, owner, tools);
-        if (action === "reload") {
+        if (action === "admit") assertAdmissionOwner(initial, owner);
+        if (action === "reload" || action === "admit") {
           assertControlCaller(factoryStatus(directory), owner);
           await configuration(root);
           const store = openStore(join(directory, "bookkeeping"));
           try {
             await store.init();
-            const next = await configuration(root);
+            const next =
+              action === "admit"
+                ? await effectiveConfiguration(root)
+                : await configuration(root);
             assertControlCaller(factoryStatus(directory), owner);
-            const persistence = openPersistence(directory, [], now);
+            const queue = tasks(
+              JSON.parse(await readFile(next.tickets, "utf8")),
+            );
+            const persistence = openPersistence(directory, queue, now);
             try {
               assertWatchdogCaller(persistence.state, action, owner, tools);
+              if (action === "admit") {
+                assertAdmissionOwner(persistence.state, owner);
+                persistence.admit(text(admissionTicket));
+                return persistence.state;
+              }
               persistence.definition(definitionPin(next), true);
               persistence.event("factory", "reloaded", next.digest);
               if (tools) {
-                const queue = tasks(
-                  JSON.parse(await readFile(next.tickets, "utf8")),
-                );
                 restoreTickets(queue, persistence.tickets, persistence.state);
                 await reconcileSchedule(
                   root,
@@ -2023,10 +2051,6 @@ export function createFactory(
           } finally {
             await store.close();
           }
-        }
-        if (action === "status") {
-          await configuration(root);
-          return factoryStatus(directory);
         }
         await configuration(root);
         if (!retryAdmission(initial, action)) return initial;

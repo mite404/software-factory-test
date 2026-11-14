@@ -139,7 +139,12 @@ export async function reconcileSchedule(
   const title = `Factory watchdog ${fingerprint}`;
   const prompt = `${title}. Factory root: ${root}. Read factory status and match this fingerprint to durable monitor state before acting. Use the supported factory reconcile action in this connected owner thread. Diagnose current incidents against private evidence and worker activity; use only the supported exact-incident recovery action after resolving its cause. For resume supply ticket, current incident ID and diagnosis decision; paused factories stay paused. Running or unknown activity retains the same worker. Never blindly resume, grant permission, replace a worker, accept code or retry an uncertain remote effect. Inspect actual schedule state after ambiguous create or clear; held sending/unknown alert reservations are not retry instructions. Do not separately notify for a reserved intent. Preserve unrelated schedules and second roots. Normal gates and cold review still apply. Report the current incident and next safe action briefly, or give one short no-change update. This wake grants no permission. The factory source's foreman.md Saved watchdog turn section has further operating guidance; it need not exist in the managed repository.`;
   const wanted =
-    state.enabled && queue.some((task) => state.runs[task.id]?.kind !== "done");
+    state.enabled &&
+    queue.some(
+      (task) =>
+        (task.intake !== "planned" || Object.hasOwn(state.runs, task.id)) &&
+        state.runs[task.id]?.kind !== "done",
+    );
   const expected = {
     fingerprint,
     title,

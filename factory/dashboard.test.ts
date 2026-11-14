@@ -93,6 +93,13 @@ test("HTTP retains authored labels across restarts and rejects untrusted labels 
         report: canary,
       },
       { id: "legacy", brief: canary, after: [] },
+      {
+        id: "constructor",
+        brief: canary,
+        after: [],
+        intake: "planned",
+        outcome: "Public plan",
+      },
     ]);
     const storage = openPersistence(directory, queue);
     storage.commit(
@@ -114,6 +121,12 @@ test("HTTP retains authored labels across restarts and rejects untrusted labels 
         ],
       },
       { id: "legacy", steps: [] },
+      {
+        id: "constructor",
+        steps: [],
+        status: "planned",
+        outcome: "Public plan",
+      },
       { id: "orphan", steps: [] },
     ];
     const check = async () => {
@@ -121,6 +134,7 @@ test("HTTP retains authored labels across restarts and rejects untrusted labels 
       expect(response.status).toBe(200);
       const body = await response.json();
       expect(body.tasks).toMatchObject(expected);
+      expect(body.counts).toEqual({ planned: 1, queued: 2, accepted: 0 });
       expect(JSON.stringify(body)).not.toContain(canary);
       expect(JSON.stringify(body)).not.toContain("currentStep");
       return body;

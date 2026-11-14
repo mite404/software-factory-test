@@ -27,6 +27,7 @@ const controlActions = [
   "retry-create",
   "resume",
   "reload",
+  "admit",
 ] as const;
 
 function activity(value: unknown): Awaited<ReturnType<NativeHost["state"]>> {
@@ -326,7 +327,11 @@ export default function registerFactory(
           type: "string",
           enum: [...controlActions, "message-foreman", "backup"],
         },
-        ticket: { type: "string" },
+        ticket: {
+          type: "string",
+          description:
+            "For admit, one canonical planned ID. Only the owning Foreman may admit it after accepted prerequisites. Admission does not start or dispatch work.",
+        },
         decision: { type: "string" },
         incident: { type: "string", minLength: 1 },
         message: { type: "string", minLength: 1 },
@@ -357,6 +362,9 @@ export default function registerFactory(
           (id) => observe(id, ctx.tools),
           request,
           tools,
+          action === "admit" && typeof input.ticket === "string"
+            ? input.ticket
+            : undefined,
         );
         if (action !== "reload" && action !== "status")
           await publish(ctx.tools);

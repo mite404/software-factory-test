@@ -36,6 +36,10 @@ export type Task = {
   id: string;
   brief: string;
   after: string[];
+  /** Omission preserves legacy queue eligibility; only the Foreman can admit planned work. */
+  intake?: "planned" | "admitted";
+  /** Explicitly public text, never derived from the private brief. */
+  outcome?: string;
   steps?: string[];
   size?: "small" | "medium" | "large";
   risky?: boolean;
@@ -152,6 +156,30 @@ function text(value: unknown): value is string {
 
 function optionalText(value: unknown): boolean {
   return value === undefined || text(value);
+}
+
+/** Parse public planning fields at authored and storage boundaries. @throws On invalid intake or outcome. */
+export function ticketIntake(
+  raw: Record<string, unknown>,
+  authored = false,
+): Pick<Task, "intake" | "outcome"> {
+  if (
+    raw.intake !== undefined &&
+    raw.intake !== "planned" &&
+    raw.intake !== "admitted"
+  )
+    throw new Error("Invalid ticket intake");
+  if (authored && raw.intake === "admitted")
+    throw new Error("Import cannot grant admission");
+  if (
+    (raw.intake !== undefined && !text(raw.outcome)) ||
+    !optionalText(raw.outcome)
+  )
+    throw new Error("Planned tickets require an explicit public outcome");
+  return {
+    ...(raw.intake === undefined ? {} : { intake: raw.intake }),
+    ...(raw.outcome === undefined ? {} : { outcome: raw.outcome as string }),
+  };
 }
 
 /** Parse ordered authored labels; missing legacy labels become empty. @throws On malformed labels. */
@@ -601,12 +629,46 @@ export function factoryRecords(directory: string) {
         .map(({ id, data }) => {
           if (!/^[a-zA-Z0-9_-]+$/.test(id))
             throw new Error("Invalid factory ticket identity");
-          return { id, steps: taskSteps(record(JSON.parse(data)).steps) };
+          const task = record(JSON.parse(data));
+          return {
+            id,
+            steps: taskSteps(task.steps),
+            ...ticketIntake(task),
+          };
         });
       return { state, tickets };
     })();
   } finally {
     db.close();
+  }
+}
+
+function refreshTickets(db: Database, queue: Task[], now: () => number) {
+  const upsert = db.query(
+    "INSERT OR REPLACE INTO tickets (id, data) VALUES (?, ?)",
+  );
+  for (const task of queue) {
+    ticketIntake(record(task), true);
+    const previous = db
+      .query<{ data: string }, [string]>(
+        "SELECT data FROM tickets WHERE id = ?",
+      )
+      .get(task.id);
+    const saved = previous ? record(JSON.parse(previous.data)) : undefined;
+    const intake = saved ? ticketIntake(saved).intake : undefined;
+    if (intake === "admitted") continue;
+    const data = JSON.stringify({
+      ...task,
+      ...(intake ? { intake, outcome: task.outcome ?? saved!.outcome } : {}),
+    });
+    if (previous?.data === data) continue;
+    upsert.run(task.id, data);
+    saveEvent(db, {
+      at: new Date(now()).toISOString(),
+      ticket: task.id,
+      action: "configured",
+      detail: data,
+    });
   }
 }
 
@@ -645,25 +707,7 @@ export function openPersistence(
       }
       definitionTables(db);
       const state = readState(db);
-      const upsert = db.query(
-        "INSERT OR REPLACE INTO tickets (id, data) VALUES (?, ?)",
-      );
-      for (const task of queue) {
-        const data = JSON.stringify(task);
-        const previous = db
-          .query<{ data: string }, [string]>(
-            "SELECT data FROM tickets WHERE id = ?",
-          )
-          .get(task.id);
-        if (previous?.data === data) continue;
-        upsert.run(task.id, data);
-        saveEvent(db, {
-          at: new Date(now()).toISOString(),
-          ticket: task.id,
-          action: "configured",
-          detail: data,
-        });
-      }
+      refreshTickets(db, queue, now);
       return state;
     })();
     return {
@@ -686,8 +730,41 @@ export function openPersistence(
         .map((row) => {
           const task = JSON.parse(row.data) as Task;
           taskSteps(task.steps);
+          ticketIntake(record(task));
           return task;
         }),
+      /** Admit exactly one planned ticket after accepted prerequisites. @throws On missing work or unmet prerequisites. */
+      admit(id: string) {
+        db.transaction(() => {
+          const row = db
+            .query<{ data: string }, [string]>(
+              "SELECT data FROM tickets WHERE id = ?",
+            )
+            .get(id);
+          if (!row) throw new Error("Unknown planned ticket");
+          const task = JSON.parse(row.data) as Task;
+          if (!task.intake) throw new Error("Ticket is a legacy queue entry");
+          if (task.intake === "admitted") return;
+          const state = readState(db);
+          if (
+            !task.after.every(
+              (dependency) => state.runs[dependency]?.kind === "done",
+            )
+          )
+            throw new Error("Admission requires accepted prerequisites");
+          task.intake = "admitted";
+          db.query("UPDATE tickets SET data = ? WHERE id = ?").run(
+            JSON.stringify(task),
+            id,
+          );
+          saveEvent(db, {
+            at: new Date(now()).toISOString(),
+            ticket: id,
+            action: "admitted",
+            detail: "Foreman admission",
+          });
+        })();
+      },
       /** Read the latest durable event for explicit pre-upgrade recovery. @throws On storage failure. */
       lastEvent(ticket: string, action: string) {
         return db

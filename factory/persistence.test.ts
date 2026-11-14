@@ -144,6 +144,47 @@ afterEach(async () => {
     await rm(root, { recursive: true, force: true });
 });
 
+test("planning refresh cannot grant admission or rewrite admitted scope", async () => {
+  const f = await fixture();
+  const planned = {
+    id: "A",
+    brief: "Private scope",
+    after: [],
+    intake: "planned" as const,
+    outcome: "Public outcome",
+  };
+  let storage = openPersistence(f.directory, [planned]);
+  storage.close();
+  const bytes = await readFile(join(f.directory, "state.sqlite"));
+  storage = openPersistence(f.directory, [planned]);
+  storage.close();
+  expect(await readFile(join(f.directory, "state.sqlite"))).toEqual(bytes);
+  storage = openPersistence(f.directory, [
+    { id: "A", brief: "Refreshed scope", after: [] },
+  ]);
+  expect(storage.tickets[0]).toMatchObject({
+    intake: "planned",
+    outcome: "Public outcome",
+    brief: "Refreshed scope",
+  });
+  storage.admit("A");
+  storage.close();
+  storage = openPersistence(f.directory, [
+    { ...planned, brief: "Unauthorized scope replacement" },
+  ]);
+  expect(storage.tickets[0]).toMatchObject({
+    intake: "admitted",
+    brief: "Refreshed scope",
+  });
+  storage.close();
+  expect(() =>
+    openPersistence(f.directory, [{ ...planned, intake: "admitted" }]),
+  ).toThrow("cannot grant admission");
+  expect(factoryRecords(f.directory)?.tickets).toEqual([
+    { id: "A", steps: [], intake: "admitted", outcome: "Public outcome" },
+  ]);
+});
+
 test("status reads fresh and legacy repositories without runtime writes or locks", async () => {
   const f = await fixture();
   expect(await f.factory().tick("status")).toEqual({

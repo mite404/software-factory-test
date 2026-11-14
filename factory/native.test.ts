@@ -17,12 +17,13 @@ import {
   effectiveDefinition,
   effectiveConfiguration,
   createFactory,
+  migrateDefinition,
   tasks,
   type NativeHost,
 } from "./native";
 import { openStore, watchdogFixture } from "./bookkeeping.fixture";
 import { startDashboard } from "./dashboard";
-import { factoryStatus, openPersistence } from "./persistence";
+import { factoryRecords, factoryStatus, openPersistence } from "./persistence";
 
 const installer = resolve(import.meta.dir, "setup-factory.ts");
 const preparationRoots: string[] = [];
@@ -76,6 +77,9 @@ async function preparationFixture(
   const git = (...args: string[]) =>
     execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim();
   git("init", "-q");
+  // CI runners have no global Git identity; every fixture commit uses this one.
+  git("config", "user.name", "Fixture");
+  git("config", "user.email", "fixture@example.invalid");
   for (const file of ["package.json", "bun.lock", "lefthook.yml"])
     await copyFile(join(import.meta.dir, "..", file), join(root, file));
   await writeFile(join(root, "prd.md"), "Fixture");
@@ -166,6 +170,279 @@ async function preparationFixture(
 afterEach(async () => {
   for (const root of preparationRoots.splice(0))
     await rm(root, { recursive: true, force: true });
+});
+
+test("planned intake survives refresh and restart without dispatch until owner admission", async () => {
+  const f = await preparationFixture(() => "");
+  const planned = [
+    { id: "B", brief: "PRIVATE-CANARY", after: [] },
+    {
+      id: "A",
+      brief: "PRIVATE-CANARY",
+      after: ["B"],
+      intake: "planned",
+      outcome: "Safe outcome",
+    },
+    {
+      id: "C",
+      brief: "PRIVATE-CANARY",
+      after: ["A"],
+      intake: "planned",
+      outcome: "Later outcome",
+    },
+  ];
+  for (const intake of ["admitted", "queued", null])
+    expect(() => tasks([{ ...planned[1], after: [], intake }])).toThrow();
+  expect(() =>
+    tasks([{ ...planned[1], after: [], outcome: undefined }]),
+  ).toThrow();
+  const path = join(f.root, "tickets.json");
+  await writeFile(path, JSON.stringify(planned));
+  f.git("add", ".");
+  f.git("commit", "-qm", "plan");
+  const engine = createFactory(f.root, f.host, openStore);
+  const storage = openPersistence(engine.directory, []);
+  storage.commit(
+    {
+      enabled: false,
+      owner: "T-owner",
+      runs: {
+        B: {
+          kind: "done",
+          revision: f.git("rev-parse", "HEAD"),
+          thread: "T-old",
+          insight: "PRIVATE-CANARY",
+        },
+      },
+    },
+    "B",
+    "accepted",
+    "fixture",
+  );
+  storage.close();
+  const { tools } = watchdogFixture();
+  await engine.tick("start", "T-owner", f.host.state, undefined, tools);
+  expect(f.counts()).toEqual({ creates: 0, sends: 0 });
+  await writeFile(
+    path,
+    JSON.stringify([
+      planned[0],
+      { id: "A", brief: "PRIVATE-CANARY", after: ["B"] },
+      planned[2],
+    ]),
+  );
+  f.git("add", ".");
+  f.git("commit", "-qm", "refresh without intake");
+  await engine.tick("reload", "T-owner");
+  await migrateDefinition(f.root);
+  f.git("add", ".");
+  f.git("commit", "-qm", "migrate definition");
+  const restarted = createFactory(f.root, f.host, openStore);
+  const plannedOnly = await restarted.tick(
+    "reconcile",
+    "T-owner",
+    f.host.state,
+    undefined,
+    tools,
+  );
+  expect(plannedOnly.monitor?.schedule).toBe("cleared");
+  const server = startDashboard({ root: f.root, port: 0 });
+  try {
+    const bytes = await readFile(join(engine.directory, "state.sqlite"));
+    const response = await fetch(`http://localhost:${server.port}/api/status`);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.counts).toEqual({ planned: 2, queued: 0, accepted: 1 });
+    expect(
+      body.tasks.find((task: { id: string }) => task.id === "A"),
+    ).toMatchObject({ id: "A", status: "planned", outcome: "Safe outcome" });
+    expect(
+      body.tasks.find((task: { id: string }) => task.id === "B").outcome,
+    ).toBe(null);
+    expect(JSON.stringify(body)).not.toContain("PRIVATE-CANARY");
+    expect(await readFile(join(engine.directory, "state.sqlite"))).toEqual(
+      bytes,
+    );
+    for (const owner of [undefined, "T-stranger", "T-old"] as const)
+      expect(
+        restarted.tick("admit", owner, f.host.state, undefined, undefined, "A"),
+      ).rejects.toThrow();
+    expect(
+      restarted.tick(
+        "admit",
+        "T-owner",
+        f.host.state,
+        undefined,
+        undefined,
+        "C",
+      ),
+    ).rejects.toThrow("accepted prerequisites");
+    expect(f.counts()).toEqual({ creates: 0, sends: 0 });
+    await restarted.tick("pause", "T-owner");
+    await restarted.tick(
+      "admit",
+      "T-owner",
+      f.host.state,
+      undefined,
+      undefined,
+      "A",
+    );
+    await restarted.tick(
+      "admit",
+      "T-owner",
+      f.host.state,
+      undefined,
+      undefined,
+      "A",
+    );
+    expect((await restarted.tick("status")).enabled).toBe(false);
+    const admitted = await (
+      await fetch(`http://localhost:${server.port}/api/status`)
+    ).json();
+    expect(admitted.counts).toEqual({ planned: 1, queued: 1, accepted: 1 });
+    await restarted.tick("reload", "T-owner");
+    expect(f.counts()).toEqual({ creates: 0, sends: 0 });
+    const working = await restarted.tick(
+      "start",
+      "T-owner",
+      f.host.state,
+      undefined,
+      tools,
+    );
+    expect(working.monitor?.schedule).toBe("installed");
+    await restarted.tick(
+      "admit",
+      "T-owner",
+      f.host.state,
+      undefined,
+      undefined,
+      "A",
+    );
+    const state = await createFactory(f.root, f.host, openStore).tick(
+      "reconcile",
+      "T-owner",
+    );
+    expect(state.runs.A).toMatchObject({
+      kind: "running",
+      thread: "T-prepared",
+      attempt: 1,
+    });
+    expect(state.runs.B).toMatchObject({ kind: "done", thread: "T-old" });
+    expect(f.counts()).toEqual({ creates: 1, sends: 1 });
+    await mkdir(join(f.worktree, "src"));
+    await writeFile(join(f.worktree, "src/value"), "accepted planned work");
+    f.git("-C", f.worktree, "add", "src/value");
+    f.git("-C", f.worktree, "commit", "-qm", "candidate");
+    const revision = f.git("-C", f.worktree, "rev-parse", "HEAD");
+    await writeFile(
+      join(engine.directory, "A.report.json"),
+      JSON.stringify({
+        attempt: 1,
+        kind: "candidate",
+        revision,
+        insight: "Verified planned intake",
+      }),
+    );
+    f.host.state = async () => "idle";
+    const accepted = await restarted.tick("reconcile", "T-owner");
+    expect(accepted.runs.A).toMatchObject({
+      kind: "done",
+      revision,
+      thread: "T-prepared",
+    });
+    const completed = await restarted.tick(
+      "reconcile",
+      "T-owner",
+      f.host.state,
+      undefined,
+      tools,
+    );
+    expect(completed.enabled).toBe(true);
+    expect(completed.monitor?.schedule).toBe("cleared");
+    const final = await (
+      await fetch(`http://localhost:${server.port}/api/status`)
+    ).json();
+    expect(final.counts).toEqual({ planned: 1, queued: 0, accepted: 2 });
+    expect(
+      final.tasks.find((task: { id: string }) => task.id === "A"),
+    ).toMatchObject({ status: "accepted", outcome: "Safe outcome", revision });
+    expect(f.counts()).toEqual({ creates: 1, sends: 1 });
+  } finally {
+    await server.stop();
+  }
+});
+
+test("admission uses the loaded ticket path until explicit reload", async () => {
+  const f = await preparationFixture(() => "");
+  const loaded = {
+    id: "A",
+    brief: "Loaded private scope",
+    after: [],
+    intake: "planned",
+    outcome: "Loaded outcome",
+  };
+  await writeFile(join(f.root, "tickets.json"), JSON.stringify([loaded]));
+  const engine = createFactory(f.root, f.host, openStore);
+  const storage = openPersistence(engine.directory, []);
+  storage.commit(
+    { enabled: false, owner: "T-owner", runs: {} },
+    "factory",
+    "fixture",
+    "",
+  );
+  storage.close();
+  await engine.tick("reload", "T-owner");
+  const definition = join(f.root, ".factory.json");
+  const raw = await Bun.file(definition).json();
+  await writeFile(
+    join(f.root, "future-tickets.json"),
+    JSON.stringify([
+      { ...loaded, brief: "Unloaded scope", outcome: "Unloaded outcome" },
+      { id: "future-legacy", brief: "Unloaded legacy", after: [] },
+      { ...loaded, id: "future-planned" },
+    ]),
+  );
+  await writeFile(
+    definition,
+    JSON.stringify({ ...raw, tickets: "future-tickets.json" }),
+  );
+  expect(
+    engine.tick(
+      "admit",
+      "T-owner",
+      f.host.state,
+      undefined,
+      undefined,
+      "future-planned",
+    ),
+  ).rejects.toThrow("Unknown planned ticket");
+  await engine.tick(
+    "admit",
+    "T-owner",
+    f.host.state,
+    undefined,
+    undefined,
+    "A",
+  );
+  const retained = openPersistence(engine.directory, []);
+  expect(retained.tickets).toEqual([{ ...loaded, intake: "admitted" }]);
+  retained.close();
+  expect(factoryRecords(engine.directory)?.tickets).toEqual([
+    { id: "A", steps: [], intake: "admitted", outcome: "Loaded outcome" },
+  ]);
+  await engine.tick("reload", "T-owner");
+  await engine.tick(
+    "admit",
+    "T-owner",
+    f.host.state,
+    undefined,
+    undefined,
+    "future-planned",
+  );
+  expect(
+    factoryRecords(engine.directory)?.tickets.map((task) => task.id),
+  ).toEqual(["A", "future-legacy", "future-planned"]);
+  expect(f.counts()).toEqual({ creates: 0, sends: 0 });
 });
 
 test("invalid worker runner settings reject dispatch before creating a thread", async () => {
