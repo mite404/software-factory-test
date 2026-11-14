@@ -1,7 +1,7 @@
-<!-- Layout example, not a filed ticket. Intended local filename: observation-ticket1.md.
+<!-- Layout example, not a filed ticket. Intended local filename: F001-observation-status.md.
 Replace every placeholder and recheck paths/commands before authoring a real ticket. -->
 
-# observation-ticket1
+# F001-observation-status
 
 ## Status
 
@@ -11,7 +11,7 @@ Replace every placeholder and recheck paths/commands before authoring a real tic
 - Risk: elevated; read-only status crosses the private-state/public-projection boundary.
 - Depends on: conditional post-graft review accepted and installed.
 - Planned at: `<actual full planning SHA>`, `<actual planning date>`
-- Local path: `docs/feats/observation/observation-ticket1.md`
+- Local path: `docs/feats/observation/F001-observation-status.md`
 
 ## Why this matters
 
@@ -50,8 +50,8 @@ The `steps` values copy the bold labels above in order. The brief retains the fu
 ```json
 [
   {
-    "id": "observation-ticket1",
-    "brief": "Implement docs/feats/observation/observation-ticket1.md",
+    "id": "F001-observation-status",
+    "brief": "Implement docs/feats/observation/F001-observation-status.md",
     "after": [],
     "steps": [
       "Read durable ticket records",
@@ -79,15 +79,15 @@ Labels are public planned-work descriptions, not evidence of the worker's curren
 
 ## Files You'll Touch
 
-| Path | Role | Contains | Edit or Read |
-| --- | --- | --- | --- |
-| `factory/persistence.ts` | Durable boundary | Validated read-only records | Edit |
-| `factory/dashboard.ts` | HTTP boundary | Curated status and freshness | Edit |
-| `factory/plugin.ts` | Observation producer | Timestamped agent observations | Edit |
-| `factory/persistence.test.ts` | Storage proof | Integrity and read-only cases | Edit |
-| `factory/dashboard.test.ts` | HTTP proof | Freshness and privacy cases | Edit |
-| `factory/native.ts` | Lifecycle exemplar | Acceptance and review ownership | Read |
-| `factory/README.md` | Operator contract | Status fields and failure modes | Edit |
+| Path                          | Role                 | Contains                        | Edit or Read |
+| ----------------------------- | -------------------- | ------------------------------- | ------------ |
+| `factory/persistence.ts`      | Durable boundary     | Validated read-only records     | Edit         |
+| `factory/dashboard.ts`        | HTTP boundary        | Curated status and freshness    | Edit         |
+| `factory/plugin.ts`           | Observation producer | Timestamped agent observations  | Edit         |
+| `factory/persistence.test.ts` | Storage proof        | Integrity and read-only cases   | Edit         |
+| `factory/dashboard.test.ts`   | HTTP proof           | Freshness and privacy cases     | Edit         |
+| `factory/native.ts`           | Lifecycle exemplar   | Acceptance and review ownership | Read         |
+| `factory/README.md`           | Operator contract    | Status fields and failure modes | Edit         |
 
 Connections: persistence supplies durable identity; the plugin supplies observed activity;
 the HTTP boundary combines them. Build order: persistence + tests, HTTP + tests, observation
@@ -97,34 +97,35 @@ compatibility, then documentation. Revalidate consumers before changing a shared
 
 Checks below are not run in this example. Fill in the planning SHA and inspect actual repo scripts.
 
-| Command | Expected result / action |
-| --- | --- |
-| `git rev-parse HEAD` | Record dispatch revision; explain differences from planning SHA. |
-| `git status --short` | Account for existing edits; preserve unrelated work. |
-| `git diff --stat <planned-sha>..HEAD -- factory/` | Revalidate any relevant committed drift. |
-| `git diff -- factory/` | No unaccounted unstaged implementation changes. |
-| `git diff --cached -- factory/` | No unaccounted staged implementation changes. |
-| `bun --version` | Installed version supports the repository toolchain. |
-| `bun test` | Baseline tests pass; record the actual outcome. |
-| `bun run lint:ci` | No strict lint errors. |
-| `bun run typecheck` | No type errors. |
-| `bun run format:check` | Baseline formatting passes, including tracked config. |
-| `bun run fallow:ci` | Required Fallow gate passes without suppressions. |
-| `git diff --check` | No whitespace errors. |
+| Command                                           | Expected result / action                                         |
+| ------------------------------------------------- | ---------------------------------------------------------------- |
+| `git rev-parse HEAD`                              | Record dispatch revision; explain differences from planning SHA. |
+| `git status --short`                              | Account for existing edits; preserve unrelated work.             |
+| `git diff --stat <planned-sha>..HEAD -- factory/` | Revalidate any relevant committed drift.                         |
+| `git diff -- factory/`                            | No unaccounted unstaged implementation changes.                  |
+| `git diff --cached -- factory/`                   | No unaccounted staged implementation changes.                    |
+| `bun --version`                                   | Installed version supports the repository toolchain.             |
+| `bun test`                                        | Baseline tests pass; record the actual outcome.                  |
+| `bun run lint:ci`                                 | No strict lint errors.                                           |
+| `bun run typecheck`                               | No type errors.                                                  |
+| `bun run format:check`                            | Baseline formatting passes, including tracked config.            |
+| `bun run fallow:ci`                               | Required Fallow gate passes without suppressions.                |
+| `git diff --check`                                | No whitespace errors.                                            |
 
 Relevant drift requires refreshed scoping, not a reset. Baseline/configuration failures are
 coordinator-owned blockers. Do not expand worker edit scope or claim preflight passed without logs.
 
 ## Done when
 
-* Durable accepted work remains visible with missing or stale heartbeat data.
-* Stale activity is not reported as current work; private-field canary stays absent.
-* Reads leave durable state unchanged, including when a source is missing or corrupt.
-* The exact clean candidate passes the full gate and required independent post-graft review.
-* Changes stay within the agreed edit paths; the original worker retains repair ownership.
+- Durable accepted work remains visible with missing or stale heartbeat data.
+- Stale activity is not reported as current work; private-field canary stays absent.
+- Reads leave durable state unchanged, including when a source is missing or corrupt.
+- The exact clean candidate passes the full gate and required independent post-graft review.
+- Changes stay within the agreed edit paths; the original worker retains repair ownership.
 
 ## Notes
 
-In paired mode, Linear title is exactly `observation-ticket1`, matching the filename stem and H1.
+In paired mode, Linear title is exactly `F001-observation-status`, matching the filename stem and
+H1.
 Save the returned Linear identifier in local metadata only after creation; never invent one.
 In local-only mode, create no external issue or fabricated filing metadata.
