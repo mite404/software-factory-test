@@ -32,6 +32,9 @@ test("plugin and HTTP keep private briefs and native titles out of public titles
     id,
     brief: canary,
     after: [],
+    ...(id === "queued"
+      ? { intake: "planned" as const, outcome: "Public result" }
+      : {}),
     steps: ["Verify public identity"],
   }));
   let dispose = () => {};
@@ -205,6 +208,26 @@ test("plugin and HTTP keep private briefs and native titles out of public titles
     expect(snapshot.tasks).toMatchObject(expected);
     expect(JSON.parse(body).tasks).toMatchObject(expected);
     expect(await readFile(join(directory, "state.sqlite"))).toEqual(bytes);
+    for (const id of ["T-worker", "T-review", "T-stranger"])
+      expect(
+        execute({ action: "admit", ticket: "queued" }, {
+          thread: { id },
+        } as unknown as PluginToolContext),
+      ).rejects.toThrow();
+    const owner = { thread: { id: "T-owner" } } as unknown as PluginToolContext;
+    await execute({ action: "admit", ticket: "queued" }, owner);
+    await execute({ action: "admit", ticket: "queued" }, owner);
+    const admitted = await (
+      await fetch(`http://localhost:${server.port}/api/status`)
+    ).json();
+    expect(
+      admitted.tasks.find((task: { id: string }) => task.id === "queued"),
+    ).toMatchObject({
+      status: "queued",
+      outcome: "Public result",
+      thread: null,
+    });
+    expect(admitted.enabled).toBe(false);
   } finally {
     dispose();
     await server?.stop(true);

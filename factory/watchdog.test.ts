@@ -7,6 +7,48 @@ import { watchdogFixture } from "./bookkeeping.fixture";
 import { factoryStatus, openPersistence, type State } from "./persistence";
 import { deliverAlerts, reconcileSchedule } from "./watchdog";
 
+test("planning metadata cannot drop monitoring for an existing active run", async () => {
+  const state: State = { enabled: true, owner: "T-owner", runs: {} };
+  const { tools } = watchdogFixture();
+  const sync = () =>
+    reconcileSchedule(
+      "/TEST/project",
+      "/TEST/git",
+      state,
+      [
+        {
+          id: "A",
+          brief: "PRIVATE",
+          after: [],
+          intake: "planned",
+          outcome: "Public plan",
+        },
+      ],
+      tools,
+      () => {},
+    );
+  await sync();
+  expect(state.monitor?.schedule).toBe("cleared");
+  state.runs.A = {
+    kind: "running",
+    base: "abc",
+    worktree: "/TEST/worktree",
+    thread: "T-worker",
+    attempt: 1,
+    delivery: "sent",
+  };
+  await sync();
+  expect(state.monitor?.schedule).toBe("installed");
+  state.runs.A = {
+    kind: "done",
+    thread: "T-worker",
+    revision: "def",
+    insight: "Verified",
+  };
+  await sync();
+  expect(state.monitor?.schedule).toBe("cleared");
+});
+
 test("owned schedule converges after lost create/clear acknowledgments and preserves conflicts", async () => {
   const directory = await mkdtemp(join(tmpdir(), "factory-schedule-"));
   const storage = openPersistence(directory, []);

@@ -14,7 +14,14 @@ export type DashboardSnapshot = {
     id: string;
     title: string;
     steps: string[];
-    status: "working" | "idle" | "blocked" | "queued" | "accepted" | "unknown";
+    status:
+      | "working"
+      | "idle"
+      | "blocked"
+      | "planned"
+      | "queued"
+      | "accepted"
+      | "unknown";
     thread: string | null;
     revision: string | null;
   }[];
@@ -44,6 +51,7 @@ function activity(
     case "working":
     case "idle":
     case "blocked":
+    case "planned":
     case "queued":
     case "accepted":
     case "unknown":
@@ -295,23 +303,35 @@ export function startDashboard({ root, port }: { root: string; port: number }) {
         const observed = new Map(
           snapshot?.tasks.map((task) => [task.id, task]),
         );
+        const publicTickets = new Map(tickets.map((task) => [task.id, task]));
+        const tasks = [
+          ...new Set([...steps.keys(), ...Object.keys(state.runs)]),
+        ].map((id) => {
+          const ticket = publicTickets.get(id);
+          const row = projectTask(
+            id,
+            steps.get(id) ?? [],
+            Object.hasOwn(state.runs, id) ? state.runs[id] : undefined,
+            observed.get(id),
+            fresh,
+          );
+          if (!Object.hasOwn(state.runs, id) && ticket?.intake === "planned")
+            row.status = "planned";
+          return { ...row, outcome: ticket?.outcome ?? null };
+        });
+        const counts = {
+          planned: tasks.filter((task) => task.status === "planned").length,
+          queued: tasks.filter((task) => task.status === "queued").length,
+          accepted: tasks.filter((task) => task.status === "accepted").length,
+        };
         return Response.json(
           {
             ...empty,
             durable: "available",
             enabled: state.enabled,
             fresh,
-            tasks: [
-              ...new Set([...steps.keys(), ...Object.keys(state.runs)]),
-            ].map((id) =>
-              projectTask(
-                id,
-                steps.get(id) ?? [],
-                Object.hasOwn(state.runs, id) ? state.runs[id] : undefined,
-                observed.get(id),
-                fresh,
-              ),
-            ),
+            tasks,
+            counts,
           },
           { headers },
         );

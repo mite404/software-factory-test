@@ -38,6 +38,30 @@ blocks an active candidate whose integration base no longer matches.
 
 ## Durable coordinator state
 
+### Planned intake and admission
+
+Authored tickets may set `intake: "planned"` and a nonblank, explicitly public `outcome`.
+They retain the same canonical `id`, private `brief`, and `after` prerequisites as queue entries.
+Reload imports or refreshes these records in the existing SQLite tickets table without dispatch.
+Restart, accepted prerequisites, and removing `intake` from a later refresh cannot admit them.
+Authored `intake: "admitted"` is rejected. Entries that have never had an intake state retain
+legacy queue behavior.
+
+The owning Foreman calls the native control tool with `action: "admit"` and one `ticket` ID.
+All `after` prerequisites must already have durable accepted runs. Workers, reviewers, missing
+callers, and nonowners cannot admit work. Repeating admission is a no-op. Admission freezes that
+ticket's scoped record against later planning refreshes. It neither starts a paused factory nor
+creates a worker; the ordinary capacity-one loop dispatches admitted work afterward. Existing
+accepted evidence and definition migration rules remain unchanged.
+
+The read-only `/api/status` feed exposes `status: "planned"` before admission and `"queued"` after
+admission until execution begins. Each task includes `outcome`, or `null` when no public outcome was
+authored. It never falls back to the private brief. Top-level `counts` contains separate `planned`,
+`queued`, and `accepted` totals. Reads do not import or refresh records. Importing the full planned
+inventory remains a separate Foreman action after acceptance.
+
+### Storage and recovery
+
 The repository Git directory contains `factory/state.sqlite`, with schema version 2. Coordinator
 ownership, retained ticket definitions, worker runs, and ordered events live there. Every lifecycle
 transition commits its state and event in one short transaction. Worker calls and asynchronous
