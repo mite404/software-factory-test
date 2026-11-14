@@ -320,6 +320,37 @@ evidence for v1-ticket9 and v1-ticket17, not proof of either: accepted work must
 coordinator orb at acceptance, not when a successor asks for it. Handoff files remain under
 `.amp/in/orb-backup/v1-ticket2-handoff/`. Nothing was pushed or retired.
 
+## Trial 11 passed: watchdog ticket 1 through rejection, repair and a pull request
+
+2026-11-14. `foreman-watchdog-ticket1` ran through the native factory on a dogfood clone of current
+main. One Sol 6.1 medium worker owned implementation and repair; each candidate got a fresh
+Fable 5.2 high review.
+
+- Candidate 1 passed the full gate. Review found that a reviewer which errored, recovered and
+  errored again on the same attempt produced no second notice. The factory withheld integration
+  and returned the findings to the original worker as attempt 2.
+- Candidate 2 at `118d156` passed the gate and a fresh review with no findings. The factory then
+  fast-forwarded the clone's main.
+- The Foreman cherry-picked the accepted commit onto parent main, reran the full gate (159 tests)
+  and merged PR #8 only after the required `quality` check passed on its exact head.
+
+Edge cases this run exposed:
+
+- The verification gate had a fixed 120-second limit and the full gate takes about 95 seconds. It
+  is now ten minutes.
+- Worker commits carried no Amp co-author trailers until the worker was told to add them. The rule
+  now lives in the root `AGENTS.md`; nothing enforces it in the gate yet.
+- The worker could not load `writing-prompts` and used `writing-for-agents`.
+- Nothing woke the Foreman when a candidate or verdict arrived. The worker sent a message by hand
+  and the Foreman polled the reviewer thread. This ticket's code is not yet running in the
+  installed plugin, so its live wake-up remains unproven.
+- The dashboard showed no attempt number during repair. The feed now reports it.
+- Pushing one commit to main and to an open pull request branch cancelled the main CI run and
+  marked the pull request merged before its check finished. A ruleset now requires a pull request
+  and the `quality` check on main.
+
+Accepted work still crosses from the clone to the parent by hand. Nothing was retired.
+
 [trial-artifact]:
   https://ampcode.com/artifacts/factory-workflow-trials-36c5101e-8f2e-4e6c-ab3f-0a4425873f7e
 [source-workflow]: https://ampcode.com/threads/T-01a1ce51-ec2c-73cf-9b63-a2eb9f40442b

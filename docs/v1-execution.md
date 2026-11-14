@@ -113,9 +113,10 @@ The combined local gate passed 140 tests and all required checks; post-merge mai
 Definition [v1-ticket2](feats/v1/v1-ticket2.md) passed native gates and fresh cold review at attempt
 four on candidate `901ae38e20fc3517170b43c8b9bea78f6920add1`. It was transferred from the previous
 coordinator orb as a checksum-verified Git bundle, merged onto parent main by the Foreman, and
-passed the combined gate with 150 tests. The three watchdog tickets and safe planned intake are
-next. Keep preserved backup owners until required evidence preservation is confirmed. Native
-acceptance does not authorize retirement.
+passed the combined gate with 150 tests. foreman-watchdog-ticket1 was then accepted natively at
+attempt two and merged through PR #8; see workflow trial 11. foreman-watchdog-ticket2 and safe
+planned intake are next. Keep preserved backup owners until required evidence preservation is
+confirmed. Native acceptance does not authorize retirement.
 
 Local sequential steel-thread evidence exists in workflow trials 8 and 9 and subsequent native
 acceptances. Cross-orb transfer, replacement restore, remote monitoring, and retirement still need

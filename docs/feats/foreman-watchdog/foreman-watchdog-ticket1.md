@@ -7,7 +7,8 @@
 - Risk: elevated; duplicate or stale notices must not resume the wrong repair.
 - Depends on: v1-ticket2 and accepted canonical backup adoption.
 - Planned at: `2c00930f414d29708ad022384d5c1912ce6b067a`, 2026-11-14.
-- Local only. Approved watchdog design; implementation and live proof remain pending.
+- Native accepted at attempt two on candidate `118d15673170849e08f0e8579e2f782057d007ae`, then
+  merged through PR #8 on 2026-11-14. Live wake-up of a real Foreman thread remains unproven.
 
 ## Why this matters
 
@@ -87,8 +88,9 @@ have not run for this ticket; inspect prerequisite drift rather than overwriting
 
 ## Done when
 
-- [ ] Each actionable stop durably requests the owning Foreman's diagnosis without user prompting.
-- [ ] Ambiguous delivery and reload cannot lose an incident or resume a different checkpoint.
-- [ ] Same worker, increasing attempts, serialized queue, explicit pause and full gates remain
+- [x] Each actionable stop durably requests the owning Foreman's diagnosis without user prompting.
+- [x] Ambiguous delivery and reload cannot lose an incident or resume a different checkpoint.
+- [x] Same worker, increasing attempts, serialized queue, explicit pause and full gates remain
       intact.
-- [ ] Full gates, guard and fresh cold review pass; live wake evidence is labeled TEST.
+- [x] Full gates, guard and fresh cold review pass on the accepted revision.
+- [ ] Live wake evidence, labeled TEST, from a real Foreman thread.
