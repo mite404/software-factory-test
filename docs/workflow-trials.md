@@ -419,6 +419,39 @@ Edge cases this run exposed:
 - A factory stop notice for the attempt 2 incident arrived again after that incident had been
   resumed. The Foreman treated it as stale evidence and took no action.
 
+## Trial 14 passed: backup identity fix accepted first time, with two live proofs
+
+2026-11-14. `F001-backup-commit-identity` ran through the native factory on the dogfood clone with
+watchdog ticket 3 live in the installed plugin. One Sol 6.1 medium worker implemented it; a fresh
+Fable 5.2 reviewer passed candidate `36d79f3` at attempt one with no findings. The Foreman
+cherry-picked it onto parent main, reran the full gate (183 tests) and merged PR #20 only after the
+`quality` check passed on its exact head.
+
+Observed live, not through fixtures:
+
+- `start` through the installed plugin registered one `Factory watchdog` schedule on the Foreman
+  thread. A separate `get_schedule` read showed it enabled, `existing` run mode, every 30 minutes.
+  The platform stored the rule with a `DTSTART;TZID=America/New_York` line in front.
+- When the ticket was accepted and the queue emptied, the factory cleared that schedule itself. A
+  separate `get_schedule` read returned null.
+- After the plugin was refreshed from merged main, its `backup` action returned `confirmed` with
+  no Git identity variables set. A fresh clone of the private state repository matched the live
+  database: 116 events and 4 runs. The backup commit carries the orb identity and a good signature.
+
+Still unproven: the schedule cleared about eight minutes before its first run, so no watchdog wake
+has fired, with the orb awake or asleep. No real alert has been delivered.
+
+Edge cases this run exposed:
+
+- The brief requires the `poteto-mode` skill, and the worker could not load it by name. The cached
+  skill directory name carries a hash. The Foreman sent the path. Put the path in the brief.
+- Worker executor loss, from trial 13, has a located cause. The plugin creates workers with the
+  `local` executor, which is the Foreman thread's own headless CLI process. The local logs show
+  that process receiving SIGTERM twice on 2026-11-14, once for a CLI update after the orb resumed.
+  A one-shot continuation lends an executor for one turn only. This worker was not affected
+  because no restart happened while it ran.
+- The database stores nothing about a worker's executor, so the factory cannot see this failure.
+
 [trial-artifact]:
   https://ampcode.com/artifacts/factory-workflow-trials-36c5101e-8f2e-4e6c-ab3f-0a4425873f7e
 [source-workflow]: https://ampcode.com/threads/T-01a1ce51-ec2c-73cf-9b63-a2eb9f40442b
