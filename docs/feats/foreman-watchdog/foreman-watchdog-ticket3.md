@@ -101,7 +101,12 @@ Run shared preflight in `docs/v1-execution.md`; runtime bridge and sleep checks 
 
 ## Done when
 
-- [ ] Schedule lifecycle is authorized, idempotent and isolated from unrelated automations.
+- [x] Schedule lifecycle is authorized, idempotent and isolated from unrelated automations.
+      Proven with controlled adapters only; the installed plugin bridge is not yet observed.
 - [ ] Actual scheduled wake restores a paused TEST orb and diagnoses the exact persisted incident.
 - [ ] Durable alerts deliver safely, with ambiguity, caller and platform failure limits explicit.
-- [ ] Full gates, guard and fresh cold review pass; unavailable independent coverage stays pending.
+      Fixture-proven; no real alert has been delivered through the plugin.
+- [x] Full gates, guard and fresh cold review pass; unavailable independent coverage stays pending.
+
+Accepted at attempt four on `250a8ba28e18bc8a15a6034f0046ea4b0cc9ab1d` and merged through PR #18.
+See workflow trial 13.
