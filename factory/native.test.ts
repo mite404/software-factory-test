@@ -1969,6 +1969,52 @@ test("successful setup never retries ambiguous worker creation", async () => {
   expect(f.counts()).toEqual({ creates: 1, sends: 0 });
 });
 
+test("retry-create repeats one parked creation only for its exact incident", async () => {
+  const f = await preparationFixture(() => "");
+  const create = f.host.create.bind(f.host);
+  let refused = true;
+  f.host.create = async (...args) => {
+    if (refused) throw new Error("creation refused");
+    return create(...args);
+  };
+  expect(f.factory().tick("start", "T-owner")).rejects.toThrow(
+    "creation refused",
+  );
+  const reopened = f.factory();
+  const parked = (await reopened.tick("reconcile")).runs.A!;
+  expect(parked).toMatchObject({
+    kind: "creating",
+    incident: { reason: "creation-unknown", recovery: "inspect" },
+  });
+  const request = {
+    ticket: "A",
+    decision: "Amp refused the creation; no thread exists",
+    incident: parked.incident!.id,
+  };
+  for (const invalid of [
+    { ...request, incident: "stale" },
+    { ...request, decision: " " },
+    { ...request, ticket: "missing" },
+  ])
+    expect(
+      reopened.tick("retry-create", "T-owner", undefined, invalid),
+    ).rejects.toThrow("exact current incident");
+  expect(f.counts()).toEqual({ creates: 0, sends: 0 });
+  refused = false;
+  expect(
+    (await reopened.tick("retry-create", "T-owner", undefined, request)).runs.A,
+  ).toMatchObject({
+    kind: "running",
+    worktree: f.worktree,
+    thread: "T-prepared",
+    delivery: "sent",
+  });
+  expect(
+    reopened.tick("retry-create", "T-owner", undefined, request),
+  ).rejects.toThrow("exact current incident");
+  expect(f.counts()).toEqual({ creates: 1, sends: 1 });
+});
+
 test("setup preserves application files and disabled configuration across two repositories", async () => {
   const home = await mkdtemp(join(tmpdir(), "factory-install-"));
   try {

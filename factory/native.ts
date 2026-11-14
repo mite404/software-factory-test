@@ -940,7 +940,13 @@ export function createFactory(
   let stateCache: State = { enabled: false, runs: {} };
 
   async function reconcile(
-    action: "start" | "pause" | "reconcile" | "retry-setup" | "resume",
+    action:
+      | "start"
+      | "pause"
+      | "reconcile"
+      | "retry-setup"
+      | "retry-create"
+      | "resume",
     owner?: ThreadID,
     observe: NativeHost["state"] = host.state,
     repairRequest?: { ticket: string; decision: string; incident: string },
@@ -1377,6 +1383,31 @@ export function createFactory(
           }
       }
       await watchRunning();
+      // The Foreman's decision that no thread exists is the only license to repeat a creation.
+      async function retryCreate() {
+        const request = repairRequest ?? {
+          ticket: "",
+          decision: "",
+          incident: "",
+        };
+        const task = queue.find((task) => task.id === request.ticket);
+        const run = state.runs[request.ticket];
+        if (
+          text(owner) !== state.owner ||
+          !task ||
+          run?.kind !== "creating" ||
+          !run.incident ||
+          run.incident.id !== request.incident ||
+          !request.decision.trim()
+        )
+          throw new Error(
+            "Retry-create requires the owning Foreman, a parked creation, its exact current incident and a decision",
+          );
+        delete run.incident;
+        commit(task.id, "create-retried", request.decision);
+        return createWorker(task, run.base, run.worktree);
+      }
+      if (action === "retry-create") return await retryCreate();
       if (
         Object.values(state.runs).some(
           (run) =>
@@ -1928,6 +1959,7 @@ export function createFactory(
       | "pause"
       | "reconcile"
       | "retry-setup"
+      | "retry-create"
       | "resume"
       | "reload",
     owner?: ThreadID,
