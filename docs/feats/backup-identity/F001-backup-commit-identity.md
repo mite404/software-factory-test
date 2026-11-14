@@ -101,9 +101,12 @@ Run the shared preflight in `docs/v1-execution.md`. Baseline gates have not run 
 
 ## Done when
 
-- [ ] A backup commit is made as the identity Git resolves, with a fallback only when none exists.
-- [ ] The command never disables signing or writes Git configuration.
-- [ ] A refused commit is reported distinctly, keeps `lastConfirmed`, and retries cleanly.
-- [ ] Full gates, guard and fresh cold review pass on the exact candidate.
-- [ ] Live proof by the Foreman after acceptance: the plugin `backup` action returns `confirmed`
+- [x] A backup commit is made as the identity Git resolves, with a fallback only when none exists.
+- [x] The command never disables signing or writes Git configuration.
+- [x] A refused commit is reported distinctly, keeps `lastConfirmed`, and retries cleanly.
+- [x] Full gates, guard and fresh cold review pass on the exact candidate.
+- [x] Live proof by the Foreman after acceptance: the plugin `backup` action returns `confirmed`
       in an orb with no identity variables set.
+
+Accepted at attempt one on `36d79f36718106acacb50935e66e909d4b3f9793` and merged through PR #20.
+See workflow trial 14 for the live proof.

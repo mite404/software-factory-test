@@ -102,7 +102,7 @@ Run shared preflight in `docs/v1-execution.md`; runtime bridge and sleep checks 
 ## Done when
 
 - [x] Schedule lifecycle is authorized, idempotent and isolated from unrelated automations.
-      Proven with controlled adapters only; the installed plugin bridge is not yet observed.
+      Install and self-clear were also observed live through the plugin; see workflow trial 14.
 - [ ] Actual scheduled wake restores a paused TEST orb and diagnoses the exact persisted incident.
 - [ ] Durable alerts deliver safely, with ambiguity, caller and platform failure limits explicit.
       Fixture-proven; no real alert has been delivered through the plugin.
