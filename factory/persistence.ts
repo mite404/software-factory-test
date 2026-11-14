@@ -5,6 +5,32 @@ import { join } from "node:path";
 import { validReview, type Review } from "./review";
 
 export type ThreadID = `T-${string}`;
+export type WatchdogPolicy = {
+  suspicionMs: number;
+  spendingFirstAttempt: number;
+  spendingInterval: number;
+};
+export type WatchdogAlert = {
+  id: string;
+  kind: "unresolved" | "spending";
+  episode: string;
+  attempt: number;
+  intendedAt: number;
+  acknowledgedAt?: number;
+};
+export type Watchdog = {
+  episode: string;
+  progressAt: number;
+  attempt: number;
+  nudgedAt?: number;
+  alerts: WatchdogAlert[];
+};
+/** Defaults for definitions and immutable pins authored before watchdog policy existed. */
+export const defaultWatchdog: WatchdogPolicy = {
+  suspicionMs: 30 * 60 * 1000,
+  spendingFirstAttempt: 6,
+  spendingInterval: 4,
+};
 export type Task = {
   id: string;
   brief: string;
@@ -30,6 +56,7 @@ export type DefinitionPin = {
   workerEffort?: AgentReasoningEffort;
   instructions: string;
   tickets: string;
+  watchdog?: WatchdogPolicy;
   setup?: { command: string; timeoutMs: number };
 };
 export type StopIncident = {
@@ -51,6 +78,7 @@ export type StopIncident = {
     | "review-identity-changed";
   recovery: "resume" | "retry-setup" | "inspect";
   delivery: "queued" | "sent";
+  notifiedAt?: number;
 };
 export type Run = (
   | (Preparation & { kind: "preparing" })
@@ -83,7 +111,7 @@ export type Run = (
       insight: string;
       review?: Review;
     }
-) & { definition?: string; incident?: StopIncident };
+) & { definition?: string; incident?: StopIncident; watchdog?: Watchdog };
 export type State = {
   enabled: boolean;
   owner?: ThreadID;
@@ -111,6 +139,55 @@ export function taskSteps(value: unknown): string[] {
 
 function positiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+/** Validate persisted and authored policy at the storage boundary. */
+export function validWatchdogPolicy(value: unknown): value is WatchdogPolicy {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const policy = value as Record<string, unknown>;
+  return (
+    Object.keys(policy).length === 3 &&
+    ["suspicionMs", "spendingFirstAttempt", "spendingInterval"].every((key) =>
+      positiveInteger(policy[key]),
+    )
+  );
+}
+
+function timestamp(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function validWatchdog(value: unknown): boolean {
+  const timing = record(value);
+  return (
+    text(timing.episode) &&
+    timestamp(timing.progressAt) &&
+    Number.isSafeInteger(timing.attempt) &&
+    Number(timing.attempt) >= 0 &&
+    (timing.nudgedAt === undefined || timestamp(timing.nudgedAt)) &&
+    Array.isArray(timing.alerts) &&
+    timing.alerts.every((value: unknown) => {
+      const alert = record(value);
+      return (
+        text(alert.id) &&
+        text(alert.episode) &&
+        ["unresolved", "spending"].includes(String(alert.kind)) &&
+        Number.isSafeInteger(alert.attempt) &&
+        Number(alert.attempt) >= 0 &&
+        timestamp(alert.intendedAt) &&
+        (alert.acknowledgedAt === undefined || timestamp(alert.acknowledgedAt))
+      );
+    })
+  );
+}
+
+function validateTiming(id: string, run: Record<string, unknown>) {
+  if (run.watchdog !== undefined && !validWatchdog(run.watchdog))
+    throw new Error(`Invalid factory watchdog ${id}`);
+  const notifiedAt =
+    run.incident === undefined ? undefined : record(run.incident).notifiedAt;
+  if (notifiedAt !== undefined && !timestamp(notifiedAt))
+    throw new Error(`Invalid factory notice time ${id}`);
 }
 
 function thread(value: unknown): value is ThreadID {
@@ -206,6 +283,7 @@ function definitionFields(value: unknown) {
     pin.scope.every(text) &&
     typeof pin.review === "boolean" &&
     typeof pin.instructions === "string" &&
+    (pin.watchdog === undefined || validWatchdogPolicy(pin.watchdog)) &&
     new Set<unknown>([
       undefined,
       "none",
@@ -253,6 +331,7 @@ function validateIncident(id: string, value: unknown) {
 function validateRun(id: string, value: unknown) {
   const run = record(value);
   validateIncident(id, run.incident);
+  validateTiming(id, run);
   if (run.definition !== undefined && !validDigest(run.definition))
     throw new Error(`Invalid definition pin ${id}`);
   const validate =
@@ -452,7 +531,11 @@ export function factoryRecords(directory: string) {
 }
 
 /** Open storage under the caller's poteto lock; migrate once. @throws On invalid storage or I/O. */
-export function openPersistence(directory: string, queue: Task[]) {
+export function openPersistence(
+  directory: string,
+  queue: Task[],
+  now: () => number = Date.now,
+) {
   const imported = existsSync(join(directory, "state.sqlite"))
     ? null
     : legacy(directory);
@@ -495,7 +578,7 @@ export function openPersistence(directory: string, queue: Task[]) {
         if (previous?.data === data) continue;
         upsert.run(task.id, data);
         saveEvent(db, {
-          at: new Date().toISOString(),
+          at: new Date(now()).toISOString(),
           ticket: task.id,
           action: "configured",
           detail: data,
@@ -538,7 +621,7 @@ export function openPersistence(directory: string, queue: Task[]) {
         db.transaction(() => {
           saveState(db, state);
           saveEvent(db, {
-            at: new Date().toISOString(),
+            at: new Date(now()).toISOString(),
             ticket,
             action,
             detail,
@@ -547,7 +630,12 @@ export function openPersistence(directory: string, queue: Task[]) {
       },
       /** Append a diagnostic without inventing a state transition. @throws On I/O failure. */
       event(ticket: string, action: string, detail: string) {
-        saveEvent(db, { at: new Date().toISOString(), ticket, action, detail });
+        saveEvent(db, {
+          at: new Date(now()).toISOString(),
+          ticket,
+          action,
+          detail,
+        });
       },
       /** Release the database before releasing the poteto lock. */
       close() {

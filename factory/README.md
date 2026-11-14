@@ -72,7 +72,37 @@ Successful delivery is recorded durably and does not repeat normally. Owner repl
 the notice with a new ID. A stale ID cannot resume a later checkpoint or a different owner's stop.
 Status and HTTP reads neither drain notices nor change incident state. Notices contain no private
 worker reasons, instructions, paths, or review findings; diagnosis uses the private saved evidence.
-This mechanism does not detect timed stalls, schedule wake-ups, or alert the user.
+
+Serialized lifecycle reconciliation also checks a progress watchdog. The optional definition setting
+`watchdog` contains positive safe integers `suspicionMs` (default 1800000), `spendingFirstAttempt`
+(default 6), and `spendingInterval` (default 4). All three are required when the setting is
+supplied.
+Policy is pinned with each run; older definition pins use these defaults. No separate configuration
+file is needed.
+
+Each run stores a watchdog episode, attempt, meaningful progress time, last nudge reservation, and
+alert intents. Stops bind their episode to the stop incident. Foreman reassignment and notice
+delivery do not restart its clock. Worker dispatch, repair, review milestones, acceptance and new
+stops advance progress. Diagnostics, errors, observation refreshes, notices, nudges and other
+tickets do not.
+Legacy runs without timing start their clock once on enabled reconciliation, without guessing age
+from arbitrary old events. Existing SQLite versions still open without a schema migration.
+
+At the first unresolved 30-minute boundary, reconciliation persists one user-alert intent for that
+episode and reserves a Foreman diagnosis nudge before sending it. Another nudge requires a full
+interval since the last reservation, even after a restart or ambiguous send. A crash between
+reservation and send can lose that nudge. The next interval permits another. Running and unknown
+worker activity retain ownership, never dispatch a duplicate or replacement, and are not proof of
+a hang or acceptance.
+Attempts six, ten, fourteen and so on independently record non-blocking spending alerts without
+parking safe work or resetting the progress clock. Existing two-rejection checkpoints still apply.
+
+Alert IDs, kind, episode, attempt, intent time and optional `acknowledgedAt` survive reload and
+repair for connected delivery in the next ticket. This unit does not deliver user alerts or
+schedule wake-ups. Detection latency depends on the next mutating lifecycle reconciliation.
+Explicitly paused factories, completed runs and planned/dependency-only work produce no watchdog
+nudges or alerts. Status, heartbeat publishing and HTTP reads remain read-only and do not deliver
+messages.
 
 Coordinator status reads existing SQLite or validated legacy state without creating runtime files,
 initializing the lock store, or migrating. The plugin separately refreshes dashboard observations,
