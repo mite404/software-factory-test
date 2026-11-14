@@ -181,6 +181,13 @@ test("a tooltip cuts a brief-length title and leaves a short one whole", () => {
   const [long, short] = derive(null, next, NOW).builders;
   expect(long!.label).toBe(`T1 · ${"x".repeat(39)}… · working`);
   expect(short!.label).toBe("T2 · ticket 2 · idle");
+  next.tasks[1]!.steps = [
+    "Persist actionable stop incidents",
+    "Wake the Foreman",
+  ];
+  expect(derive(null, next, NOW).builders[1]!.label).toBe(
+    "T2 · ticket 2 · idle\nPersist actionable stop incid…",
+  );
 });
 
 test("a title equal to the ticket id is not printed a second time", () => {

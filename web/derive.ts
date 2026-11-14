@@ -100,7 +100,10 @@ function describe(task: Task): string {
   const revision = task.revision ? ` · ${task.revision.slice(0, 7)}` : "";
   // The tooltip is one unwrapped line, so a brief-length title is cut to fit.
   const title = label(task) && ` · ${cut(label(task), 40)}`;
-  return `${task.id}${title} · ${task.status}${revision}`;
+  // ponytail: the feed has no public description, so the second line is the first authored step
+  // label. Swap in the ticket's public outcome once planned intake adds one to the feed.
+  const about = task.steps[0] ? `\n${cut(task.steps[0], 30)}` : "";
+  return `${task.id}${title} · ${task.status}${revision}${about}`;
 }
 
 function cell(task: Task | undefined): Cell {
