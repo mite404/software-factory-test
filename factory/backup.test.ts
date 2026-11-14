@@ -35,7 +35,16 @@ test("backup CLI rejects destination overrides without publishing", async () => 
 
 test("private backups publish consistent isolated projects and reconcile uncertain transport", async () => {
   const root = await mkdtemp(join(tmpdir(), "factory-backup-"));
-  const originalPath = process.env.PATH;
+  const originalEnvironment = { ...process.env };
+  const identityVariables = [
+    "GIT_AUTHOR_NAME",
+    "GIT_AUTHOR_EMAIL",
+    "GIT_COMMITTER_NAME",
+    "GIT_COMMITTER_EMAIL",
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_NOSYSTEM",
+    "EMAIL",
+  ];
   const gitExecutable = execFileSync("which", ["git"], {
     encoding: "utf8",
   }).trim();
@@ -83,6 +92,30 @@ test("private backups publish consistent isolated projects and reconcile uncerta
   let writer: ReturnType<typeof setInterval> | undefined;
   try {
     await mkdir(bin);
+    identityVariables.forEach((key) => {
+      delete process.env[key];
+    });
+    process.env.GIT_CONFIG_NOSYSTEM = "1";
+    process.env.GIT_CONFIG_GLOBAL = join(root, "gitconfig");
+    const signer = join(bin, "signer");
+    await writeFile(
+      signer,
+      `#!${process.execPath}
+const commit=await Bun.stdin.text();
+const mode=Bun.file(${JSON.stringify(modePath)});
+if(!/^author Fixture <fixture@example.invalid> /m.test(commit) || !/^committer Fixture <fixture@example.invalid> /m.test(commit) || (await mode.exists() && await mode.text()==="commit-failed")) {
+  console.error("No signing key is available for this commit. Amp signs only commits made as the Git identity your current settings give this orb.");
+  process.exit(1);
+}
+console.log("-----BEGIN PGP SIGNATURE-----\\nfixture\\n-----END PGP SIGNATURE-----");
+console.error("[GNUPG:] SIG_CREATED D 1 10 00 0 FIXTURE");
+`,
+    );
+    await chmod(signer, 0o755);
+    await writeFile(
+      process.env.GIT_CONFIG_GLOBAL,
+      `[user]\nname = Fixture\nemail = fixture@example.invalid\nuseConfigOnly = true\n[commit]\ngpgsign = true\n[gpg]\nprogram = ${signer}\nformat = openpgp\n`,
+    );
     await mkdir(project);
     git(project, "init", "-q", "-b", "main");
     git(project, "config", "user.name", "Fixture");
@@ -110,7 +143,6 @@ console.log(await Bun.file(${JSON.stringify(metadataPath)}).text());
 import {appendFileSync, existsSync, writeFileSync} from "node:fs";
 const args=process.argv.slice(2);
 const mode=await Bun.file(${JSON.stringify(modePath)}).text();
-if(args.includes("commit") && mode==="commit-failed") { console.error("credential-secret"); process.exit(1); }
 if(args[0]==="fetch" && ["unavailable","unpublished"].includes(mode) && existsSync(${JSON.stringify(pushes)}+".sent")) process.exit(1);
 if(args[0]==="push") {
   appendFileSync(${JSON.stringify(pushes)}, "push\\n");
@@ -130,7 +162,7 @@ process.exit(code);
     );
     await chmod(join(bin, "git"), 0o755);
     await chmod(join(bin, "gh"), 0o755);
-    process.env.PATH = `${bin}:${originalPath}`;
+    process.env.PATH = `${bin}:${originalEnvironment.PATH}`;
     config.permissions.backup = undefined;
     await configure();
     expect(backup(project)).rejects.toThrow("permissions.backup");
@@ -217,6 +249,11 @@ process.exit(code);
     expect(first.status).toBe("confirmed");
     const revision = git(remote, "rev-parse", "main");
     expect(first.lastConfirmed?.revision).toBe(revision);
+    expect(
+      git(remote, "show", "-s", "--format=%an <%ae>%n%cn <%ce>", revision),
+    ).toBe(
+      "Fixture <fixture@example.invalid>\nFixture <fixture@example.invalid>",
+    );
     await writeFile(rewritePath, "");
     expect(
       git(
@@ -440,8 +477,12 @@ try {
       await configure();
       change();
       const before = git(remote, "rev-parse", "main");
+      const lastConfirmed = (await receipt()).lastConfirmed;
       await writeFile(modePath, "commit-failed");
-      expect(backup(project)).rejects.toThrow("Backup failed");
+      expect(backup(project)).rejects.toThrow(
+        "Backup commit was refused; inspect commit identity and signing configuration",
+      );
+      expect(await receipt()).toEqual({ status: "failed", lastConfirmed });
       expect(git(remote, "rev-parse", "main")).toBe(before);
       expect(
         git(join(directory, "backup/repository"), "status", "--porcelain"),
@@ -636,6 +677,11 @@ try {
       "1",
     );
     expect(git(workspace, "rev-parse", "HEAD")).not.toBe(retained);
+    expect(
+      git(remote, "show", "-s", "--format=%an <%ae>%n%cn <%ce>", "main"),
+    ).toBe(
+      "Fixture <fixture@example.invalid>\nFixture <fixture@example.invalid>",
+    );
     change();
     const beforeUnpublished = git(remote, "rev-parse", "main");
     await rm(`${pushes}.sent`);
@@ -707,10 +753,22 @@ try {
     expect(backup(project)).rejects.toThrow("Backup destination changed");
     expect(await readFile(pushes, "utf8")).toBe(pushesBeforeDestinationChange);
     expect(git(remote, "rev-parse", "main")).toBe(conflictingRemote);
+    await rm(workspace, { recursive: true });
+    const noIdentity = join(root, "no-identity.gitconfig");
+    await writeFile(noIdentity, "[user]\nuseConfigOnly = true\n");
+    process.env.GIT_CONFIG_GLOBAL = noIdentity;
+    config.backup.projectKey = "fallback";
+    await configure();
+    expect((await backup(project)).status).toBe("confirmed");
+    expect(
+      git(remote, "show", "-s", "--format=%an <%ae>%n%cn <%ce>", "main"),
+    ).toBe(
+      "Factory backup <factory@localhost>\nFactory backup <factory@localhost>",
+    );
   } finally {
     clearInterval(writer);
     dispose();
-    process.env.PATH = originalPath;
+    process.env = originalEnvironment;
     await rm(root, { recursive: true, force: true });
   }
 }, 60_000);
