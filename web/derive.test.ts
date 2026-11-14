@@ -161,8 +161,6 @@ test("COMING rows lay out a ticket's own steps and drop what does not fit", () =
   const view = derive(null, next, NOW);
   const [active, first, legacy] = view.coming;
 
-  // ACTIVE keeps the stage pills; its steps go on the header line instead.
-  expect(view.activeSteps).toBe("first → second");
   // A pending review record puts the ticket in cold review, past the gate.
   expect(active!.steps.slice(3)).toEqual(["done", "done", "now", ""]);
   expect(view.builders[0]!.href).toBe("https://ampcode.com/threads/T-abc");
@@ -195,9 +193,21 @@ test("a pending review is never drawn blocked, and a vanished review is a reject
   expect(view.backRow).toBe(0);
   expect(view.builders[0]!.status).toBe("working");
   expect(view.tally).toBe("1 landed · 0 queued");
+  expect(view.reviewing).toBe(true);
+  expect(derive(null, dispatching, NOW).reviewing).toBe(true);
+  expect(derive(dispatching, dispatching, NOW).reviewing).toBe(true);
+  expect(
+    derive(dispatching, { ...dispatching, fresh: false }, NOW).reviewing,
+  ).toBe(false);
 
   const first = derive(dispatching, working, NOW);
   expect(first.backRow).toBe(1); // review gone, not landed
+  expect(first.reviewing).toBe(false);
+  expect(first.reviewFinished).toBe("failed");
+  expect(derive(working, working, NOW).reviewFinished).toBe(null);
+  expect(
+    derive(dispatching, { ...working, fresh: false }, NOW).reviewFinished,
+  ).toBe(null);
   dispatching.tasks[1]!.evidence = { review: { pending: true, attempt: 2 } };
   expect(derive(working, dispatching, NOW).next).toBe(
     "T2, WORKING · ATTEMPT 2",
@@ -207,6 +217,9 @@ test("a pending review is never drawn blocked, and a vanished review is a reject
   expect(derive(working, working, NOW).backRow).toBe(0);
   const landed = feed(["accepted", "accepted"]);
   expect(derive(dispatching, landed, NOW).backRow).toBe(0);
+  expect(derive(dispatching, landed, NOW).reviewing).toBe(false);
+  expect(derive(dispatching, landed, NOW).reviewFinished).toBe("passed");
+  expect(derive(landed, landed, NOW).reviewFinished).toBe(null);
 });
 
 test("the recorded replay draws one reviewed landing, one rejection and one block", () => {
@@ -218,8 +231,6 @@ test("the recorded replay draws one reviewed landing, one rejection and one bloc
   expect(polls((view) => view.landed && view.reviewed)).toEqual([6]);
   expect(polls((view) => view.backRow)).toEqual([3, 9]); // review vanished, then a plain block
   expect(views[4]!.next).toBe("BACKUP-ADOPTION-TICKET1, WORKING · ATTEMPT 6");
-  // A long label leaves the steps less room: 9 + 44 characters end at 39 + 9.5 * 53 = 542.5,
-  // so (1060 - 16 - 542.5) / 6 = 83 characters of the 110 fit.
-  expect(views[4]!.activeSteps).toHaveLength(83);
+  expect(views[4]!.reviewing).toBe(true);
   expect(views[9]!.tally).toBe("3 landed · 0 queued · 1 blocked");
 });

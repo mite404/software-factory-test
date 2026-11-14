@@ -37,7 +37,8 @@ export type View = {
   tally: string;
   head: string;
   next: string;
-  activeSteps: string; // the ACTIVE ticket's authored steps on one line; the feed has no current step
+  reviewing: boolean; // a fresh pending review, including the first and repeated polls
+  reviewFinished: "passed" | "failed" | null; // release once on an observed review outcome
   waiting: string;
   slots: number; // lit submission slots: idle builders whose work is not accepted yet
   builders: Cell[]; // 4 rows: tickets that had not landed one poll ago
@@ -82,13 +83,6 @@ function pad<T>(items: T[], length: number): (T | undefined)[] {
 
 function cut(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
-}
-
-// How many characters of steps fit on the ACTIVE line beside its label. The label starts at
-// x=39 after "ACTIVE · " at about 9.5 units a character; the steps end at x=1060 at 6 units each.
-function stepRoom(label: string): number {
-  const labelEnd = 39 + 9.5 * ("ACTIVE · ".length + label.length);
-  return Math.max(0, Math.min(100, Math.floor((1060 - 16 - labelEnd) / 6)));
 }
 
 function describe(task: Task): string {
@@ -238,7 +232,18 @@ export function derive(prev: Feed | null, raw: Feed, now: number): View {
     tally: tally(next),
     head: main[0]?.revision?.slice(0, 7) ?? "nothing landed yet",
     next: label,
-    activeSteps: cut(pending[0]?.steps.join(" → ") ?? "", stepRoom(label)),
+    reviewing: next.fresh && pending[0]?.evidence?.review?.pending === true,
+    reviewFinished:
+      next.fresh &&
+      earlier.some(
+        (task) =>
+          task.evidence?.review?.pending &&
+          (task.id === landing || task.id === rejected),
+      )
+        ? landing
+          ? "passed"
+          : "failed"
+        : null,
     waiting: idle[0] ? `${idle[0].id} · idle` : "",
     slots: idle.length,
     builders: pad(rows, ROWS).map(cell),

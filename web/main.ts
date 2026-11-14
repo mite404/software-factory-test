@@ -173,6 +173,7 @@ function animate(view: View) {
 
 function render(view: View) {
   stage.dataset.state = view.state;
+  stage.toggleAttribute("data-reviewing", view.reviewing);
   write(document, "#state", DEMO ? "DEMO" : view.state.toUpperCase());
   write(document, "#project", view.project);
   write(document, "#lane", view.target);
@@ -180,12 +181,13 @@ function render(view: View) {
   write(document, "#tally", view.tally);
   write(document, "#head", view.head);
   write(document, "#next", view.next);
-  write(document, "#active-steps", view.activeSteps);
   write(document, "#waiting", view.waiting);
   slots.forEach((slot, i) => slot.toggleAttribute("data-on", i < view.slots));
   paintBuilders(view);
   paintTickets(view);
-  animate(view);
+  if (view.reviewFinished)
+    cycle(stage, `review-${view.reviewFinished}`, RETURN_MS + 240);
+  else animate(view);
 }
 
 let previous: Feed | null = null;
@@ -204,6 +206,7 @@ async function poll() {
     previous = feed;
   } catch {
     stage.dataset.state = "offline";
+    stage.removeAttribute("data-reviewing");
     write(document, "#state", "OFFLINE");
     write(document, "#observed", "status service unreachable");
   }

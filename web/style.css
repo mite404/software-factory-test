@@ -576,6 +576,47 @@ body {
   animation: none;
 }
 
+/* Pending live review loops without inventing a verdict or sending fixes to a builder. */
+[data-reviewing] .sweep {
+  opacity: 1;
+  stroke-dasharray: 25 75;
+  stroke-dashoffset: 0;
+  rotate: 0deg;
+  animation: sweep 1.6s linear infinite;
+}
+[data-reviewing] .door {
+  animation: none;
+  translate: 0 0;
+}
+[data-reviewing] .mist circle {
+  animation: mist 1.2s 1.25s cubic-bezier(0.23, 1, 0.32, 1) infinite;
+}
+
+/* A real verdict opens the freezer once, then releases the packet on its outcome's path. */
+:is(.review-passed, .review-failed) .door {
+  animation: open-review 240ms cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+.review-passed .courier {
+  offset-path: url(#rv-pass);
+  animation: travel 1.4s 240ms cubic-bezier(0.77, 0, 0.175, 1) both;
+  fill: var(--green);
+}
+.review-passed .courier .ring {
+  opacity: 1;
+  stroke: var(--green);
+}
+.review-failed .fixes {
+  animation: travel 2.8s 240ms cubic-bezier(0.77, 0, 0.175, 1) both;
+}
+@keyframes open-review {
+  from {
+    translate: 0 0;
+  }
+  to {
+    translate: var(--open) 0;
+  }
+}
+
 /*
  * Replay only. Cold review with findings, 4.8 s: 0 the candidate enters, 1.0 the ring sweeps,
  * 2.6 fixes leave for the builder. Full gate, 5 s: 0 a probe leaves main, 2.1 the gate turns
