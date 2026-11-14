@@ -119,10 +119,10 @@ Run the shared preflight in `docs/v1-execution.md`. Baseline gates have not run 
 
 ## Done when
 
-- [ ] With the setting present, worker and reviewer threads are created on the named runner.
-- [ ] Without it, behavior and saved state are unchanged.
-- [ ] A creation failure on the runner is visible and never falls back to `local`.
-- [ ] The run record and status show the executor.
-- [ ] Full gates, guard and fresh cold review pass on the exact candidate.
-- [ ] Live proof by the Foreman after acceptance: a real worker created through the plugin on the
+- [x] With the setting present, worker and reviewer threads are created on the named runner.
+- [x] Without it, behavior and saved state are unchanged.
+- [x] A creation failure on the runner is visible and never falls back to `local`.
+- [x] The run record and status show the executor.
+- [x] Full gates, guard and fresh cold review pass on the exact candidate.
+- [x] Live proof by the Foreman after acceptance: a real worker created through the plugin on the
       supervised runner keeps its tools across a restart of the Foreman's CLI or of the runner.

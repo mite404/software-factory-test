@@ -82,7 +82,7 @@ Run shared preflight in `docs/v1-execution.md`; authoring did not run implementa
 
 ## Done when
 
-- [ ] Planned work is visible under canonical IDs but cannot dispatch before Foreman admission.
-- [ ] Refresh/reload, accepted prerequisites and migration cannot silently grant admission.
-- [ ] Minimal read-only feed distinguishes planned, queued and accepted without private briefs.
-- [ ] Full gates, guard and fresh cold review pass before the coordinator imports all draft units.
+- [x] Planned work is visible under canonical IDs but cannot dispatch before Foreman admission.
+- [x] Refresh/reload, accepted prerequisites and migration cannot silently grant admission.
+- [x] Minimal read-only feed distinguishes planned, queued and accepted without private briefs.
+- [x] Full gates, guard and fresh cold review pass before the coordinator imports all draft units.

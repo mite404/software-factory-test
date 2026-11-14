@@ -73,11 +73,11 @@ evidence were represented by state records.
 The initial Luna judge correctly withheld the unverified cookie hypothesis and recognized the
 existing accessibility ticket. However, three findings disagreed with the preregistered rubric:
 
-| Finding | Initial judgment | Expected rule |
-| --- | --- | --- |
-| Cross-tenant invoice disclosure | P0, radius 2 | Shared/multiple-tenant reach is radius 3 |
-| Missing keyboard focus | P3 accessibility | Accessibility degradation is not cosmetic, P2 |
-| Save failure for all fixture accounts | P2, blocked | Broad core-workflow failure is P1 despite an older-client workaround |
+| Finding                               | Initial judgment | Expected rule                                                        |
+| ------------------------------------- | ---------------- | -------------------------------------------------------------------- |
+| Cross-tenant invoice disclosure       | P0, radius 2     | Shared/multiple-tenant reach is radius 3                             |
+| Missing keyboard focus                | P3 accessibility | Accessibility degradation is not cosmetic, P2                        |
+| Save failure for all fixture accounts | P2, blocked      | Broad core-workflow failure is P1 despite an older-client workaround |
 
 These were simulation-policy errors, not findings against pstack or action-checks.
 
@@ -86,13 +86,13 @@ priority, numeric impact/radius/confidence, and filing disposition by explicit r
 fixture judgments then matched the preregistered expectations. The parent reran the code on the
 extracted facts and obtained byte-identical judgments.
 
-| Finding | Revised disposition | Priority | Fix scope |
-| --- | --- | --- | --- |
-| Cross-tenant disclosure | File | P0 | Local |
-| Untested old-cookie hypothesis | Investigate | Unrated | Unknown |
-| Existing keyboard-focus issue | Existing ticket | P2 | Local |
-| Widespread save failure | File, blocked | P1 | Cross-cutting |
-| Tooltip alignment only | File | P3 | Local |
+| Finding                        | Revised disposition | Priority | Fix scope     |
+| ------------------------------ | ------------------- | -------- | ------------- |
+| Cross-tenant disclosure        | File                | P0       | Local         |
+| Untested old-cookie hypothesis | Investigate         | Unrated  | Unknown       |
+| Existing keyboard-focus issue  | Existing ticket     | P2       | Local         |
+| Widespread save failure        | File, blocked       | P1       | Cross-cutting |
+| Tooltip alignment only         | File                | P3       | Local         |
 
 [Initial judge][initial-judge]
 
@@ -452,8 +452,52 @@ Edge cases this run exposed:
   because no restart happened while it ran.
 - The database stores nothing about a worker's executor, so the factory cannot see this failure.
 
-[trial-artifact]:
-  https://ampcode.com/artifacts/factory-workflow-trials-36c5101e-8f2e-4e6c-ab3f-0a4425873f7e
+## Trial 15 passed: runner workers, after a refused creation and a provider limit
+
+2026-11-14. `F002-worker-runner-executor` and `planned-intake-ticket1` ran through the native
+factory on the dogfood clone. F002 was accepted at attempt one (candidate `ac9b6cd`, PR #23).
+planned-intake-ticket1 was accepted at attempt two (candidate `ca6d022`, PR #25): a fresh Fable 5.2
+reviewer rejected attempt one with two warnings and a nit, the same Sol 6.1 worker repaired them,
+and a second fresh reviewer passed with no findings.
+
+Observed live, not through fixtures:
+
+- A worker and two reviewers were created through the plugin on the supervised runner
+  `factory-dogfood`.
+- The runner service was restarted while the worker was in the middle of a turn. The worker kept
+  writing files and its thread kept growing; no reconnection was needed.
+- Scheduled watchdog wakes fired on the Foreman thread, and the plugin delivered real alerts to
+  the operator.
+- A run parked in `creating` was continued in place with `retry-create`. The database was never
+  edited by hand.
+
+Still unproven: a runner worker surviving a replacement of the Foreman's own CLI process, and an
+orb pause and resume during a run.
+
+Edge cases this run exposed:
+
+- A provider limit stopped the Foreman and the F002 reviewer at 17:19 UTC; the reset was 19:00
+  UTC. Three watchdog wakes failed on the same limit. The Foreman resumed at the 19:11 wake. The
+  reviewer stayed in error until the Foreman messaged it. The factory recorded only
+  `worker-error`. F003 owns this.
+- A replacement Foreman thread could not take over, because the factory has no ownership
+  transfer, and it started in a new orb without the state. F005 owns the same-orb transfer.
+- The first F002 live proof failed. Amp refuses a runner thread while a tool call of the plugin
+  is in flight, and the factory created workers inside its control call. Fixture hosts could not
+  show this. The run parked in `creating`, and no control action could continue it. PR #24 defers
+  the creation until the call has returned and adds `retry-create`. The Foreman wrote that fix
+  directly, without cold review, because the factory could not dispatch.
+- After each deferred creation the watchdog check runs with a finished tool context and records
+  `watchdog-unconfirmed`. The next owner `reconcile` restores it. This needs a ticket.
+- The local executor loss from trial 13 recurred once more before F002 landed: the runner service
+  installed a CLI update that replaced the Foreman's process when its thread went idle.
+- CI failed on the first planned-intake integration. A new test committed in a fixture repository
+  without a Git identity. The orb has a global identity, so the factory gate and the Foreman's
+  local gate both passed. Run `GIT_CONFIG_GLOBAL=/dev/null bun test factory` before a pull request.
+- The planned-intake candidate was based on main before PR #24 and conflicted with it in
+  `factory/plugin.ts`. A Foreman-authored fix during a run costs a conflict at integration.
+
+[trial-artifact]: https://ampcode.com/artifacts/factory-workflow-trials-36c5101e-8f2e-4e6c-ab3f-0a4425873f7e
 [source-workflow]: https://ampcode.com/threads/T-01a1ce51-ec2c-73cf-9b63-a2eb9f40442b
 [rename-worker]: https://ampcode.com/threads/T-01a1d208-909b-7726-8b37-40e40e5ba5c2
 [consumer-worker]: https://ampcode.com/threads/T-01a1d208-9998-7364-9812-19028e671c9c
