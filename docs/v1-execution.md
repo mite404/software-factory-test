@@ -21,6 +21,7 @@ prerequisites, not permission to dispatch every draft against today's base.
 | [foreman-watchdog-ticket2](feats/foreman-watchdog/foreman-watchdog-ticket2.md)          | Progress-based nudges and alert intent        | foreman-watchdog-ticket1                                                 | F03, owner-approved supervision        |
 | [foreman-watchdog-ticket3](feats/foreman-watchdog/foreman-watchdog-ticket3.md)          | Outside-orb wake-up and alert delivery        | foreman-watchdog-ticket2                                                 | F03, owner-approved supervision        |
 | [F001-backup-commit-identity](feats/backup-identity/F001-backup-commit-identity.md)     | Backup works under orb commit signing         | backup-adoption-ticket1                                                  | F05, R13, operator durability priority |
+| [F002-worker-runner-executor](feats/worker-executor/F002-worker-runner-executor.md)     | Workers survive a Foreman CLI restart         | v1-ticket2                                                               | F03, R8, operator autonomy priority    |
 | [planned-intake-ticket1](feats/planned-intake/planned-intake-ticket1.md)                | Planned backlog without accidental dispatch   | v1-ticket2, foreman-watchdog-ticket1                                     | F02, F07, owner-approved planning      |
 | [v1-ticket4](feats/v1/v1-ticket4.md)                                                    | Durable private evidence records              | v1-ticket2                                                               | F02, F07, R6-R7                        |
 | [v1-ticket11](feats/v1/v1-ticket11.md)                                                  | Required and advisory verification tools      | v1-ticket2                                                               | F12, AC28, AC35-AC36                   |
@@ -120,10 +121,13 @@ at attempt one and merged through PR #12; see workflow trial 12. foreman-watchdo
 accepted at attempt four and merged through PR #18; see workflow trial 13. Its live proof is still
 pending: a scheduled wake of a sleeping orb and real alert delivery. The plugin tool bridge
 installed and cleared a real schedule; see workflow trial 14. F001-backup-commit-identity was
-accepted at attempt one, merged through PR #20, and proven live. Safe planned intake is next.
-Fixing worker executor loss (v1-ticket10) should follow it closely; see trial 13. Keep preserved
-backup owners until required evidence preservation is confirmed. Native acceptance does not
-authorize retirement.
+accepted at attempt one, merged through PR #20, and proven live. F002-worker-runner-executor is
+next, ahead of safe planned intake. The factory runs one ticket at a time from merged main, so the
+two cannot conflict in either order; F002 has no unmet prerequisite and protects every later run
+from the executor loss in trial 13, while planned intake gates only v1-ticket23 and backlog
+persistence. v1-ticket10 keeps the recovery of outages that still happen. Keep preserved backup
+owners until required evidence preservation is confirmed. Native acceptance does not authorize
+retirement.
 
 Local sequential steel-thread evidence exists in workflow trials 8 and 9 and subsequent native
 acceptances. Cross-orb transfer, replacement restore, remote monitoring, and retirement still need
