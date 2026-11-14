@@ -24,6 +24,7 @@ const controlActions = [
   "pause",
   "reconcile",
   "retry-setup",
+  "retry-create",
   "resume",
   "reload",
 ] as const;
@@ -60,14 +61,15 @@ function connectedTools(action: string, saved: State, ctx: PluginToolContext) {
 }
 
 function repairRequest(input: Record<string, unknown>) {
-  if (input.action !== "resume") return undefined;
+  if (input.action !== "resume" && input.action !== "retry-create")
+    return undefined;
   if (
     typeof input.ticket !== "string" ||
     typeof input.decision !== "string" ||
     typeof input.incident !== "string"
   )
     throw new Error(
-      "Resume requires ticket and decision with the current incident",
+      "Resume and retry-create require ticket and decision with the current incident",
     );
   return {
     ticket: input.ticket,
@@ -115,6 +117,21 @@ export default function registerFactory(
   const subscriptions: { unsubscribe(): void }[] = [];
   let stopped = false;
   let publishing = false;
+  // Amp refuses a runner or Orb thread while a tool call of this plugin is in flight, so such a
+  // creation asks every in-flight control call to return first and continues after the last one.
+  // ponytail: a control call that arrives while a creation waits also returns before its own
+  // tick has run; give each call its own completion signal if that window ever matters.
+  let calls = 0;
+  let yieldCalls = Promise.withResolvers<undefined>();
+  let resumeCreation: (() => void) | undefined;
+  async function outsideToolCalls() {
+    if (!calls) return;
+    await new Promise<void>((resume) => {
+      resumeCreation = resume;
+      yieldCalls.resolve(undefined);
+    });
+    yieldCalls = Promise.withResolvers<undefined>();
+  }
 
   async function observe(
     id: Parameters<NativeHost["state"]>[0],
@@ -142,6 +159,7 @@ export default function registerFactory(
       role,
       executor = "local",
     ) {
+      if (executor !== "local") await outsideToolCalls();
       const agent = amp.createAgent({
         model,
         reasoningEffort,
@@ -300,7 +318,7 @@ export default function registerFactory(
   const suffix = createHash("sha256").update(root).digest("hex").slice(0, 8);
   amp.registerTool({
     name: `factory_control_${suffix}`,
-    description: `Control the factory in ${root}. status is read-only and does not deliver notices or register schedules. reload validates the authored definition for future runs without executing commands or changing active pins; a connected owner also recovers its watchdog registration. message-foreman delivers message text from a registered worker or reviewer to the owning Foreman without granting control; delivery errors have unknown outcomes, so do not retry blindly. start requires explicit user authorization, permissions.execute=true and connected owner tools; it confirms its owned watchdog before dispatch and refuses unrelated schedules or second roots. pause persists a local stop before any remote check, including from non-owner non-worker threads; only the owner's connected turn clears its watchdog. reconcile observes persisted work, recovers its watchdog and delivers durable alerts only in the connected owner context, without granting permissions. Unknown alert sends are held, not retried. retry-setup explicitly reruns parked preparation in the same worktree before creating a worker. resume requires the owning Foreman, a blocked ticket, its exact current incident ID from status, and a decision explaining the next repair; it queues the same worker without starting a paused factory or accepting code. Duplicate or stale notices never authorize another checkpoint. backup publishes private SQLite state and requires explicit user authorization and permissions.backup=true.`,
+    description: `Control the factory in ${root}. status is read-only and does not deliver notices or register schedules. reload validates the authored definition for future runs without executing commands or changing active pins; a connected owner also recovers its watchdog registration. message-foreman delivers message text from a registered worker or reviewer to the owning Foreman without granting control; delivery errors have unknown outcomes, so do not retry blindly. start requires explicit user authorization, permissions.execute=true and connected owner tools; it confirms its owned watchdog before dispatch and refuses unrelated schedules or second roots. pause persists a local stop before any remote check, including from non-owner non-worker threads; only the owner's connected turn clears its watchdog. reconcile observes persisted work, recovers its watchdog and delivers durable alerts only in the connected owner context, without granting permissions. Unknown alert sends are held, not retried. retry-setup explicitly reruns parked preparation in the same worktree before creating a worker. resume requires the owning Foreman, a blocked ticket, its exact current incident ID from status, and a decision explaining the next repair; it queues the same worker without starting a paused factory or accepting code. Duplicate or stale notices never authorize another checkpoint. retry-create requires the owning Foreman, a ticket parked in creating, its exact current incident ID and a decision recording that no thread was created; it repeats that one creation in place and never falls back to another executor. Runner and Orb threads are created after the tool call returns, so the returned status can still show creating; call status again. backup publishes private SQLite state and requires explicit user authorization and permissions.backup=true.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -331,15 +349,34 @@ export default function registerFactory(
         factoryStatus(factory.directory),
         ctx,
       );
-      const state = await factory.tick(
-        action,
-        ctx.thread.id,
-        (id) => observe(id, ctx.tools),
-        repairRequest(input),
-        tools,
-      );
-      if (action !== "reload" && action !== "status") await publish(ctx.tools);
-      return JSON.stringify(state);
+      const request = repairRequest(input);
+      const control = async () => {
+        const state = await factory.tick(
+          action,
+          ctx.thread.id,
+          (id) => observe(id, ctx.tools),
+          request,
+          tools,
+        );
+        if (action !== "reload" && action !== "status")
+          await publish(ctx.tools);
+        return JSON.stringify(state);
+      };
+      calls++;
+      try {
+        const work = control();
+        const result = await Promise.race([work, yieldCalls.promise]);
+        if (result !== undefined) return result;
+        work.catch((error) =>
+          amp.logger.log("factory deferred creation failed", String(error)),
+        );
+        return JSON.stringify(factoryStatus(factory.directory));
+      } finally {
+        if (!--calls) {
+          resumeCreation?.();
+          resumeCreation = undefined;
+        }
+      }
     },
   });
   amp.on("agent.start", async (event, ctx) => {

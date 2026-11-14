@@ -327,6 +327,7 @@ test.each([
       let payload: unknown;
       let fallbackFails = false;
       let fallbackCalls = 0;
+      let inFlight = 0;
       let execute!: (
         input: {
           action: string;
@@ -349,6 +350,9 @@ test.each([
           models.push(options);
           return {
             async createThread(options: { executor: unknown }) {
+              // Amp refuses runner threads while a tool call of the plugin is in flight.
+              if (options.executor !== "local" && inFlight)
+                throw new Error("Plugin agent threads spawned from tools");
               executors.push(options.executor);
               creates++;
               return { id: ["T-worker", "T-reviewer"][creates - 1] };
@@ -397,7 +401,14 @@ test.each([
         logger: { log() {} },
         on() {},
         registerTool(tool: { execute: typeof execute }) {
-          execute = tool.execute;
+          execute = async (...args) => {
+            inFlight++;
+            try {
+              return await tool.execute(...args);
+            } finally {
+              inFlight--;
+            }
+          };
         },
         onDispose(fn: () => void) {
           dispose = fn;
@@ -418,8 +429,13 @@ test.each([
           },
         },
       } as unknown as PluginToolContext;
-      const control = async (action: string, context = ctx) =>
-        JSON.parse(String(await execute({ action }, context)));
+      // A runner creation continues after the control call returns; status waits for that tick.
+      const control = async (action: string, context = ctx) => {
+        const result = JSON.parse(String(await execute({ action }, context)));
+        return workerRunner
+          ? JSON.parse(String(await execute({ action: "status" }, context)))
+          : result;
+      };
       const load = () =>
         registerFactory(amp, root, () => ({
           async init() {},
@@ -655,9 +671,20 @@ test.each([
           reasoningEffort: "high",
         });
         expect(models[1]?.instructions).toContain("Do not implement");
-        const dashboard = await Bun.file(
-          join(root, ".git/factory/dashboard.json"),
-        ).json();
+        const readDashboard = () =>
+          Bun.file(join(root, ".git/factory/dashboard.json")).json();
+        let dashboard = await readDashboard();
+        // A deferred runner creation publishes after its control call has returned.
+        for (
+          let waits = 0;
+          workerRunner &&
+          dashboard.tasks[0].thread !== "T-reviewer" &&
+          waits < 200;
+          waits++
+        ) {
+          await Bun.sleep(10);
+          dashboard = await readDashboard();
+        }
         expect(dashboard.tasks[0]).toMatchObject({
           thread: "T-reviewer",
           revision,

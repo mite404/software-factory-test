@@ -194,6 +194,7 @@ schedule or notification calls.
   or `run_mode` fields. Compare the parsed RRULE frequency and interval in `trigger.schedule`,
   `runMode` and `enabled`; ignore the platform anchor and unknown metadata. Fingerprint alone
   determines ownership, even when those settings drift.
+
 - `clear_schedule` returned `{"deleted":true}`; the next `get_schedule` returned `null`.
 
 Plugin bridge result wrapping remains unobserved. The adapter accepts parsed objects and JSON
@@ -287,6 +288,15 @@ Without it, new threads use `local`, which uses the Foreman's current client as 
 Creation failure on the named runner remains visibly parked in `creating` with a creation-unknown
 incident. The factory never falls back to `local` or starts, stops, or supervises runners.
 
+Amp refuses to create a runner thread while a tool call of the plugin is in flight. A control call
+that reaches such a creation therefore returns first, with the run still shown as `creating`, and
+the creation continues once the call has returned. Call `status` again to read the result.
+
+A parked `creating` run never retries by itself. After confirming that no thread was created, the
+owning Foreman can call `retry-create` with `ticket`, the current `incident` ID and a nonempty
+`decision`. This repeats that one creation in place, on the executor pinned for the run. A stale
+incident ID, a missing decision, or a run in any other state is refused.
+
 The operator can supervise the runner from the factory repository root with:
 
 ```sh
@@ -296,9 +306,9 @@ amp orb service start factory-runner --command 'amp --no-tui --runner-id factory
 New run and review records include `executor` in SQLite and factory control status. Historical
 records without that field mean `local`; opening them does not rewrite them or move their threads.
 The Foreman observed a runner-created test thread execute commands again after the runner service
-restarted. Creation through the plugin and tool continuity across a Foreman CLI or mid-turn runner
-restart remain unproven live. The Foreman owns that live proof after acceptance. Fixture hosts test
-the plugin request and durable records without creating real threads or running a real runner.
+restarted. Tool continuity across a Foreman CLI or mid-turn runner restart remains unproven live.
+Fixture hosts test the plugin request and durable records without creating real threads or
+running a real runner.
 
 ## Prepare worker worktrees
 
