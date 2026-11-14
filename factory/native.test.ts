@@ -56,8 +56,9 @@ test("queue retains ordered step labels and rejects malformed labels", () => {
     expect(() => tasks([{ ...task, steps }])).toThrow();
 });
 
+// A cold `bun` child on a shared CI runner has taken longer than one second to reach its marker.
 async function waitForFile(path: string) {
-  for (let i = 0; i < 200 && !(await Bun.file(path).exists()); i++)
+  for (let i = 0; i < 2000 && !(await Bun.file(path).exists()); i++)
     await Bun.sleep(5);
   expect(await Bun.file(path).exists()).toBe(true);
 }
