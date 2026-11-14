@@ -190,6 +190,12 @@ test("a title equal to the ticket id is not printed a second time", () => {
   expect(view.builders[0]!.label).toBe("T1 · working");
   expect(view.coming[0]).toMatchObject({ id: "T1", title: "" });
   expect(view.coming[1]!.title).toBe("ticket 2");
+  next.tasks[0]!.title = "T1 - post-graft review (sent)";
+  const review = derive(null, next, NOW);
+  expect(review.coming[0]!.title).toBe("post-graft review (sent)");
+  expect(review.builders[0]!.label).toBe(
+    "T1 · post-graft review (sent) · working",
+  );
 });
 
 // Real sequence from backup-adoption-ticket1: "blocked" while its review is dispatched, then a

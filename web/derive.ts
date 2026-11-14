@@ -86,10 +86,20 @@ function cut(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
+// Public titles are the ticket id, or the id plus a label such as "- post-graft review (sent)".
+// The id is always printed beside the title, so only the label is worth showing.
+function label(task: Task): string {
+  if (task.title === task.id) return "";
+  const prefix = `${task.id} - `;
+  return task.title.startsWith(prefix)
+    ? task.title.slice(prefix.length)
+    : task.title;
+}
+
 function describe(task: Task): string {
   const revision = task.revision ? ` · ${task.revision.slice(0, 7)}` : "";
   // The tooltip is one unwrapped line, so a brief-length title is cut to fit.
-  const title = task.title === task.id ? "" : ` · ${cut(task.title, 40)}`;
+  const title = label(task) && ` · ${cut(label(task), 40)}`;
   return `${task.id}${title} · ${task.status}${revision}`;
 }
 
@@ -142,8 +152,7 @@ function ticketRow(
     };
   return {
     id: task.id,
-    // Public titles are usually the ticket id; do not print the same string twice.
-    title: task.title === task.id ? "" : cut(task.title, 32),
+    title: cut(label(task), 32),
     status: task.status,
     steps: steps(task.status, task.evidence?.review?.pending === true),
     chips: row ? chips(task.steps) : [],
