@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -217,11 +217,27 @@ export function startDashboard({ root, port }: { root: string; port: number }) {
     ["-C", root, "rev-parse", "--absolute-git-dir"],
     { encoding: "utf8" },
   ).trim();
-  const html = readFileSync(join(import.meta.dir, "dashboard.html"), "utf8");
+  const web = join(root, "web/dist");
+  const index = join(web, "index.html");
+  const html = readFileSync(
+    existsSync(index) ? index : join(import.meta.dir, "dashboard.html"),
+    "utf8",
+  );
   const headers = {
     "cache-control": "no-store",
     "x-content-type-options": "nosniff",
   };
+  async function staticPage(path: string) {
+    if (path === "/" || path === "/index.html")
+      return new Response(html, {
+        headers: { ...headers, "content-type": "text/html; charset=utf-8" },
+      });
+    if (/^\/assets\/[\w-][\w.-]*$/.test(path)) {
+      const file = Bun.file(join(web, path));
+      if (await file.exists()) return new Response(file, { headers });
+    }
+    return null;
+  }
   return Bun.serve({
     hostname: "127.0.0.1",
     port,
@@ -232,10 +248,8 @@ export function startDashboard({ root, port }: { root: string; port: number }) {
           headers: { ...headers, allow: "GET" },
         });
       const path = new URL(request.url).pathname;
-      if (path === "/")
-        return new Response(html, {
-          headers: { ...headers, "content-type": "text/html; charset=utf-8" },
-        });
+      const page = await staticPage(path);
+      if (page) return page;
       if (path !== "/api/status")
         return new Response("Not found", { status: 404, headers });
       const { snapshot, observations, fresh } =

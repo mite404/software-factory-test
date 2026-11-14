@@ -15,6 +15,64 @@ import { startDashboard } from "./dashboard";
 import { tasks } from "./native";
 import { openPersistence } from "./persistence";
 
+test("dashboard serves the built pipeline and assets alongside its read-only API", async () => {
+  const root = await mkdtemp(join(tmpdir(), "factory-web-"));
+  execFileSync("git", ["init", "-q", root]);
+  const web = join(root, "web/dist");
+  await mkdir(join(web, "assets"), { recursive: true });
+  await writeFile(
+    join(web, "index.html"),
+    '<h1>Built pipeline</h1><script src="/assets/index-abc.js"></script>',
+  );
+  await writeFile(join(web, "assets/index-abc.js"), 'fetch("/api/status")');
+  await writeFile(join(web, "assets/index-xyz.css"), "body { color: red }");
+  const directory = join(root, ".git/factory");
+  const storage = openPersistence(directory, [
+    { id: "public-ticket", brief: "PRIVATE-BRIEF", after: [] },
+  ]);
+  storage.close();
+  const before = await readFile(join(directory, "state.sqlite"));
+  const server = startDashboard({ root, port: 0 });
+  const url = `http://localhost:${server.port}`;
+  try {
+    for (const path of ["/", "/index.html"]) {
+      const response = await fetch(`${url}${path}`);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("text/html");
+      expect(await response.text()).toContain("Built pipeline");
+    }
+    const script = await fetch(`${url}/assets/index-abc.js`);
+    expect(script.status).toBe(200);
+    expect(script.headers.get("content-type")).toContain("javascript");
+    expect(await script.text()).toBe('fetch("/api/status")');
+    const style = await fetch(`${url}/assets/index-xyz.css`);
+    expect(style.status).toBe(200);
+    expect(style.headers.get("content-type")).toContain("text/css");
+    expect(await style.text()).toBe("body { color: red }");
+    const status = await (await fetch(`${url}/api/status`)).json();
+    expect(status).toMatchObject({
+      durable: "available",
+      tasks: [{ id: "public-ticket", title: "public-ticket" }],
+    });
+    expect(JSON.stringify(status)).not.toContain("PRIVATE-BRIEF");
+    for (const path of [
+      "/assets/missing.js",
+      "/assets/%2e%2e%2f.git%2ffactory%2fstate.sqlite",
+      "/.git/factory/state.sqlite",
+      "/web/main.ts",
+    ])
+      expect((await fetch(`${url}${path}`)).status).toBe(404);
+    for (const path of ["/", "/assets/index-abc.js", "/api/status"])
+      expect((await fetch(`${url}${path}`, { method: "POST" })).status).toBe(
+        405,
+      );
+    expect(await readFile(join(directory, "state.sqlite"))).toEqual(before);
+  } finally {
+    await server.stop(true);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("HTTP retains authored labels across restarts and rejects untrusted labels without leaking private data", async () => {
   const root = await mkdtemp(join(tmpdir(), "factory-labels-"));
   execFileSync("git", ["init", "-q", root]);

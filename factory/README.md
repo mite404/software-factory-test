@@ -236,13 +236,22 @@ available in this checkout, not a published package.
 
 ### Pipeline view
 
-`web/` is a Vite page that draws the same `/api/status` feed as an animated pipeline: one SVG,
-CSS animations, and a small TypeScript poller. It is read-only and proxies `/api` to the dashboard
-service above (`FACTORY_API` overrides the default `http://127.0.0.1:4310`).
+Build the pipeline page in the repository served by `--repo` before starting the dashboard:
 
 ```sh
-amp orb service start factory-web --command 'bunx vite web' --port 5173 --portal
+bun run web:build
+amp orb service start factory-dashboard --command 'bun factory/dashboard.ts' --port 4310 --portal
 ```
+
+The same service serves `web/dist/index.html` at `/` and `/index.html`, generated files under
+`/assets/`, and the unchanged read-only `/api/status`. No Vite server, relay, cross-orb proxy, or
+sign-in cookie refresh is needed. Restart the service after rebuilding. Without a build, the
+existing activity page remains available.
+
+For frontend development, `amp orb services ensure` starts the recorded replay and Vite services
+from `.amp/services.yaml`. That preview is labeled recorded data, not a live factory. To develop
+against a local dashboard, run `bun run web`; `FACTORY_API` overrides its default API proxy target
+`http://127.0.0.1:4310`. The built page always reads `/api/status` on its own origin.
 
 Motion is derived by comparing consecutive polls: a ticket that becomes accepted plays the landing
 (packet, press, screen shake, cold review, new commit on main), one that becomes blocked sends a
@@ -320,7 +329,8 @@ also includes attempt, pending state, and the available reviewer thread. An abse
 `null`, not an inferred success. Legacy gate-only acceptance has no retained gate reference.
 Private report/log paths, commands, requirements, verdict contents, worker rationale, configuration,
 and event details are not served. Review titles omit paths, including in older observation files.
-Only the existing HTML and GET `/api/status` are served; other paths and write methods are rejected.
+Only the selected HTML, built assets, and GET `/api/status` are served. Source files, private
+factory files, other paths, and write methods are rejected.
 No model call is used for observation, HTTP reads, or rendering.
 
 **Sample preview** switches to clearly labeled illustrative data. It never starts workers or
