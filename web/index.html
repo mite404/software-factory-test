@@ -1,0 +1,626 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Software factory</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <!-- One fixed 1280x1152 canvas; the foreman layer sits at negative y. CSS owns every animation; main.ts only sets attributes and text. -->
+    <svg
+      id="stage"
+      viewBox="0 -120 1280 1152"
+      data-state="offline"
+      role="img"
+      aria-label="Software factory pipeline"
+    >
+      <defs>
+        <!-- Motion paths. Packets follow these through offset-path: url(#id). -->
+        <path id="w1" d="M133 114 C250 114 240 193 327 193" />
+        <path id="w2" d="M133 166 C240 166 250 193 327 193" />
+        <path id="w3" d="M133 218 C240 218 250 193 327 193" />
+        <path id="w4" d="M133 270 C250 270 240 193 327 193" />
+        <path id="h1" d="M115 -6 V102" />
+        <path id="h2" d="M115 -6 V154" />
+        <path id="h3" d="M115 -6 V206" />
+        <path id="h4" d="M115 -6 V258" />
+        <path
+          id="feed"
+          d="M433 193 H856 Q896 193 896 233 V263 V233 Q896 193 936 193 H990"
+        />
+        <path id="direct" d="M433 193 H990" />
+        <path
+          id="b1"
+          d="M664 193 V488 Q664 500 652 500 H48 Q36 500 36 488 V126 Q36 114 48 114 H66"
+        />
+        <path
+          id="b2"
+          d="M664 193 V488 Q664 500 652 500 H48 Q36 500 36 488 V178 Q36 166 48 166 H66"
+        />
+        <path
+          id="b3"
+          d="M664 193 V488 Q664 500 652 500 H48 Q36 500 36 488 V230 Q36 218 48 218 H66"
+        />
+        <path
+          id="b4"
+          d="M664 193 V488 Q664 500 652 500 H48 Q36 500 36 488 V282 Q36 270 48 270 H66"
+        />
+        <path id="rv-in" d="M824 193 H896 V263" />
+        <path
+          id="fb-setup"
+          d="M79 30 H48 Q36 30 36 18 V-11 Q36 -23 48 -23 H53"
+        />
+        <path
+          id="fb-gate"
+          d="M664 193 V488 Q664 500 652 500 H48 Q36 500 36 488 V-11 Q36 -23 48 -23 H53"
+        />
+        <path
+          id="fb-review"
+          d="M860 294 H839 Q833 294 833 300 V386 Q833 398 821 398 H664 V488 Q664 500 652 500 H48 Q36 500 36 488 V-11 Q36 -23 48 -23 H53"
+        />
+        <path
+          id="rv-out"
+          d="M860 294 H839 Q833 294 833 300 V386 Q833 398 821 398 H664 V488 Q664 500 652 500 H48 Q36 500 36 488 V126 Q36 114 48 114 H66"
+        />
+        <path id="fg-in" d="M1021 193 V301 Q1021 313 1033 313 H1198" />
+        <path
+          id="fg-out"
+          d="M1212 313 H1221 Q1233 313 1233 325 V488 Q1233 500 1221 500 H48 Q36 500 36 488 V126 Q36 114 48 114 H66"
+        />
+        <linearGradient id="fade-ramp">
+          <stop offset="0" stop-color="#000" />
+          <stop offset="1" stop-color="#999" />
+        </linearGradient>
+        <mask id="fade" maskContentUnits="objectBoundingBox">
+          <rect width="1" height="1" fill="url(#fade-ramp)" />
+        </mask>
+        <clipPath id="freezer">
+          <rect x="847" y="151" width="98" height="84" rx="7" />
+        </clipPath>
+        <clipPath id="press">
+          <rect x="679" y="146" width="140" height="94" rx="7" />
+        </clipPath>
+        <g id="steps" class="chips dashed">
+          <g class="chip">
+            <rect x="311" y="-11" width="68" height="22" rx="5" />
+            <text x="345" y="4">worktree</text>
+          </g>
+          <path class="arrow" d="M381 0 H397" />
+          <g class="chip">
+            <rect x="399" y="-11" width="50" height="22" rx="5" />
+            <text x="424" y="4">setup</text>
+          </g>
+          <path class="arrow" d="M451 0 H467" />
+          <g class="chip">
+            <rect x="469" y="-11" width="108" height="22" rx="5" />
+            <text x="523" y="4">builder thread</text>
+          </g>
+          <path class="arrow" d="M579 0 H595" />
+          <g class="chip">
+            <rect x="597" y="-11" width="88" height="22" rx="5" />
+            <text x="641" y="4">report.json</text>
+          </g>
+          <path class="arrow" d="M687 0 H703" />
+          <g class="chip">
+            <rect x="705" y="-11" width="150" height="22" rx="5" />
+            <text x="780" y="4">gate · 120 s verify cap</text>
+          </g>
+          <path class="arrow" d="M857 0 H873" />
+          <g class="chip">
+            <rect x="875" y="-11" width="88" height="22" rx="5" />
+            <text x="919" y="4">cold review</text>
+          </g>
+          <path class="arrow" d="M965 0 H981" />
+          <g class="chip">
+            <rect x="983" y="-11" width="68" height="22" rx="5" />
+            <text x="1017" y="4">ff-merge</text>
+          </g>
+          <path class="arrow" d="M1053 0 H1069" />
+          <g
+            class="chip target"
+            data-tip="merge target: must be clean and unmoved before the ff-merge"
+          >
+            <rect x="1071" y="-11" width="44" height="22" rx="5" />
+            <text x="1093" y="4"></text>
+          </g>
+        </g>
+      </defs>
+
+      <!-- LIVE -->
+      <g transform="translate(0 -120)">
+        <text x="39" y="41" class="caps">
+          <tspan id="state" class="state">OFFLINE</tspan>
+          <tspan class="dim">·</tspan>
+          <tspan id="project" class="dim"></tspan>
+        </text>
+        <text id="observed" x="1200" y="65" class="mid end">
+          waiting for the factory
+        </text>
+        <g class="clock" transform="translate(1225 61)">
+          <circle r="11" />
+          <line y2="-7" />
+        </g>
+      </g>
+
+      <!-- return loop and feed lines -->
+      <g class="wire">
+        <use href="#w1" />
+        <use href="#w2" />
+        <use href="#w3" />
+        <use href="#w4" />
+        <path d="M433 193 H674" />
+        <path d="M115 -2 V13 M115 48 V94" />
+        <path
+          d="M1212 313 H1221 Q1233 313 1233 325 V488 Q1233 500 1221 500 H48 Q36 500 36 488 V126 Q36 114 48 114 H66"
+        />
+        <path
+          d="M36 178 Q36 166 48 166 H66 M36 230 Q36 218 48 218 H66 M36 282 Q36 270 48 270 H66"
+        />
+        <path
+          d="M664 193 V500 M842 294 H839 Q833 294 833 300 V386 Q833 398 821 398 H664 M824 193 H950 M896 193 V217"
+        />
+        <path d="M1021 200 V301 Q1021 313 1033 313 H1056" />
+        <!-- flow direction: to the integrator, down the return loop, back to the builders -->
+        <path
+          class="head"
+          d="M547 188 L553 193 L547 198 M1228 404 L1233 410 L1238 404 M384 495 L378 500 L384 505"
+        />
+      </g>
+      <!-- feedback lane to the foreman: placeholder, only the replay button moves it -->
+      <path
+        class="wire lane-up"
+        d="M36 126 V-11 Q36 -23 48 -23 H53 M79 30 H36"
+      />
+
+      <!-- foreman: the orchestrator layer above the row; it hands each ticket brief to a builder -->
+      <!-- lifted 22 so the labels of the row below get their own line -->
+      <g transform="translate(0 -22)">
+        <text x="53" y="-28" class="mid">
+          <tspan class="hi">foreman</tspan>
+          · orchestrator
+        </text>
+        <g class="box">
+          <rect x="53" y="-18" width="200" height="34" rx="8" />
+          <rect class="port" x="97" y="13" width="36" height="7" rx="3" />
+          <text x="153" y="3" class="small dim mid-anchor">
+            discovery · stories · tickets
+          </text>
+        </g>
+        <text x="269" y="-6" class="dim">picks the next eligible ticket</text>
+        <text x="269" y="14" class="dim">every 2nd rejection pauses here</text>
+        <text x="269" y="34" class="amber checkpoint">
+          paused · foreman decision needed
+        </text>
+        <g class="box">
+          <rect x="79" y="38" width="72" height="28" rx="8" />
+          <rect class="port" x="97" y="35" width="36" height="7" rx="3" />
+          <rect class="port" x="97" y="63" width="36" height="7" rx="3" />
+        </g>
+        <text x="163" y="56" class="mid">
+          <tspan class="hi">hand-off</tspan>
+          · ticket brief, scope, check command
+        </text>
+      </g>
+
+      <!-- builders -->
+      <text x="127" y="82" class="mid">builders</text>
+      <g class="builder" transform="translate(0 114)" data-status="empty">
+        <g class="bot">
+          <path d="M77 -13 V-8" />
+          <circle class="tip" cx="77" cy="-14" r="1.6" />
+          <rect x="68" y="-8" width="18" height="16" rx="4" />
+          <circle class="eye" cx="73.5" cy="0" r="1.3" />
+          <circle class="eye" cx="80.5" cy="0" r="1.3" />
+        </g>
+        <a class="card" target="_blank" rel="noreferrer">
+          <rect x="97" y="-12" width="36" height="24" rx="4" />
+          <path class="ink" d="M104 -4 H126 M104 2 H118" />
+        </a>
+        <text class="id" x="97" y="26"></text>
+      </g>
+      <g class="builder" transform="translate(0 166)" data-status="empty">
+        <g class="bot">
+          <path d="M77 -13 V-8" />
+          <circle class="tip" cx="77" cy="-14" r="1.6" />
+          <rect x="68" y="-8" width="18" height="16" rx="4" />
+          <circle class="eye" cx="73.5" cy="0" r="1.3" />
+          <circle class="eye" cx="80.5" cy="0" r="1.3" />
+        </g>
+        <a class="card" target="_blank" rel="noreferrer">
+          <rect x="97" y="-12" width="36" height="24" rx="4" />
+          <path class="ink" d="M104 -4 H112" />
+        </a>
+        <text class="id" x="97" y="26"></text>
+      </g>
+      <g class="builder" transform="translate(0 218)" data-status="empty">
+        <g class="bot">
+          <path d="M77 -13 V-8" />
+          <circle class="tip" cx="77" cy="-14" r="1.6" />
+          <rect x="68" y="-8" width="18" height="16" rx="4" />
+          <circle class="eye" cx="73.5" cy="0" r="1.3" />
+          <circle class="eye" cx="80.5" cy="0" r="1.3" />
+        </g>
+        <a class="card" target="_blank" rel="noreferrer">
+          <rect x="97" y="-12" width="36" height="24" rx="4" />
+          <path class="ink" d="M104 -4 H124 M104 2 H112" />
+        </a>
+        <text class="id" x="97" y="26"></text>
+      </g>
+      <g class="builder" transform="translate(0 270)" data-status="empty">
+        <g class="bot">
+          <path d="M77 -13 V-8" />
+          <circle class="tip" cx="77" cy="-14" r="1.6" />
+          <rect x="68" y="-8" width="18" height="16" rx="4" />
+          <circle class="eye" cx="73.5" cy="0" r="1.3" />
+          <circle class="eye" cx="80.5" cy="0" r="1.3" />
+        </g>
+        <a class="card" target="_blank" rel="noreferrer">
+          <rect x="97" y="-12" width="36" height="24" rx="4" />
+          <path class="ink" d="M104 -5 H126 M104 0 H120 M104 5 H124" />
+        </a>
+        <text class="id" x="97" y="26"></text>
+      </g>
+      <text x="53" y="317" class="dim">own thread + worktree</text>
+      <text x="381" y="347" class="dim mid-anchor">
+        commit locally, then report.json
+      </text>
+      <text x="381" y="370" class="dim mid-anchor">
+        candidate: revision + insight
+      </text>
+      <text x="381" y="392" class="dim mid-anchor">or blocked: reason</text>
+
+      <!-- submission: the builder reports back -->
+      <text x="381" y="82" class="mid mid-anchor">
+        <tspan class="hi">submission</tspan>
+        · report.json
+      </text>
+      <g class="box">
+        <rect x="332" y="98" width="98" height="190" rx="10" />
+        <rect class="port" x="327" y="175" width="7" height="36" rx="3" />
+        <rect class="port" x="428" y="175" width="7" height="36" rx="3" />
+      </g>
+      <!-- fill order: middle, top, bottom -->
+      <g class="slot" transform="translate(381 193)">
+        <circle r="17" />
+        <rect x="-10" y="-6" width="20" height="12" rx="2" />
+      </g>
+      <g class="slot" transform="translate(381 146)">
+        <circle r="17" />
+        <rect x="-10" y="-6" width="20" height="12" rx="2" />
+      </g>
+      <g class="slot" transform="translate(381 240)">
+        <circle r="17" />
+        <rect x="-10" y="-6" width="20" height="12" rx="2" />
+      </g>
+      <text id="waiting" x="381" y="308" class="small dim mid-anchor"></text>
+
+      <!-- integrator -->
+      <text x="749" y="82" class="mid mid-anchor">
+        <tspan class="hi">integrator</tspan>
+        · one ticket at a time
+      </text>
+      <text id="tally" x="749" y="106" class="amber mid-anchor"></text>
+      <g class="box integrator">
+        <rect x="678" y="145" width="142" height="96" rx="8" />
+        <g clip-path="url(#press)">
+          <g class="plate top">
+            <rect class="stem" x="746" y="100" width="6" height="50" />
+            <rect class="platen" x="727" y="149" width="44" height="6" rx="1" />
+            <rect class="face" x="729" y="155" width="40" height="2" />
+          </g>
+          <g class="plate bottom">
+            <rect class="stem" x="746" y="236" width="6" height="50" />
+            <rect class="platen" x="727" y="231" width="44" height="6" rx="1" />
+            <rect class="face" x="729" y="229" width="40" height="2" />
+          </g>
+          <rect class="base" x="721" y="149" width="56" height="6" rx="1" />
+          <rect class="base" x="721" y="231" width="56" height="6" rx="1" />
+          <rect class="load" x="721" y="149" width="56" height="6" rx="1" />
+          <rect class="load" x="721" y="231" width="56" height="6" rx="1" />
+          <path
+            class="sparks"
+            d="M716 187 l-9 -2 M714 193 h-11 M716 199 l-9 2 M782 187 l9 -2 M784 193 h11 M782 199 l9 2"
+          />
+        </g>
+        <rect class="port" x="674" y="175" width="7" height="36" rx="3" />
+        <rect class="port" x="817" y="175" width="7" height="36" rx="3" />
+      </g>
+      <g class="lane mid-anchor">
+        <text x="749" y="273" class="mid">gate</text>
+        <text x="749" y="296" class="dim step s1">revision = HEAD</text>
+        <text x="749" y="296" class="dim step s2">clean tree · scope</text>
+        <text x="749" y="296" class="dim step s3">verify</text>
+        <text x="749" y="296" class="dim step s4">to cold review</text>
+      </g>
+
+      <!-- cold review hangs off the gate-to-main wire, which stays clear for landings that skip it; the feed does not report it yet -->
+      <g class="box review" transform="translate(0 70)">
+        <rect x="846" y="150" width="100" height="86" rx="8" />
+        <rect class="port" x="878" y="147" width="36" height="7" rx="3" />
+        <rect class="port exit" x="842" y="216" width="7" height="16" rx="3" />
+        <circle cx="896" cy="193" r="16" />
+        <circle class="sweep" cx="896" cy="193" r="16" pathLength="100" />
+        <text x="846" y="258" class="hi">cold review</text>
+        <text x="846" y="280" class="dim">opposite model family</text>
+        <text x="846" y="302" class="dim">small 1st tries skip</text>
+      </g>
+
+      <!-- main -->
+      <text x="956" y="169" class="mid">
+        <tspan id="lane" class="hi">main</tspan>
+        ·
+        <tspan id="head" class="green">ff-only</tspan>
+      </text>
+      <path class="mainline" d="M950 193 H1186" />
+      <rect class="port cap" x="1186" y="172" width="7" height="42" rx="3" />
+      <g id="main">
+        <a target="_blank" rel="noreferrer">
+          <circle class="landed" cx="990" cy="193" r="7"></circle>
+        </a>
+        <a target="_blank" rel="noreferrer">
+          <circle class="landed" cx="1021" cy="193" r="7"></circle>
+        </a>
+        <a target="_blank" rel="noreferrer">
+          <circle class="landed" cx="1052" cy="193" r="7"></circle>
+        </a>
+        <a target="_blank" rel="noreferrer">
+          <circle class="landed" cx="1083" cy="193" r="7"></circle>
+        </a>
+        <a target="_blank" rel="noreferrer">
+          <circle class="landed" cx="1114" cy="193" r="7"></circle>
+        </a>
+        <a target="_blank" rel="noreferrer">
+          <circle class="landed" cx="1145" cy="193" r="7"></circle>
+        </a>
+        <a target="_blank" rel="noreferrer">
+          <circle class="landed" cx="1176" cy="193" r="7"></circle>
+        </a>
+      </g>
+
+      <!-- full gate: planned, so only the replay button moves it -->
+      <g class="planned">
+        <text x="1205" y="251" class="end mid">
+          <tspan class="hi">full gate</tspan>
+          · scheduled
+        </text>
+        <text x="1205" y="274" class="end dim">planned · replay only</text>
+        <rect x="1060" y="284" width="148" height="58" rx="8" />
+        <path class="track" d="M1076 313 H1192" />
+        <rect class="port" x="1056" y="295" width="7" height="36" rx="3" />
+        <rect class="port exit" x="1205" y="295" width="7" height="36" rx="3" />
+        <text x="1205" y="362" class="end verdict bad">
+          red · main-red ticket filed
+        </text>
+        <text x="1205" y="362" class="end verdict good">
+          green · revision verified
+        </text>
+      </g>
+      <text x="171" y="527" class="dim">
+        back to the builder that wrote it · reports also reach the foreman
+        (placeholder · replay only)
+      </text>
+
+      <!-- packets: hidden until main.ts adds .go -->
+      <rect class="pkt out r1" x="-9" y="-6" width="18" height="12" rx="2" />
+      <rect class="pkt out r2" x="-9" y="-6" width="18" height="12" rx="2" />
+      <rect class="pkt out r3" x="-9" y="-6" width="18" height="12" rx="2" />
+      <rect class="pkt out r4" x="-9" y="-6" width="18" height="12" rx="2" />
+      <rect class="pkt back r1" x="-9" y="-6" width="18" height="12" rx="2" />
+      <rect class="pkt back r2" x="-9" y="-6" width="18" height="12" rx="2" />
+      <rect class="pkt back r3" x="-9" y="-6" width="18" height="12" rx="2" />
+      <rect class="pkt back r4" x="-9" y="-6" width="18" height="12" rx="2" />
+      <rect class="pkt brief r1" x="-9" y="-6" width="18" height="12" rx="2" />
+      <rect class="pkt brief r2" x="-9" y="-6" width="18" height="12" rx="2" />
+      <rect class="pkt brief r3" x="-9" y="-6" width="18" height="12" rx="2" />
+      <rect class="pkt brief r4" x="-9" y="-6" width="18" height="12" rx="2" />
+      <rect class="pkt cand" x="-9" y="-6" width="18" height="12" rx="2" />
+      <g class="pkt up setup">
+        <rect x="-9" y="-6" width="18" height="12" rx="2" />
+        <text x="14" y="4">setup failed · log</text>
+      </g>
+      <g class="pkt up gatefail">
+        <rect x="-9" y="-6" width="18" height="12" rx="2" />
+        <text x="14" y="4">gate failed · log</text>
+      </g>
+      <g class="pkt up findings">
+        <rect x="-9" y="-6" width="18" height="12" rx="2" />
+        <text x="14" y="4">review findings</text>
+      </g>
+      <g class="pkt fixes">
+        <rect x="-9" y="-6" width="18" height="12" rx="2" />
+        <text y="-11">fixes</text>
+      </g>
+      <circle class="pkt probe" r="5" />
+      <g class="pkt mainred">
+        <rect x="-9" y="-6" width="18" height="12" rx="2" />
+        <text y="-11">main-red</text>
+      </g>
+      <g class="pkt courier">
+        <rect
+          class="trail"
+          x="-36"
+          y="-6"
+          width="28"
+          height="12"
+          mask="url(#fade)"
+        />
+        <rect class="ring" x="-9" y="-9" width="18" height="18" rx="9" />
+        <rect class="block" x="-10" y="-6" width="20" height="12" rx="2" />
+      </g>
+      <!-- cold review freezer: two doors slide shut over the box, then mist leaves the seal -->
+      <g transform="translate(0 70)">
+        <g class="freezer" clip-path="url(#freezer)">
+          <g class="door left">
+            <path d="M846 150 H896 V176 L886 193 L896 210 V236 H846 Z" />
+            <rect class="panel" x="856" y="159" width="30" height="20" rx="2" />
+            <rect class="panel" x="856" y="207" width="30" height="20" rx="2" />
+            <path class="lamp" d="M852 184 V202" />
+          </g>
+          <g class="door right">
+            <path d="M946 150 H896 V176 L886 193 L896 210 V236 H946 Z" />
+            <path class="plaque" d="M892 193 L905 180 H938 V206 H905 Z" />
+            <text x="921" y="195.3">FREEZER</text>
+            <path class="lamp" d="M940 159 V176 M940 210 V227" />
+          </g>
+        </g>
+        <g class="mist">
+          <circle cx="896" cy="183" r="5" />
+          <circle cx="896" cy="193" r="8" />
+          <circle cx="896" cy="203" r="11" />
+        </g>
+      </g>
+
+      <!-- ACTIVE -->
+      <path class="rule" d="M39 536 H1233" />
+      <text x="39" y="569" class="caps">
+        <tspan class="mid">ACTIVE</tspan>
+        <tspan class="dim">·</tspan>
+        <tspan id="next" class="dim"></tspan>
+      </text>
+      <text id="active-steps" x="1060" y="569" class="dim end small"></text>
+      <text x="1233" y="569" class="dim end small">
+        <tspan class="green">green</tspan>
+        = done ·
+        <tspan class="amber">amber</tspan>
+        = now
+      </text>
+      <g class="coming" transform="translate(0 607)" hidden>
+        <text x="39" y="-3" class="hi id"></text>
+        <text x="39" y="18" class="dim title"></text>
+      </g>
+      <!-- the gate pill above opens into this box; its output feeds cold review -->
+      <path class="arrow gatewire" d="M780 619 V632 M919 632 V619" />
+      <g transform="translate(0 48)">
+        <g class="box">
+          <rect x="196" y="584" width="1027" height="130" rx="10" />
+          <rect class="port" x="762" y="581" width="36" height="7" rx="3" />
+          <rect class="port" x="901" y="581" width="36" height="7" rx="3" />
+        </g>
+        <rect class="marker" x="-8" y="-5" width="16" height="7" rx="1" />
+        <text x="218" y="616" class="mid">
+          <tspan class="dim">1</tspan>
+          <tspan class="hi">candidate</tspan>
+          · from report.json
+        </text>
+        <text x="218" y="648" class="dim">revision = HEAD, not the base</text>
+        <text x="218" y="672" class="dim">
+          tree clean · every path in scope
+        </text>
+        <text x="530" y="616" class="mid">
+          <tspan class="dim">2</tspan>
+          <tspan class="hi">verify</tspan>
+          · project check command · 120 s cap
+        </text>
+        <g class="chips filled checks">
+          <rect x="530" y="633" width="44" height="22" rx="5" style="--i: 0" />
+          <text x="552" y="648">test</text>
+          <path class="arrow" d="M576 644 H588" />
+          <rect x="590" y="633" width="44" height="22" rx="5" style="--i: 1" />
+          <text x="612" y="648">lint</text>
+          <path class="arrow" d="M636 644 H648" />
+          <rect x="650" y="633" width="74" height="22" rx="5" style="--i: 2" />
+          <text x="687" y="648">typecheck</text>
+          <path class="arrow" d="M726 644 H738" />
+          <rect x="740" y="633" width="56" height="22" rx="5" style="--i: 3" />
+          <text x="768" y="648">format</text>
+          <path class="arrow" d="M798 644 H810" />
+          <rect x="812" y="633" width="56" height="22" rx="5" style="--i: 4" />
+          <text x="840" y="648">fallow</text>
+          <path class="arrow" d="M870 644 H882" />
+          <rect x="884" y="633" width="80" height="22" rx="5" style="--i: 5" />
+          <text x="924" y="648">diff-check</text>
+        </g>
+        <text x="530" y="672" class="dim small">
+          illustrative ticks · not live
+        </text>
+        <text x="1000" y="616" class="mid">
+          <tspan class="dim">3</tspan>
+          <tspan class="hi">unchanged</tspan>
+        </text>
+        <text x="1000" y="648" class="dim">HEAD still the candidate</text>
+        <text x="1000" y="672" class="dim">tree still clean</text>
+        <text x="218" y="700" class="dim">
+          <tspan class="green">pass</tspan>
+          → cold review
+        </text>
+        <text x="530" y="700" class="dim">
+          <tspan class="red">fail</tspan>
+          → same builder with the log · 2nd fail → escalated
+        </text>
+        <g id="queue" transform="translate(0 164)">
+          <g class="q" transform="translate(884.0 616)">
+            <text y="-17"></text>
+            <circle r="7" />
+          </g>
+          <g class="q" transform="translate(918.6 616)">
+            <text y="-17"></text>
+            <circle r="7" />
+          </g>
+          <g class="q" transform="translate(953.1 616)">
+            <text y="-17"></text>
+            <circle r="7" />
+          </g>
+          <g class="q" transform="translate(987.7 616)">
+            <text y="-17"></text>
+            <circle r="7" />
+          </g>
+          <g class="q" transform="translate(1022.2 616)">
+            <text y="-17"></text>
+            <circle r="7" />
+          </g>
+          <g class="q" transform="translate(1056.8 616)">
+            <text y="-17"></text>
+            <circle r="7" />
+          </g>
+          <g class="q" transform="translate(1091.4 616)">
+            <text y="-17"></text>
+            <circle r="7" />
+          </g>
+          <g class="q" transform="translate(1125.9 616)">
+            <text y="-17"></text>
+            <circle r="7" />
+          </g>
+          <g class="q" transform="translate(1160.5 616)">
+            <text y="-17"></text>
+            <circle r="7" />
+          </g>
+          <g class="q" transform="translate(1195.0 616)">
+            <text y="-17"></text>
+            <circle r="7" />
+          </g>
+        </g>
+      </g>
+
+      <!-- COMING -->
+      <path class="rule" d="M39 800 H1233" />
+      <text x="39" y="832" class="caps">
+        <tspan class="mid">COMING</tspan>
+        <tspan class="dim">· IN ORDER</tspan>
+      </text>
+      <text x="866" y="832" class="dim end small">all tickets</text>
+      <text id="idle-queue" x="39" y="867" class="dim" hidden>
+        nothing pending
+      </text>
+      <g class="coming" transform="translate(0 862)" hidden>
+        <text x="39" y="-3" class="hi id"></text>
+        <text x="39" y="18" class="dim title"></text>
+      </g>
+      <g class="coming" transform="translate(0 920)" hidden>
+        <text x="39" y="-3" class="hi id"></text>
+        <text x="39" y="18" class="dim title"></text>
+      </g>
+
+      <text x="15" y="992" class="dim">read-only · one poll every 5 s</text>
+    </svg>
+    <div id="tip" hidden></div>
+    <button id="play" type="button">▶ replay</button>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

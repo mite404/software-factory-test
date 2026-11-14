@@ -1,0 +1,14 @@
+# Dashboard development: the pipeline view on a recorded feed. No factory needed.
+# Start with `amp orb services ensure`. See web/AGENTS.md.
+services:
+  replay:
+    command: bun web/replay.ts
+    port: 4311
+    health: /api/status
+  web:
+    command: bunx vite web
+    env:
+      FACTORY_API: http://127.0.0.1:4311
+    portal:
+      title: Pipeline view (recorded replay)
+      description: Recorded feed from web/replay.ts, not a live factory.

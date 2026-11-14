@@ -234,6 +234,46 @@ Use the portal URL returned by Amp. Do not expose the loopback service directly 
 Installing the dashboard into another repo is still part of F01; these commands run the source
 available in this checkout, not a published package.
 
+### Pipeline view
+
+`web/` is a Vite page that draws the same `/api/status` feed as an animated pipeline: one SVG,
+CSS animations, and a small TypeScript poller. It is read-only and proxies `/api` to the dashboard
+service above (`FACTORY_API` overrides the default `http://127.0.0.1:4310`).
+
+```sh
+amp orb service start factory-web --command 'bunx vite web' --port 5173 --portal
+```
+
+Motion is derived by comparing consecutive polls: a ticket that becomes accepted plays the landing
+(packet, press, screen shake, cold review, new commit on main), one that becomes blocked sends a
+red packet back to its builder, and a queued one that starts work gets a brief from the foreman
+layer through the hand-off. The dashed lane from the return loop up to the foreman is a
+placeholder that only the replay button animates. Stale observations stop all motion. Append
+`?demo` for labeled sample data.
+The `replay` button reruns these animations for review without touching factory state. It also
+plays a cold review that returns fixes and a green and a red full gate; the feed reports none of
+those yet. Cold review runs before the merge and is skipped for small low-risk first attempts.
+The gate-to-main wire runs straight past the review box, which hangs below on its own branch. A
+landing detours through it only when the accepted task has `evidence.review`; with no recorded
+review it stays on the wire, which does not prove the review was skipped. The verify chips tick on
+a fixed timeline, not live check results.
+The press turns the packet into a ball; in cold review two `FREEZER` doors fill the box, slide shut
+on it and three puffs of mist (small, medium, large, placed at random each time) leave the seal
+while the sweep runs behind them.
+
+Below the pipeline, ACTIVE shows the current ticket's stage pills (green = done, amber = now),
+inferred from its single feed status, and a box that expands the gate pill into the integrator's
+checks. The wire from the pill to the box turns amber while the ticket is idle, which is when the
+gate runs. COMING lists the next two tickets, and its dots show every ticket's status in order.
+
+The feed's `target` field is the root checkout's current branch. The page shows it as the dotted
+pill after `ff-merge` and as the label of the commit lane. A builder whose ticket just landed is
+outlined green for one poll. Hovering a builder, queue dot or commit dot shows its ticket id,
+title, status and revision.
+
+A COMING row shows the ticket's own steps as chips when its feed task has a `steps` list of short
+labels, and the generic stage pills otherwise. Steps that do not fit the row are dropped.
+
 The plugin publishes a sanitized observation file under the target Git directory. Native Amp
 state and title subscriptions trigger updates; a five-second heartbeat refreshes observations.
 The browser polls the read-only `/api/status` endpoint every five seconds. SQLite supplies retained
