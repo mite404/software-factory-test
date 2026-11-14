@@ -62,6 +62,7 @@ async function fixture(
   git(root, "commit", "-qm", "baseline");
   const settings: Parameters<NativeHost["create"]>[] = [];
   const messages: { thread: string; message: string }[] = [];
+  const notices: string[] = [];
   const watched: string[] = [];
   let activity: Awaited<ReturnType<NativeHost["state"]>> = "idle";
   const host: NativeHost = {
@@ -72,6 +73,10 @@ async function fixture(
       return `T-${settings.length}`;
     },
     async send(thread, message) {
+      if (thread === "T-owner") {
+        notices.push(message);
+        return;
+      }
       messages.push({ thread, message });
       if (thread !== "T-1" && failure === "send")
         throw new Error("Delivery unknown");
@@ -130,15 +135,18 @@ async function fixture(
     worktree,
     settings,
     messages,
+    notices,
     watched,
     tick,
     status,
     review,
     verdict,
     submit,
-    resume() {
+    async resume() {
+      const state = await factory.tick("reconcile");
       return factory.tick("resume", "T-owner", host.state, {
         ticket: "A",
+        incident: state.runs.A?.incident?.id ?? "missing",
         decision:
           "Use the review reproduction to repair the shared value contract",
       });
@@ -347,6 +355,11 @@ test.each([false, true])(
         }
       }
       f.reload();
+      expect((await f.tick()).runs.A!.incident).toMatchObject({
+        reason: "verification-rejected",
+        attempt: 2,
+        recovery: "resume",
+      });
       f.observe("unknown");
       expect(f.resume()).rejects.toThrow(/idle/);
       f.observe("idle");
@@ -454,10 +467,57 @@ test("invalid and unavailable evidence cannot approve or replace a reviewer acro
       f.observe(state);
       expect((await f.tick()).runs.A?.kind).toBe("running");
     }
+    expect((await f.status()).runs.A!.incident).toMatchObject({
+      reason: "approval-required",
+      recovery: "inspect",
+      attempt: 1,
+    });
+    expect(f.notices).toEqual([
+      expect.stringContaining("Reason: worker-error. Recovery: inspect"),
+      expect.stringContaining("Reason: approval-required. Recovery: inspect"),
+    ]);
     expect(f.settings).toHaveLength(2);
     expect(f.messages).toHaveLength(2);
     f.observe("idle");
     expect((await f.tick()).runs.A?.kind).toBe("done");
+  } finally {
+    await f.close();
+  }
+});
+
+test("reviewer recovery renews notices without repeating unchanged stop transitions", async () => {
+  const f = await fixture();
+  try {
+    await f.submit(1);
+    await f.tick();
+    f.observe("error");
+    const stopped = (await f.tick()).runs.A!;
+    expect(stopped.incident).toMatchObject({
+      reason: "worker-error",
+      delivery: "sent",
+    });
+    f.observe("unknown");
+    expect((await f.tick()).runs.A!.incident).toEqual(stopped.incident);
+    f.reload();
+    f.observe("running");
+    const recovered = (await f.tick()).runs.A!;
+    f.observe("error");
+    const repeated = (await f.tick()).runs.A!;
+    expect(repeated.incident).toMatchObject({
+      reason: "worker-error",
+      delivery: "sent",
+    });
+    expect(f.notices).toEqual([
+      expect.stringContaining(stopped.incident!.id),
+      expect.stringContaining(repeated.incident!.id),
+    ]);
+    expect(repeated.incident!.id).not.toBe(stopped.incident!.id);
+    expect(recovered.incident).toBeUndefined();
+    const database = join(f.root, ".git/factory/state.sqlite");
+    const bytes = await readFile(database);
+    await f.tick();
+    expect(await readFile(database)).toEqual(bytes);
+    expect(f.settings).toHaveLength(2);
   } finally {
     await f.close();
   }
@@ -480,7 +540,14 @@ test.each(["base", "code", "stage"])(
       await writeFile(join(path, "src/value"), "changed");
       git(path, "add", ".");
       git(path, "commit", "-qm", "identity changed");
-      expect((await f.tick()).runs.A?.kind).toBe("blocked");
+      expect((await f.tick()).runs.A).toMatchObject({
+        kind: "blocked",
+        incident: {
+          reason: "review-identity-changed",
+          recovery: "inspect",
+          attempt: 1,
+        },
+      });
       expect(f.settings).toHaveLength(2);
     } finally {
       await f.close();
@@ -498,6 +565,12 @@ test.each(["create", "send"])(
       f.reload();
       await f.tick();
       expect((await f.tick()).runs.A?.kind).toBe("running");
+      expect((await f.status()).runs.A!.incident).toMatchObject({
+        reason: failure === "create" ? "creation-unknown" : "delivery-unknown",
+        recovery: "inspect",
+        attempt: 1,
+      });
+      expect(f.notices).toHaveLength(1);
       expect(f.settings).toHaveLength(2);
       expect(f.messages).toHaveLength(failure === "create" ? 1 : 2);
       expect((await f.status()).runs.B).toBeUndefined();

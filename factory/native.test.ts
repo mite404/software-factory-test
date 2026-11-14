@@ -121,7 +121,8 @@ async function preparationFixture(
       creates++;
       return "T-prepared";
     },
-    async send() {
+    async send(id) {
+      if (id === "T-owner") return;
       await ready();
       sends++;
     },
@@ -145,6 +146,202 @@ afterEach(async () => {
   for (const root of preparationRoots.splice(0))
     await rm(root, { recursive: true, force: true });
 });
+
+test("a rejected stop transaction cannot publish or resurrect its notice", async () => {
+  const f = await preparationFixture(() => "");
+  await f.factory().tick("start", "T-owner");
+  f.host.state = async () => "idle";
+  const directory = join(f.root, ".git/factory");
+  await writeFile(
+    join(directory, "A.report.json"),
+    JSON.stringify({ kind: "blocked", attempt: 1, reason: "Inspect baseline" }),
+  );
+  const notices: string[] = [];
+  f.host.send = async (_id, message) => {
+    notices.push(message);
+  };
+  const db = new Database(join(directory, "state.sqlite"));
+  db.run(`CREATE TRIGGER fail_stop BEFORE INSERT ON events WHEN NEW.action = 'blocked'
+    BEGIN SELECT RAISE(ABORT, 'stop rollback'); END`);
+  expect(f.factory().tick("reconcile")).rejects.toThrow(/stop rollback/);
+  const unchanged = (await f.factory().tick("status")).runs.A!;
+  expect(unchanged).toMatchObject({ kind: "running", attempt: 1 });
+  expect(unchanged.incident).toBeUndefined();
+  expect(notices).toEqual([]);
+  db.run("DROP TRIGGER fail_stop");
+  db.close();
+  const stopped = (await f.factory().tick("reconcile")).runs.A!;
+  expect(stopped).toMatchObject({
+    kind: "blocked",
+    incident: { recovery: "resume", delivery: "sent" },
+  });
+  expect(notices).toEqual([expect.stringContaining(stopped.incident!.id)]);
+});
+
+test("ownerless parked work does not record nonexistent notice transitions", async () => {
+  const f = await preparationFixture(() => "");
+  await f.factory().tick("pause");
+  const directory = join(f.root, ".git/factory");
+  const storage = openPersistence(directory, []);
+  storage.state.runs.A = {
+    kind: "creating",
+    base: f.git("rev-parse", "HEAD"),
+    worktree: f.worktree,
+  };
+  storage.commit(storage.state, "A", "creating", "fixture");
+  storage.close();
+  const bytes = await readFile(join(directory, "state.sqlite"));
+  await f.factory().tick("reconcile");
+  await f.factory().tick("reconcile");
+  expect(await readFile(join(directory, "state.sqlite"))).toEqual(bytes);
+  expect(f.counts()).toEqual({ creates: 0, sends: 0 });
+});
+
+test.each(["crash-before-send", "failed-send", "append-before-ack"])(
+  "stop notices survive %s and bind repair to the current incident",
+  async (fault) => {
+    const f = await preparationFixture(() => "");
+    await f.factory().tick("start", "T-owner");
+    const directory = join(f.root, ".git/factory");
+    const report = join(directory, "A.report.json");
+    const privateReason = "PRIVATE-CANARY diagnosis needed";
+    await writeFile(
+      report,
+      JSON.stringify({ kind: "blocked", attempt: 1, reason: privateReason }),
+    );
+    f.host.state = async () => "idle";
+    const notices: { id: string; message: string }[] = [];
+    f.host.send = async (id, message) => {
+      notices.push({ id, message });
+      if (fault === "failed-send") throw new Error("Transport unavailable");
+    };
+    if (fault === "crash-before-send") {
+      const child = spawnSync(process.execPath, [
+        "--eval",
+        `
+        import { createFactory } from ${JSON.stringify(join(import.meta.dir, "native.ts"))};
+        import { openStore } from ${JSON.stringify(join(import.meta.dir, "bookkeeping.fixture.ts"))};
+        const host = {
+          async create() { throw new Error("No replacement"); },
+          async send(id) { if (id === "T-owner") process.exit(23); },
+          async state() { return "idle"; }, watch() {},
+        };
+        await createFactory(${JSON.stringify(f.root)}, host, openStore).tick("reconcile");
+      `,
+      ]);
+      expect(child.status).toBe(23);
+    } else {
+      const db = new Database(join(directory, "state.sqlite"));
+      if (fault === "append-before-ack")
+        db.run(`
+        CREATE TRIGGER fail_ack BEFORE INSERT ON events WHEN NEW.action = 'notice-sent'
+        BEGIN SELECT RAISE(ABORT, 'ack lost'); END
+      `);
+      await f.factory().tick("reconcile");
+      if (fault === "append-before-ack") db.run("DROP TRIGGER fail_ack");
+      db.close();
+      expect(notices).toHaveLength(1);
+    }
+    const pending = (await f.factory().tick("status")).runs.A!;
+    expect(pending).toMatchObject({
+      kind: "blocked",
+      incident: {
+        ticket: "A",
+        owner: "T-owner",
+        attempt: 1,
+        base: f.git("rev-parse", "HEAD"),
+        reason: "worker-blocked",
+        recovery: "resume",
+        delivery: "queued",
+      },
+    });
+    const bytes = await readFile(join(directory, "state.sqlite"));
+    const count = notices.length;
+    const server = startDashboard({ root: f.root, port: 0 });
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${server.port}/api/status`,
+      );
+      expect(response.status).toBe(200);
+      expect(await response.text()).not.toContain(privateReason);
+    } finally {
+      await server.stop();
+    }
+    await f.factory().tick("status");
+    expect(await readFile(join(directory, "state.sqlite"))).toEqual(bytes);
+    expect(notices).toHaveLength(count);
+    f.host.send = async (id, message) => {
+      notices.push({ id, message });
+    };
+    await f.factory().tick("pause");
+    await f.factory().tick("reconcile");
+    expect(notices).toHaveLength(count + 1);
+    expect(notices.at(-1)).toEqual({
+      id: "T-owner",
+      message: expect.stringContaining(pending.incident!.id),
+    });
+    expect(JSON.stringify(notices)).not.toContain(privateReason);
+    const request = {
+      ticket: "A",
+      decision: "Baseline restored",
+      incident: pending.incident!.id,
+    };
+    await f.factory().tick("resume", "T-owner", f.host.state, request);
+    expect((await f.factory().tick("status")).enabled).toBe(false);
+    await f.factory().tick("start", "T-owner");
+    await writeFile(
+      report,
+      JSON.stringify({ kind: "blocked", attempt: 2, reason: "error" }),
+    );
+    const later = (await f.factory().tick("reconcile")).runs.A!;
+    expect(later.incident!.id).not.toBe(request.incident);
+    expect(later.incident!.attempt).toBe(2);
+    expect(later.incident!.reason).toBe("worker-blocked");
+    expect(
+      f.factory().tick("resume", "T-owner", f.host.state, request),
+    ).rejects.toThrow(/exact current/);
+    expect((await f.factory().tick("status")).runs.A).toEqual(later);
+    const storage = openPersistence(directory, []);
+    storage.state.owner = "T-new-owner";
+    storage.commit(storage.state, "factory", "owner-replaced", "fixture");
+    storage.close();
+    await f.factory().tick("reconcile");
+    const reassigned = (await f.factory().tick("status")).runs.A!;
+    expect(reassigned.incident!.owner).toBe("T-new-owner");
+    expect(reassigned.incident!.id).not.toBe(later.incident!.id);
+    expect(notices.at(-1)).toEqual({
+      id: "T-new-owner",
+      message: expect.stringContaining(reassigned.incident!.id),
+    });
+    expect(
+      f.factory().tick("resume", "T-new-owner", f.host.state, {
+        ...request,
+        incident: later.incident!.id,
+      }),
+    ).rejects.toThrow(/exact current/);
+    const engine = f.factory();
+    const results = await Promise.allSettled([
+      engine.tick("resume", "T-new-owner", f.host.state, {
+        ...request,
+        incident: reassigned.incident!.id,
+      }),
+      engine.tick("resume", "T-new-owner", f.host.state, {
+        ...request,
+        incident: reassigned.incident!.id,
+      }),
+    ]);
+    expect(results.map(({ status }) => status)).toEqual([
+      "fulfilled",
+      "rejected",
+    ]);
+    expect((await f.factory().tick("status")).runs.A).toMatchObject({
+      kind: "running",
+      thread: "T-prepared",
+      attempt: 3,
+    });
+    expect(f.counts().creates).toBe(1);
+  },
+);
 
 test.each([false, true])(
   "owner resumes a preflight blocker in the original worker (legacy=%s)",
@@ -185,7 +382,12 @@ test.each([false, true])(
       );
       db.close();
     }
-    const request = { ticket: "A", decision: "Baseline restored; continue" };
+    const incident = (await f.factory().tick("reconcile")).runs.A!.incident!.id;
+    const request = {
+      ticket: "A",
+      decision: "Baseline restored; continue",
+      incident,
+    };
     expect(
       f.factory().tick("resume", "T-prepared", f.host.state, request),
     ).rejects.toThrow(/Workers/);
@@ -1057,7 +1259,8 @@ test("unknown remote creation or delivery never starts replacement or independen
           if (failure === "create") throw new Error("lost creation response");
           return "T-unknown";
         },
-        async send() {
+        async send(id) {
+          if (id === "T-owner") return;
           sends++;
           throw new Error("lost delivery response");
         },
@@ -1138,6 +1341,7 @@ test.each(["high", undefined])(
       git("add", ".");
       git("commit", "-qm", "fixture baseline");
       const messages: { id: string; text: string }[] = [];
+      const notices: { id: string; text: string }[] = [];
       const settings: Parameters<NativeHost["create"]>[] = [];
       let created = 0;
       const host: NativeHost = {
@@ -1147,7 +1351,7 @@ test.each(["high", undefined])(
           return `T-fixture-${created}`;
         },
         async send(id, text) {
-          messages.push({ id, text });
+          (id === "T-owner" ? notices : messages).push({ id, text });
         },
         async state() {
           return "idle";
@@ -1207,12 +1411,16 @@ test.each(["high", undefined])(
       expect(await readFile(join(root, "src/value"), "utf8")).toBe("old");
       await candidate("still bad", 2);
       await factory.tick("reconcile");
+      expect(notices).toEqual([
+        { id: "T-owner", text: expect.stringContaining("A") },
+      ]);
       await factory.tick("pause");
       factory = createFactory(root, host, openStore);
       expect((await factory.tick("status")).runs.A?.kind).toBe("blocked");
       const repair = {
         ticket: "A",
         decision: "Correct the value contract, retaining this worker",
+        incident: (await factory.tick("status")).runs.A!.incident!.id,
       };
       expect(
         factory.tick("resume", "T-fixture-1", host.state, repair),

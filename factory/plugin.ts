@@ -42,9 +42,19 @@ function record(value: unknown): Record<string, unknown> | undefined {
 
 function repairRequest(input: Record<string, unknown>) {
   if (input.action !== "resume") return undefined;
-  if (typeof input.ticket !== "string" || typeof input.decision !== "string")
-    throw new Error("Resume requires ticket and decision");
-  return { ticket: input.ticket, decision: input.decision };
+  if (
+    typeof input.ticket !== "string" ||
+    typeof input.decision !== "string" ||
+    typeof input.incident !== "string"
+  )
+    throw new Error(
+      "Resume requires ticket and decision with the current incident",
+    );
+  return {
+    ticket: input.ticket,
+    decision: input.decision,
+    incident: input.incident,
+  };
 }
 
 function reportedActivity(value: unknown, id: string) {
@@ -265,7 +275,7 @@ export default function registerFactory(
   const suffix = createHash("sha256").update(root).digest("hex").slice(0, 8);
   amp.registerTool({
     name: `factory_control_${suffix}`,
-    description: `Control the factory in ${root}. status is read-only. reload validates the authored definition for future runs without executing commands or changing active pins. message-foreman delivers message text from a registered worker or reviewer to the owning Foreman without granting control; delivery errors have unknown outcomes, so do not retry blindly. start requires explicit user authorization and permissions.execute=true in the project definition. pause stops dispatch. reconcile observes persisted work without granting permissions. retry-setup explicitly reruns parked preparation in the same worktree before creating a worker. resume requires the owning Foreman, a blocked ticket, and a decision explaining the next repair; it queues the same worker without starting a paused factory or accepting code. backup publishes private SQLite state and requires explicit user authorization and permissions.backup=true.`,
+    description: `Control the factory in ${root}. status is read-only and does not deliver notices. reload validates the authored definition for future runs without executing commands or changing active pins. message-foreman delivers message text from a registered worker or reviewer to the owning Foreman without granting control; delivery errors have unknown outcomes, so do not retry blindly. start requires explicit user authorization and permissions.execute=true in the project definition. pause stops dispatch. reconcile observes persisted work and retries queued stop notices without granting permissions. retry-setup explicitly reruns parked preparation in the same worktree before creating a worker. resume requires the owning Foreman, a blocked ticket, its exact current incident ID from status, and a decision explaining the next repair; it queues the same worker without starting a paused factory or accepting code. Duplicate or stale notices never authorize another checkpoint. backup publishes private SQLite state and requires explicit user authorization and permissions.backup=true.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -275,6 +285,7 @@ export default function registerFactory(
         },
         ticket: { type: "string" },
         decision: { type: "string" },
+        incident: { type: "string", minLength: 1 },
         message: { type: "string", minLength: 1 },
       },
       required: ["action"],
@@ -296,7 +307,7 @@ export default function registerFactory(
         (id) => observe(id, ctx.tools),
         repairRequest(input),
       );
-      if (action !== "reload") await publish(ctx.tools);
+      if (action !== "reload" && action !== "status") await publish(ctx.tools);
       return JSON.stringify(state);
     },
   });

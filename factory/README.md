@@ -52,16 +52,31 @@ files. Removing a ticket from the manifest does not discard its claimed worker o
 Ambiguous creation and delivery stay parked instead of creating replacement workers.
 
 Every two failed verification or review attempts escalate to the Foreman. The blocked record retains
-the original worker and repair checkpoint. The owning Foreman can call `resume` with `ticket` and a
-nonempty `decision` after inspecting the evidence. This queues the same worker at the next attempt;
-it does not accept code or start a paused factory. Use `start` separately when paused. Resumption
-requires an idle worker, its registered clean worktree, and an unchanged integration base. Old
-two-attempt review blocks can recover from matching durable review events and the candidate report.
-Missing recovery evidence fails closed. Subsequent candidates still require the normal gates.
+the original worker and repair checkpoint. The owning Foreman can call `resume` with `ticket`, the
+current `incident` ID, and a nonempty `decision` after inspecting the evidence. This queues the same
+worker at the next attempt. It does not accept code or start a paused factory. Use `start`
+separately when paused. Resumption requires an idle worker, its registered clean worktree, and an
+unchanged integration base. Old two-attempt review blocks can recover from matching durable review
+events and the candidate report. Missing recovery evidence fails closed. Subsequent candidates still
+require the normal gates.
+
+Actionable stops persist an `incident` in the run, in the same SQLite transaction as the stop event.
+Its ID binds the ticket, attempt, base, and owner to a curated reason and recovery action.
+Preparation uses `retry-setup`; ambiguous creation or delivery and changed integration or review
+identity require inspection. Only a saved worker checkpoint supports `resume`. Permission blockers
+grant no authority.
+Serialized reconciliation sends queued notices to the owning Foreman through `host.send`, including
+after adapter restart and while execution is paused. Failed or ambiguous sends remain queued for the
+next reconciliation. A successful append with a lost acknowledgment can produce duplicate notices.
+Successful delivery is recorded durably and does not repeat normally. Owner replacement readdresses
+the notice with a new ID. A stale ID cannot resume a later checkpoint or a different owner's stop.
+Status and HTTP reads neither drain notices nor change incident state. Notices contain no private
+worker reasons, instructions, paths, or review findings; diagnosis uses the private saved evidence.
+This mechanism does not detect timed stalls, schedule wake-ups, or alert the user.
 
 Coordinator status reads existing SQLite or validated legacy state without creating runtime files,
 initializing the lock store, or migrating. The plugin separately refreshes dashboard observations,
-including during status calls. Malformed legacy records, corrupt databases, and unsupported schema
+independently of status calls. Malformed legacy records, corrupt databases, and unsupported schema
 versions fail visibly before dispatch. Initialization does not grant execution permission.
 
 ## Back up private coordinator state
