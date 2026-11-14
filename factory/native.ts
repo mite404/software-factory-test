@@ -1,4 +1,4 @@
-import type { AgentReasoningEffort } from "@ampcode/plugin";
+import type { AgentReasoningEffort, PluginTools } from "@ampcode/plugin";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, existsSync } from "node:fs";
@@ -12,6 +12,11 @@ import {
 } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import definitionSchema from "./definition.schema.json";
+import {
+  deliverAlerts,
+  reconcileSchedule,
+  WatchdogUnavailable,
+} from "./watchdog";
 import {
   reviewPrompt,
   reviewVerdict,
@@ -766,10 +771,29 @@ export function assertControlCaller(state: State, owner?: ThreadID) {
     throw new Error("Workers cannot control the factory");
 }
 
+function assertWatchdogCaller(
+  state: State,
+  action: string,
+  owner?: ThreadID,
+  tools?: PluginTools,
+) {
+  if (!tools) return;
+  const expected =
+    state.owner ??
+    (action === "start"
+      ? owner
+      : action === "pause"
+        ? state.monitor?.pendingThread
+        : undefined);
+  if (action === "status" || !owner || owner !== expected)
+    throw new Error("Watchdog effects require the connected owning Foreman");
+}
+
 function controlState(
   state: State,
   action: string,
   execute: boolean,
+  savePause: () => void,
   owner?: ThreadID,
 ) {
   assertControlCaller(state, owner);
@@ -778,11 +802,15 @@ function controlState(
       throw new Error(
         "Grant permissions.execute in the project definition before starting",
       );
-    state.owner ??= owner;
-    if (!state.owner) throw new Error("Starting requires an owner thread");
+    if (!state.owner && !owner)
+      throw new Error("Starting requires an owner thread");
     state.enabled = true;
   }
-  if (action === "pause") state.enabled = false;
+  if (action === "pause") {
+    state.enabled = false;
+    // Local stop must survive failed inspection, changed roots and remote clear failures.
+    savePause();
+  }
 }
 
 function restoreTickets(queue: Task[], persisted: Task[], state: State) {
@@ -903,6 +931,7 @@ export function createFactory(
     owner?: ThreadID,
     observe: NativeHost["state"] = host.state,
     repairRequest?: { ticket: string; decision: string; incident: string },
+    tools?: PluginTools,
   ) {
     await mkdir(directory, { recursive: true });
     const store = openStore(join(directory, "bookkeeping"));
@@ -915,6 +944,7 @@ export function createFactory(
       const queue = tasks(JSON.parse(await readFile(config.tickets, "utf8")));
       persistence = openPersistence(directory, queue, now);
       const state = persistence.state;
+      assertWatchdogCaller(state, action, owner, tools);
       restoreTickets(queue, persistence.tickets, state);
       let savedRuns = structuredClone(state.runs);
       function incident(
@@ -967,6 +997,13 @@ export function createFactory(
         }
         savedRuns = structuredClone(state.runs);
       }
+      controlState(
+        state,
+        action,
+        config.execute,
+        () => commit("factory", "paused", state.owner ?? ""),
+        owner,
+      );
       function parkedIncidents() {
         for (const [ticket, run] of Object.entries(state.runs)) {
           if (run.incident) continue;
@@ -987,7 +1024,20 @@ export function createFactory(
       }
       flushNotices = async () => {
         parkedIncidents();
+        await installMonitoring();
         await reconcileWatchdog();
+        await deliverAlerts(
+          state,
+          tools,
+          now,
+          () =>
+            commit(
+              "factory",
+              "watchdog-delivery",
+              "Reserved or acknowledged alert",
+            ),
+          config.execute,
+        );
         for (const [ticket, run] of Object.entries(state.runs)) {
           const notice = run.incident;
           if (!notice || !state.owner) continue;
@@ -1052,7 +1102,7 @@ export function createFactory(
             (alert) =>
               alert.kind === "unresolved" && alert.episode === timing.episode,
           )
-        )
+        ) {
           timing.alerts.push({
             id: randomUUID(),
             kind: "unresolved",
@@ -1060,13 +1110,16 @@ export function createFactory(
             attempt: timing.attempt,
             intendedAt: at,
           });
+          commit(ticket, "watchdog-alert-intended", timing.episode);
+        }
+        if (!tools) return;
         // Reserve before sending. An ambiguous delivery must not cause repeated nudges.
         timing.nudgedAt = at;
         commit(ticket, "watchdog-nudge-intended", timing.episode);
         try {
           await host.send(
             state.owner!,
-            `Factory suspicion ${timing.episode}. Ticket ${ticket}, attempt ${timing.attempt}. No lifecycle progress for the suspicion interval. Diagnose current status and private evidence. Running or unknown activity retains its worker; this nudge does not authorize a duplicate or replacement worker, resume, or permission changes. User-alert intent is durable, not delivered.`,
+            `Factory suspicion ${timing.episode}. Ticket ${ticket}, attempt ${timing.attempt}. No lifecycle progress for the suspicion interval. Diagnose current status and private evidence. Running or unknown activity retains its worker; this nudge does not authorize a duplicate or replacement worker, resume, or permission changes. User-alert delivery is reconciled from durable intent through the connected owner only.`,
           );
           persistence!.event(ticket, "watchdog-nudge-sent", timing.episode);
         } catch (error) {
@@ -1077,8 +1130,47 @@ export function createFactory(
           );
         }
       }
+      async function installMonitoring(startAdmission = false) {
+        try {
+          await reconcileSchedule(
+            root,
+            directory,
+            state,
+            queue,
+            tools,
+            () => {
+              // The confirmed receipt and first owner claim land in the same SQLite commit.
+              if (startAdmission && state.monitor!.schedule === "installed")
+                state.owner ??= owner;
+              commit("factory", "watchdog-schedule", state.monitor!.schedule);
+            },
+            config.execute,
+            owner,
+          );
+          if (startAdmission) state.owner ??= owner;
+        } catch (error) {
+          if (!(error instanceof WatchdogUnavailable)) {
+            flushNotices = async () => {};
+            throw error;
+          }
+          state.monitor!.problem = error.message;
+          if (startAdmission) {
+            state.enabled = false;
+            commit(
+              "factory",
+              "watchdog-installation-failed",
+              "Execution not monitored or started",
+            );
+            flushNotices = async () => {};
+            throw error;
+          }
+          commit("factory", "watchdog-unconfirmed", error.message);
+          // Withhold watchdog effects, not incident recovery or queued stop notices.
+          tools = undefined;
+        }
+      }
       stateCache = state;
-      controlState(state, action, config.execute, owner);
+      await installMonitoring(action === "start");
       async function adoptLegacyCheckpoints() {
         for (const task of queue) {
           const run = state.runs[task.id];
@@ -1249,8 +1341,7 @@ export function createFactory(
       }
       if (action === "resume") await resumeRepair();
       if (action === "start") commit("factory", "started", state.owner!);
-      if (action === "pause") commit("factory", "paused", state.owner ?? "");
-      if (!state.enabled || !config.execute) return state;
+      if (!state.enabled || !config.execute || !state.owner) return state;
       const wake = () => {
         void tick("reconcile").catch((error) =>
           event("factory", "error", String(error)),
@@ -1813,10 +1904,14 @@ export function createFactory(
     owner?: ThreadID,
     observe: NativeHost["state"] = host.state,
     repairRequest?: Parameters<typeof reconcile>[3],
+    tools?: PluginTools,
   ): Promise<State> {
     const result = pending
       .catch(() => {})
       .then(async () => {
+        const initial = factoryStatus(directory);
+        if (action !== "status") assertControlCaller(initial, owner);
+        assertWatchdogCaller(initial, action, owner, tools);
         if (action === "reload") {
           assertControlCaller(factoryStatus(directory), owner);
           await configuration(root);
@@ -1827,8 +1922,39 @@ export function createFactory(
             assertControlCaller(factoryStatus(directory), owner);
             const persistence = openPersistence(directory, [], now);
             try {
+              assertWatchdogCaller(persistence.state, action, owner, tools);
               persistence.definition(definitionPin(next), true);
               persistence.event("factory", "reloaded", next.digest);
+              if (tools) {
+                const queue = tasks(
+                  JSON.parse(await readFile(next.tickets, "utf8")),
+                );
+                restoreTickets(queue, persistence.tickets, persistence.state);
+                await reconcileSchedule(
+                  root,
+                  directory,
+                  persistence.state,
+                  queue,
+                  tools,
+                  () =>
+                    persistence.commit(
+                      persistence.state,
+                      "factory",
+                      "watchdog-schedule",
+                      persistence.state.monitor!.schedule,
+                    ),
+                  next.execute,
+                ).catch((error: unknown) => {
+                  if (!(error instanceof WatchdogUnavailable)) throw error;
+                  persistence.state.monitor!.problem = error.message;
+                  persistence.commit(
+                    persistence.state,
+                    "factory",
+                    "watchdog-unconfirmed",
+                    error.message,
+                  );
+                });
+              }
               return persistence.state;
             } finally {
               persistence.close();
@@ -1841,11 +1967,9 @@ export function createFactory(
           await configuration(root);
           return factoryStatus(directory);
         }
-        const initial = factoryStatus(directory);
-        assertControlCaller(initial, owner);
         await configuration(root);
         if (!retryAdmission(initial, action)) return initial;
-        return reconcile(action, owner, observe, repairRequest);
+        return reconcile(action, owner, observe, repairRequest, tools);
       });
     pending = result;
     return result;

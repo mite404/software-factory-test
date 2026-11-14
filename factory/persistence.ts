@@ -116,6 +116,20 @@ export type State = {
   enabled: boolean;
   owner?: ThreadID;
   runs: Record<string, Run>;
+  /** Last inspected registration and reserved notification effects; not a platform health guarantee. */
+  monitor?: {
+    fingerprint: string;
+    schedule: "checking" | "installed" | "cleared" | "unknown" | "conflict";
+    /** Thread to inspect before retrying an uncertain schedule effect or claiming an owner. */
+    pendingThread?: ThreadID;
+    /** Last registration failure; owner control remains available without watchdog effects. */
+    problem?: string;
+    notifications: {
+      id: string;
+      at: number;
+      outcome: "sending" | "sent" | "unknown";
+    }[];
+  };
 };
 type Event = { at: string; ticket: string; action: string; detail: string };
 
@@ -342,6 +356,31 @@ function validateRun(id: string, value: unknown) {
     throw new Error(`Invalid factory run ${id}`);
 }
 
+function validateMonitor(value: unknown) {
+  if (value !== undefined) {
+    const monitor = record(value);
+    if (
+      !text(monitor.fingerprint) ||
+      !["pendingThread", "problem"].every(
+        (key) => monitor[key] === undefined || text(monitor[key]),
+      ) ||
+      !["checking", "installed", "cleared", "unknown", "conflict"].includes(
+        String(monitor.schedule),
+      ) ||
+      !Array.isArray(monitor.notifications) ||
+      !monitor.notifications.every((value: unknown) => {
+        const notification = record(value);
+        return (
+          text(notification.id) &&
+          timestamp(notification.at) &&
+          ["sending", "sent", "unknown"].includes(String(notification.outcome))
+        );
+      })
+    )
+      throw new Error("Invalid factory monitor");
+  }
+}
+
 function stateRecord(value: unknown): State {
   const state = record(value);
   if (
@@ -349,6 +388,7 @@ function stateRecord(value: unknown): State {
     (state.owner !== undefined && !thread(state.owner))
   )
     throw new Error("Invalid factory state");
+  validateMonitor(state.monitor);
   for (const [id, value] of Object.entries(record(state.runs)))
     validateRun(id, value);
   return value as State;
@@ -421,10 +461,21 @@ function readState(db: Database): State {
       .all()
       .map((row) => [row.ticket, JSON.parse(row.data)]),
   );
+  const hasMonitor = db
+    .query(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'monitor'",
+    )
+    .get();
+  const monitor = hasMonitor
+    ? db
+        .query<{ data: string }, []>("SELECT data FROM monitor WHERE id = 1")
+        .get()
+    : null;
   return stateRecord({
     enabled: coordinator.enabled === 1,
     ...(coordinator.owner === null ? {} : { owner: coordinator.owner }),
     runs,
+    ...(monitor ? { monitor: JSON.parse(monitor.data) } : {}),
   });
 }
 
@@ -436,6 +487,14 @@ function saveState(db: Database, state: State) {
   const insert = db.query("INSERT INTO runs (ticket, data) VALUES (?, ?)");
   for (const [id, run] of Object.entries(state.runs))
     insert.run(id, JSON.stringify(run));
+  if (state.monitor) {
+    db.run(
+      "CREATE TABLE IF NOT EXISTS monitor (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL)",
+    );
+    db.query("INSERT OR REPLACE INTO monitor (id, data) VALUES (1, ?)").run(
+      JSON.stringify(state.monitor),
+    );
+  }
 }
 
 function saveEvent(db: Database, event: Event) {

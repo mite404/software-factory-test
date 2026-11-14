@@ -262,6 +262,7 @@ process.exit(code);
     ) => Promise<unknown>;
     registerFactory(
       {
+        on() {},
         registerTool(tool: { execute: typeof execute }) {
           execute = tool.execute;
         },
@@ -373,7 +374,7 @@ const spawn = Bun.spawn.bind(Bun);
 Bun.spawn = (args, options) => spawn(args, {...options, env: options?.env ?? process.env});
 const {default: register} = await import(${JSON.stringify(pluginPath)});
 let execute, dispose;
-register({registerTool(tool) {execute=tool.execute;}, onDispose(fn) {dispose=fn;}, logger:{log(){}}});
+register({on() {}, registerTool(tool) {execute=tool.execute;}, onDispose(fn) {dispose=fn;}, logger:{log(){}}});
 let heartbeats=0;
 const timer=setInterval(()=>heartbeats++,5);
 try {

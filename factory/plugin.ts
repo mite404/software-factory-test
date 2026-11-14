@@ -1,10 +1,14 @@
-import type { PluginAPI, PluginTools } from "@ampcode/plugin";
+import type {
+  PluginAPI,
+  PluginTools,
+  PluginToolContext,
+} from "@ampcode/plugin";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { backup } from "./backup";
 import type { DashboardSnapshot } from "./dashboard";
-import { factoryStatus, type Run } from "./persistence";
+import { factoryStatus, type Run, type State } from "./persistence";
 import {
   assertControlCaller,
   effectiveConfiguration,
@@ -38,6 +42,21 @@ function activity(value: unknown): Awaited<ReturnType<NativeHost["state"]>> {
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" ? { ...value } : undefined;
+}
+
+function connectedTools(action: string, saved: State, ctx: PluginToolContext) {
+  if (action === "status") return undefined;
+  assertControlCaller(saved, ctx.thread.id);
+  if (action === "start" && !ctx.tools)
+    throw new Error(
+      "Connected owner tools are required to install the watchdog",
+    );
+  // Native authorization checks start before any watchdog effect.
+  if (action === "start") return ctx.tools;
+  if (saved.owner === ctx.thread.id) return ctx.tools;
+  return action === "pause" && saved.monitor?.pendingThread === ctx.thread.id
+    ? ctx.tools
+    : undefined;
 }
 
 function repairRequest(input: Record<string, unknown>) {
@@ -275,7 +294,7 @@ export default function registerFactory(
   const suffix = createHash("sha256").update(root).digest("hex").slice(0, 8);
   amp.registerTool({
     name: `factory_control_${suffix}`,
-    description: `Control the factory in ${root}. status is read-only and does not deliver notices. reload validates the authored definition for future runs without executing commands or changing active pins. message-foreman delivers message text from a registered worker or reviewer to the owning Foreman without granting control; delivery errors have unknown outcomes, so do not retry blindly. start requires explicit user authorization and permissions.execute=true in the project definition. pause stops dispatch. reconcile observes persisted work and retries queued stop notices without granting permissions. retry-setup explicitly reruns parked preparation in the same worktree before creating a worker. resume requires the owning Foreman, a blocked ticket, its exact current incident ID from status, and a decision explaining the next repair; it queues the same worker without starting a paused factory or accepting code. Duplicate or stale notices never authorize another checkpoint. backup publishes private SQLite state and requires explicit user authorization and permissions.backup=true.`,
+    description: `Control the factory in ${root}. status is read-only and does not deliver notices or register schedules. reload validates the authored definition for future runs without executing commands or changing active pins; a connected owner also recovers its watchdog registration. message-foreman delivers message text from a registered worker or reviewer to the owning Foreman without granting control; delivery errors have unknown outcomes, so do not retry blindly. start requires explicit user authorization, permissions.execute=true and connected owner tools; it confirms its owned watchdog before dispatch and refuses unrelated schedules or second roots. pause persists a local stop before any remote check, including from non-owner non-worker threads; only the owner's connected turn clears its watchdog. reconcile observes persisted work, recovers its watchdog and delivers durable alerts only in the connected owner context, without granting permissions. Unknown alert sends are held, not retried. retry-setup explicitly reruns parked preparation in the same worktree before creating a worker. resume requires the owning Foreman, a blocked ticket, its exact current incident ID from status, and a decision explaining the next repair; it queues the same worker without starting a paused factory or accepting code. Duplicate or stale notices never authorize another checkpoint. backup publishes private SQLite state and requires explicit user authorization and permissions.backup=true.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -301,23 +320,68 @@ export default function registerFactory(
       }
       const action = controlActions.find((action) => action === requested);
       if (!action) throw new Error("Unknown action");
+      const tools = connectedTools(
+        action,
+        factoryStatus(factory.directory),
+        ctx,
+      );
       const state = await factory.tick(
         action,
         ctx.thread.id,
         (id) => observe(id, ctx.tools),
         repairRequest(input),
+        tools,
       );
       if (action !== "reload" && action !== "status") await publish(ctx.tools);
       return JSON.stringify(state);
     },
+  });
+  amp.on("agent.start", async (event, ctx) => {
+    const state = factoryStatus(factory.directory);
+    if (!state.owner || state.owner !== event.thread.id) return {};
+    try {
+      const reconciled = await factory.tick(
+        "reconcile",
+        event.thread.id,
+        (id) => observe(id, ctx.tools),
+        undefined,
+        ctx.tools,
+      );
+      if (reconciled.monitor?.problem)
+        return {
+          message: {
+            content: `Factory watchdog recovery failed. Monitored execution is not confirmed. Owner reconciliation continued. ${reconciled.monitor.problem}`,
+            display: true,
+          },
+        };
+      return {};
+    } catch (error) {
+      const confirmed =
+        factoryStatus(factory.directory).monitor?.schedule === "installed";
+      return {
+        message: {
+          content: `${confirmed ? "Factory reconciliation failed." : "Factory watchdog recovery failed. Monitored execution is not confirmed."} ${String(error)}`,
+          display: true,
+        },
+      };
+    }
   });
   amp.onDispose(() => {
     stopped = true;
     clearInterval(heartbeat);
     for (const subscription of subscriptions) subscription.unsubscribe();
   });
-  // Reload reattaches observers, but a fresh installation has no enabled state to run.
+  // Automatic plugin-load recovery waits for confirmed monitoring; explicit reconciles still run.
   void factory
-    .tick("reconcile")
+    .tick("status")
+    .then((state) => {
+      if (state.enabled && state.monitor?.schedule !== "installed") {
+        amp.logger.log(
+          "factory recovery pending connected owner watchdog inspection",
+        );
+        return;
+      }
+      return factory.tick("reconcile");
+    })
     .catch((error) => amp.logger.log("factory recovery failed", String(error)));
 }
