@@ -471,7 +471,14 @@ test.each(["queued", "sending", "sent"] as const)(
           base: "abc",
         },
       });
-    } else expect(result.runs.A).toEqual({ ...run, delivery: "sent" });
+    } else {
+      expect(result.runs.A).toMatchObject({
+        ...run,
+        delivery: "sent",
+        watchdog: { attempt: 2, alerts: [] },
+      });
+      expect(result.runs.A!.incident).toBeUndefined();
+    }
     expect((await f.factory().tick("reconcile")).runs.A).toEqual(result.runs.A);
     expect(f.calls()).toBe(delivery === "sent" ? 0 : 1);
   },

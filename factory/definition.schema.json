@@ -23,6 +23,31 @@
     },
     "orchestratorModel": { "type": "string", "pattern": "^[^/]+/.+$" },
     "review": { "type": "boolean" },
+    "watchdog": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["suspicionMs", "spendingFirstAttempt", "spendingInterval"],
+      "properties": {
+        "suspicionMs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "default": 1800000
+        },
+        "spendingFirstAttempt": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "default": 6
+        },
+        "spendingInterval": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "default": 4
+        }
+      }
+    },
     "prd": { "type": "string", "minLength": 1 },
     "tickets": { "type": "string", "minLength": 1 },
     "scope": {

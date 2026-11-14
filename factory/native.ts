@@ -23,18 +23,84 @@ import {
   factoryDefinition,
   openPersistence,
   taskSteps,
+  defaultWatchdog,
+  validWatchdogPolicy,
   type ThreadID,
   type Task,
   type Run,
   type DefinitionPin,
   type StopIncident,
   type State,
+  type Watchdog,
+  type WatchdogPolicy,
 } from "./persistence";
 
 const activityReasons = {
   error: "worker-error",
   "awaiting-approval": "approval-required",
 } as const;
+
+const progressActions = new Set([
+  "preparing",
+  "setup-finished",
+  "creating",
+  "created",
+  "sent",
+  "rejected",
+  "repair-resumed",
+  "review-sent",
+  "review-verdict",
+  "review-recovered",
+  "accepted",
+  "blocked",
+  "escalated",
+  "review-stopped",
+  "preparation-failed",
+  "uncertain",
+  "stop-recorded",
+]);
+
+function watchdogPolicy(value: unknown): WatchdogPolicy {
+  if (value === undefined) return defaultWatchdog;
+  if (!validWatchdogPolicy(value))
+    throw new Error("Invalid watchdog policy; expected positive safe integers");
+  return value;
+}
+
+function watchdogProgress(
+  run: Run,
+  previous: Watchdog | undefined,
+  action: string,
+  at: number,
+): Watchdog {
+  const timing = run.watchdog ?? previous;
+  if (timing && !progressActions.has(action)) return timing;
+  const prior = previous ?? timing ?? { attempt: 0, alerts: [] };
+  const source = checkpointIdentity(run) ?? prior;
+  return {
+    episode: run.incident ? run.incident.id : randomUUID(),
+    progressAt: at,
+    attempt: source.attempt,
+    alerts: prior.alerts,
+  };
+}
+
+function watchdogDue(timing: Watchdog, policy: WatchdogPolicy, at: number) {
+  return {
+    spending:
+      timing.attempt >= policy.spendingFirstAttempt &&
+      (timing.attempt - policy.spendingFirstAttempt) %
+        policy.spendingInterval ===
+        0 &&
+      !timing.alerts.some(
+        (alert) =>
+          alert.kind === "spending" && alert.attempt === timing.attempt,
+      ),
+    nudge:
+      at - timing.progressAt >= policy.suspicionMs &&
+      at - (timing.nudgedAt ?? timing.progressAt) >= policy.suspicionMs,
+  };
+}
 
 /** The existing poteto store supplies the cross-process lock and revision ledger. */
 export type Bookkeeping = {
@@ -264,6 +330,7 @@ async function validateConfiguration(
   const scope = allowedScope(root, raw.scope);
   const verify = text(raw.verify);
   const setup = parseSetup(raw.setup, raw.setupTimeoutMs);
+  const watchdog = watchdogPolicy(raw.watchdog);
   const instructions = await readFile(prd, "utf8");
   tasks(JSON.parse(await readFile(tickets, "utf8")));
   return {
@@ -274,6 +341,7 @@ async function validateConfiguration(
     scope,
     verify,
     setup,
+    watchdog,
     instructions,
   };
 }
@@ -352,6 +420,7 @@ export async function effectiveConfiguration(root: string) {
         ...current,
         ...loaded,
         setup: loaded.setup,
+        watchdog: loaded.watchdog ?? defaultWatchdog,
         workerEffort: loaded.workerEffort,
       }
     : current;
@@ -370,6 +439,7 @@ function definitionPin(
     instructions,
     tickets,
     setup,
+    watchdog,
   } = config;
   return {
     digest,
@@ -381,6 +451,7 @@ function definitionPin(
     instructions,
     tickets,
     setup,
+    watchdog,
   };
 }
 
@@ -791,6 +862,7 @@ export function createFactory(
   root: string,
   host: NativeHost,
   openStore: (directory: string) => Bookkeeping,
+  now: () => number = Date.now,
 ) {
   const directory = join(
     git(root, "rev-parse", "--absolute-git-dir"),
@@ -800,7 +872,7 @@ export function createFactory(
   let pending = Promise.resolve<unknown>(undefined);
 
   async function event(ticket: string, action: string, detail: string) {
-    const persistence = openPersistence(directory, []);
+    const persistence = openPersistence(directory, [], now);
     try {
       persistence.event(ticket, action, detail);
     } finally {
@@ -841,7 +913,7 @@ export function createFactory(
       const config = await effectiveConfiguration(root);
       assertControlCaller(factoryStatus(directory), owner);
       const queue = tasks(JSON.parse(await readFile(config.tickets, "utf8")));
-      persistence = openPersistence(directory, queue);
+      persistence = openPersistence(directory, queue, now);
       const state = persistence.state;
       restoreTickets(queue, persistence.tickets, state);
       let savedRuns = structuredClone(state.runs);
@@ -879,6 +951,13 @@ export function createFactory(
           const stop = stoppedRun(run, reason);
           if (stop) incident(ticket, run, ...stop);
         }
+        if (run)
+          run.watchdog = watchdogProgress(
+            run,
+            savedRuns[ticket]?.watchdog,
+            action,
+            now(),
+          );
         try {
           persistence!.commit(state, ticket, action, detail);
         } catch (error) {
@@ -908,6 +987,7 @@ export function createFactory(
       }
       flushNotices = async () => {
         parkedIncidents();
+        await reconcileWatchdog();
         for (const [ticket, run] of Object.entries(state.runs)) {
           const notice = run.incident;
           if (!notice || !state.owner) continue;
@@ -915,6 +995,7 @@ export function createFactory(
             notice.owner = state.owner;
             notice.id = randomUUID();
             notice.delivery = "queued";
+            delete notice.notifiedAt;
             commit(ticket, "notice-reassigned", notice.id);
           }
           if (notice.delivery !== "queued") continue;
@@ -924,6 +1005,7 @@ export function createFactory(
               `Factory stop ${notice.id}. Ticket ${ticket}, attempt ${notice.attempt}, base ${notice.base}. Reason: ${notice.reason}. Recovery: ${notice.recovery}. Read current factory status and private evidence before deciding. ${notice.recovery === "resume" ? `Only the owning Foreman may resume with ticket ${ticket}, incident ${notice.id}, and a diagnosis decision. A paused factory stays paused.` : "Inspect and resolve this stop; this notice does not authorize resume or grant permission."}`,
             );
             notice.delivery = "sent";
+            notice.notifiedAt = now();
             commit(ticket, "notice-sent", notice.id);
           } catch (error) {
             notice.delivery = "queued";
@@ -935,6 +1017,66 @@ export function createFactory(
           }
         }
       };
+      async function reconcileWatchdog() {
+        if (!state.enabled || !config.execute || !state.owner) return;
+        for (const [ticket, run] of Object.entries(state.runs)) {
+          if (run.kind === "done") continue;
+          await reconcileRunWatchdog(ticket, run);
+        }
+      }
+      async function reconcileRunWatchdog(ticket: string, run: Run) {
+        if (!run.watchdog)
+          commit(
+            ticket,
+            "watchdog-adopted",
+            "Legacy timing starts at adoption",
+          );
+        const timing = run.watchdog!;
+        const policy =
+          runDefinition(run, config, directory).watchdog ?? defaultWatchdog;
+        const at = now();
+        const due = watchdogDue(timing, policy, at);
+        if (due.spending) {
+          timing.alerts.push({
+            id: randomUUID(),
+            kind: "spending",
+            episode: timing.episode,
+            attempt: timing.attempt,
+            intendedAt: at,
+          });
+          commit(ticket, "spending-alert-intended", String(timing.attempt));
+        }
+        if (!due.nudge) return;
+        if (
+          !timing.alerts.some(
+            (alert) =>
+              alert.kind === "unresolved" && alert.episode === timing.episode,
+          )
+        )
+          timing.alerts.push({
+            id: randomUUID(),
+            kind: "unresolved",
+            episode: timing.episode,
+            attempt: timing.attempt,
+            intendedAt: at,
+          });
+        // Reserve before sending. An ambiguous delivery must not cause repeated nudges.
+        timing.nudgedAt = at;
+        commit(ticket, "watchdog-nudge-intended", timing.episode);
+        try {
+          await host.send(
+            state.owner!,
+            `Factory suspicion ${timing.episode}. Ticket ${ticket}, attempt ${timing.attempt}. No lifecycle progress for the suspicion interval. Diagnose current status and private evidence. Running or unknown activity retains its worker; this nudge does not authorize a duplicate or replacement worker, resume, or permission changes. User-alert intent is durable, not delivered.`,
+          );
+          persistence!.event(ticket, "watchdog-nudge-sent", timing.episode);
+        } catch (error) {
+          persistence!.event(
+            ticket,
+            "watchdog-nudge-delivery-unknown",
+            String(error),
+          );
+        }
+      }
       stateCache = state;
       controlState(state, action, config.execute, owner);
       async function adoptLegacyCheckpoints() {
@@ -1683,7 +1825,7 @@ export function createFactory(
             await store.init();
             const next = await configuration(root);
             assertControlCaller(factoryStatus(directory), owner);
-            const persistence = openPersistence(directory, []);
+            const persistence = openPersistence(directory, [], now);
             try {
               persistence.definition(definitionPin(next), true);
               persistence.event("factory", "reloaded", next.digest);
