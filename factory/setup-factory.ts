@@ -15,7 +15,13 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { configuration, localPath, parseWorkerEffort } from "./native";
+import {
+  configuration,
+  localPath,
+  parseSetup,
+  parseWorkerEffort,
+  reviewerModel,
+} from "./native";
 
 function discoverStore() {
   const skill = execFileSync("amp", ["skill", "info", "poteto-mode"], {
@@ -111,15 +117,26 @@ function options() {
       repo: { type: "string", default: "." },
       prd: { type: "string" },
       verify: { type: "string" },
+      setup: { type: "string" },
+      "setup-timeout-ms": { type: "string" },
       scope: { type: "string", multiple: true },
       "worker-model": { type: "string", default: "openai/gpt-6.1-sol" },
       "worker-effort": { type: "string", default: "medium" },
+      review: { type: "boolean", default: false },
       store: { type: "string" },
       check: { type: "boolean", default: false },
       refresh: { type: "boolean", default: false },
     },
   });
-  return values;
+  if (values.review) reviewerModel(values["worker-model"]);
+  const { command: setup, timeoutMs: setupTimeoutMs } =
+    parseSetup(
+      values.setup,
+      values["setup-timeout-ms"] === undefined
+        ? undefined
+        : Number(values["setup-timeout-ms"]),
+    ) ?? {};
+  return { ...values, setup, setupTimeoutMs };
 }
 
 function repository(path: string) {
@@ -174,11 +191,14 @@ async function main() {
     prd: values.prd,
     tickets: ".factory-tickets.json",
     verify: values.verify,
+    setup: values.setup,
+    setupTimeoutMs: values.setupTimeoutMs,
     scope: values.scope,
     capacity: 1,
     mode: "bug-finding",
     workerModel: values["worker-model"],
     workerEffort,
+    review: values.review,
     orchestratorModel: "openai/gpt-6.1-sol",
     permissions: {
       execute: false,

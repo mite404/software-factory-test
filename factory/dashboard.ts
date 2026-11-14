@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { factoryRecords, taskSteps, type Run } from "./persistence";
 
 export type DashboardSnapshot = {
   project: string;
@@ -11,6 +12,7 @@ export type DashboardSnapshot = {
   tasks: {
     id: string;
     title: string;
+    steps: string[];
     status: "working" | "idle" | "blocked" | "queued" | "accepted" | "unknown";
     thread: string | null;
     revision: string | null;
@@ -55,6 +57,7 @@ function parseTask(value: unknown): DashboardSnapshot["tasks"][number] {
   return {
     id: string(task.id),
     title: string(task.title),
+    steps: taskSteps(task.steps),
     status: activity(task.status),
     thread: reference(task.thread, /^T-[\w-]+$/),
     revision: reference(task.revision, /^[a-f0-9]{40}$/),
@@ -79,12 +82,131 @@ function parseSnapshot(input: unknown): DashboardSnapshot {
   };
 }
 
-function missingFile(error: unknown): boolean {
+function errorCode(error: unknown): unknown {
+  if (!error || typeof error !== "object" || !("code" in error)) return null;
+  return error.code;
+}
+
+function reviewFor(id: string, run: Run | undefined) {
+  if (!run || !("review" in run)) return null;
+  const review = run.review;
+  if (!review || review.ticket !== id) return null;
+  const matches =
+    run.kind === "done"
+      ? review.revision === run.revision
+      : review.attempt === run.attempt && review.base === run.base;
+  return matches ? review : null;
+}
+
+function durableTask(id: string, steps: string[], run: Run | undefined) {
+  const row: DashboardSnapshot["tasks"][number] = {
+    id,
+    title: id,
+    steps,
+    status: "queued",
+    thread: null,
+    revision: null,
+  };
+  if (!run) return row;
+  const statuses = {
+    preparing: "unknown",
+    "preparation-failed": "blocked",
+    creating: "unknown",
+    running: "unknown",
+    blocked: "blocked",
+    uncertain: "blocked",
+    done: "accepted",
+  } as const;
+  row.status = statuses[run.kind];
+  if ("thread" in run) row.thread = reference(run.thread ?? null, /^T-[\w-]+$/);
+  if (run.kind === "done")
+    row.revision = reference(run.revision, /^[a-f0-9]{40}$/);
+  if (run.kind === "running" && run.delivery !== "sent") row.status = "blocked";
+  return row;
+}
+
+function applyObservation(
+  row: DashboardSnapshot["tasks"][number],
+  observed: DashboardSnapshot["tasks"][number] | undefined,
+  fresh: boolean,
+) {
+  if (!observed) return;
+  if (observed.thread !== row.thread || observed.revision !== row.revision)
+    return;
+  if (
+    fresh &&
+    row.status === "unknown" &&
+    row.thread !== null &&
+    new Set(["working", "idle", "blocked"]).has(observed.status)
+  )
+    row.status = observed.status;
+}
+
+function projectTask(
+  id: string,
+  steps: string[],
+  run: Run | undefined,
+  observed: DashboardSnapshot["tasks"][number] | undefined,
+  fresh: boolean,
+) {
+  const row = durableTask(id, steps, run);
+  const review = reviewFor(id, run);
+  let gate = null;
+  let reviewEvidence = null;
+  if (review) {
+    const revision = reference(review.revision, /^[a-f0-9]{40}$/);
+    const base = reference(review.base, /^[a-f0-9]{40}$/);
+    row.title = `${id} - post-graft review (${review.delivery})`;
+    row.thread = reference(review.thread ?? null, /^T-[\w-]+$/);
+    row.revision = revision;
+    if (row.status === "unknown" && review.delivery !== "sent")
+      row.status = "blocked";
+    gate = { revision, base, stage: review.stage };
+    reviewEvidence = {
+      ...gate,
+      attempt: review.attempt,
+      pending: run?.kind !== "done",
+      thread: row.thread,
+    };
+  }
+  applyObservation(row, observed, fresh);
+  return {
+    ...row,
+    evidence: {
+      acceptance: run?.kind === "done" ? { revision: row.revision } : null,
+      gate,
+      review: reviewEvidence,
+    },
+  };
+}
+
+async function readObservation(directory: string) {
+  try {
+    const snapshot = parseSnapshot(
+      JSON.parse(
+        await readFile(join(directory, "factory/dashboard.json"), "utf8"),
+      ),
+    );
+    const age = Date.now() - Date.parse(snapshot.observedAt);
+    return {
+      snapshot,
+      observations: "available",
+      fresh: age >= -5000 && age < 20_000,
+    };
+  } catch (error) {
+    return {
+      snapshot: null,
+      observations: errorCode(error) === "ENOENT" ? "missing" : "invalid",
+      fresh: false,
+    };
+  }
+}
+
+function targetBranch(root: string) {
   return (
-    !!error &&
-    typeof error === "object" &&
-    "code" in error &&
-    error.code === "ENOENT"
+    execFileSync("git", ["-C", root, "branch", "--show-current"], {
+      encoding: "utf8",
+    }).trim() || "detached HEAD"
   );
 }
 
@@ -95,11 +217,27 @@ export function startDashboard({ root, port }: { root: string; port: number }) {
     ["-C", root, "rev-parse", "--absolute-git-dir"],
     { encoding: "utf8" },
   ).trim();
-  const html = readFileSync(join(import.meta.dir, "dashboard.html"), "utf8");
+  const web = join(root, "web/dist");
+  const index = join(web, "index.html");
+  const html = readFileSync(
+    existsSync(index) ? index : join(import.meta.dir, "dashboard.html"),
+    "utf8",
+  );
   const headers = {
     "cache-control": "no-store",
     "x-content-type-options": "nosniff",
   };
+  async function staticPage(path: string) {
+    if (path === "/" || path === "/index.html")
+      return new Response(html, {
+        headers: { ...headers, "content-type": "text/html; charset=utf-8" },
+      });
+    if (/^\/assets\/[\w-][\w.-]*$/.test(path)) {
+      const file = Bun.file(join(web, path));
+      if (await file.exists()) return new Response(file, { headers });
+    }
+    return null;
+  }
   return Bun.serve({
     hostname: "127.0.0.1",
     port,
@@ -110,38 +248,61 @@ export function startDashboard({ root, port }: { root: string; port: number }) {
           headers: { ...headers, allow: "GET" },
         });
       const path = new URL(request.url).pathname;
-      if (path === "/")
-        return new Response(html, {
-          headers: { ...headers, "content-type": "text/html; charset=utf-8" },
-        });
+      const page = await staticPage(path);
+      if (page) return page;
       if (path !== "/api/status")
         return new Response("Not found", { status: 404, headers });
+      const { snapshot, observations, fresh } =
+        await readObservation(directory);
+      const empty = {
+        project: basename(root),
+        target: "",
+        observedAt: snapshot?.observedAt ?? null,
+        observations,
+        enabled: false,
+        fresh: false,
+        tasks: [],
+      };
       try {
-        const snapshot = parseSnapshot(
-          JSON.parse(
-            await readFile(join(directory, "factory/dashboard.json"), "utf8"),
-          ),
+        empty.target = targetBranch(root);
+        const records = factoryRecords(join(directory, "factory"));
+        if (!records)
+          return Response.json({ ...empty, durable: "missing" }, { headers });
+        const { state, tickets } = records;
+        const steps = new Map(tickets.map((task) => [task.id, task.steps]));
+        const observed = new Map(
+          snapshot?.tasks.map((task) => [task.id, task]),
         );
-        const age = Date.now() - Date.parse(snapshot.observedAt);
         return Response.json(
-          { ...snapshot, fresh: age >= -5000 && age < 20_000 },
+          {
+            ...empty,
+            durable: "available",
+            enabled: state.enabled,
+            fresh,
+            tasks: [
+              ...new Set([...steps.keys(), ...Object.keys(state.runs)]),
+            ].map((id) =>
+              projectTask(
+                id,
+                steps.get(id) ?? [],
+                Object.hasOwn(state.runs, id) ? state.runs[id] : undefined,
+                observed.get(id),
+                fresh,
+              ),
+            ),
+          },
           { headers },
         );
       } catch (error) {
-        if (missingFile(error)) {
-          return Response.json(
-            {
-              project: basename(root),
-              observedAt: null,
-              enabled: false,
-              fresh: false,
-              tasks: [],
-            },
-            { headers },
-          );
-        }
+        const busy = new Set(["SQLITE_BUSY", "SQLITE_LOCKED"]).has(
+          String(errorCode(error)),
+        );
         return Response.json(
-          { error: "Status unavailable. Check the factory plugin." },
+          {
+            ...empty,
+            durable: busy ? "unavailable" : "invalid",
+            error: "Durable status unavailable.",
+          },
           { status: 503, headers },
         );
       }

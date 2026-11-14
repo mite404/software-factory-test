@@ -12,8 +12,13 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createFactory, type NativeHost } from "./native";
-import { factoryStatus, openPersistence, type State } from "./persistence";
+import { createFactory, tasks, type NativeHost } from "./native";
+import {
+  factoryRecords,
+  factoryStatus,
+  openPersistence,
+  type State,
+} from "./persistence";
 
 const roots: string[] = [];
 const queue = [{ id: "A", brief: "Repair value", after: [] }];
@@ -36,6 +41,24 @@ const parked: State = {
       thread: "T-accepted",
       revision: "def",
       insight: "Verified evidence",
+    },
+    E: {
+      kind: "preparing",
+      base: "abc",
+      worktree: "/unused-E",
+      command: "bun install --frozen-lockfile",
+      timeoutMs: 120000,
+      log: "/setup-E.log",
+      pid: 12345,
+    },
+    F: {
+      kind: "preparation-failed",
+      base: "abc",
+      worktree: "/unused-F",
+      command: "false",
+      timeoutMs: 1000,
+      log: "/setup-F.log",
+      reason: "Exit 1",
     },
   },
 };
@@ -140,6 +163,50 @@ test("status reads fresh and legacy repositories without runtime writes or locks
   expect(f.calls()).toBe(0);
 });
 
+test("durable records retain ticket identity without importing legacy or writing SQLite", async () => {
+  const f = await fixture();
+  expect(factoryRecords(f.directory)).toBeNull();
+  expect(existsSync(f.directory)).toBe(false);
+  await mkdir(f.directory);
+  await writeFile(join(f.directory, "state.json"), JSON.stringify(parked));
+  expect(factoryRecords(f.directory)).toBeNull();
+  expect(await readdir(f.directory)).toEqual(["state.json"]);
+  const storage = openPersistence(f.directory, queue);
+  storage.close();
+  const reopened = openPersistence(f.directory, []);
+  reopened.close();
+  await writeFile(join(f.directory, "state.json"), "invalid legacy");
+  const bytes = await readFile(join(f.directory, "state.sqlite"));
+  const files = await readdir(f.directory);
+  const unchanged = openPersistence(f.directory, tasks(queue));
+  unchanged.close();
+  const db = new Database(join(f.directory, "state.sqlite"), {
+    readonly: true,
+  });
+  try {
+    expect(
+      db
+        .query(
+          "SELECT count(*) AS count FROM events WHERE action = 'configured'",
+        )
+        .get(),
+    ).toEqual({ count: 1 });
+    expect(
+      db.query("SELECT id, data FROM tickets ORDER BY rowid").all(),
+    ).toEqual([{ id: "A", data: JSON.stringify(queue[0]) }]);
+  } finally {
+    db.close();
+  }
+  expect(factoryRecords(f.directory)).toEqual({
+    state: parked,
+    tickets: [{ id: "A", steps: [] }],
+  });
+  expect(await readFile(join(f.directory, "state.sqlite"))).toEqual(bytes);
+  expect(await readdir(f.directory)).toEqual(files);
+  expect(f.locks()).toBe(0);
+  expect(f.calls()).toBe(0);
+});
+
 test("migration preserves nonempty ownership and history exactly once across restarts", async () => {
   const f = await fixture();
   await mkdir(f.directory);
@@ -168,7 +235,7 @@ test("migration preserves nonempty ownership and history exactly once across res
       detail: "def",
     },
   ]);
-  expect(db.query("SELECT count(*) AS n FROM runs").get()).toEqual({ n: 4 });
+  expect(db.query("SELECT count(*) AS n FROM runs").get()).toEqual({ n: 6 });
   expect(db.query("SELECT id FROM tickets").all()).toEqual([{ id: "A" }]);
   db.close();
   await f.factory().tick("pause");
@@ -225,6 +292,14 @@ test.each([
   '{"enabled":true,"runs":{"A":null}}',
   '{"enabled":true,"runs":{"A":{"kind":"running","thread":"T-original"}}}',
   '{"enabled":true,"runs":{"A":{"kind":"unrecognized"}}}',
+  ...[
+    { ...parked.runs.E, log: "" },
+    { ...parked.runs.E, timeoutMs: 0 },
+    { ...parked.runs.E, pid: -1 },
+    { ...parked.runs.E, attempt: 1 },
+    { ...parked.runs.E, thread: "T-premature" },
+    { ...parked.runs.F, reason: "" },
+  ].map((run) => JSON.stringify({ enabled: true, runs: { A: run } })),
 ])(
   "invalid legacy state fails closed without overwriting bytes %s",
   async (bytes) => {
@@ -267,6 +342,7 @@ test.each(["corrupt", "newer", "unversioned"])(
     const bytes = await readFile(path);
     expect(f.factory().tick("start", "T-owner")).rejects.toThrow();
     expect(f.factory().tick("status")).rejects.toThrow();
+    expect(() => factoryRecords(f.directory)).toThrow();
     expect(await readFile(path)).toEqual(bytes);
     expect(f.calls()).toBe(0);
   },

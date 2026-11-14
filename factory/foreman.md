@@ -23,6 +23,10 @@ review feedback, or an answer to a question. Find its current stage and continue
    Preserve the exact source in its worktree. Do not start triage workers, review panels, nested
    workers, or another implementation ticket concurrently. Use Luna only for explicitly requested
    inexpensive workflow fixtures.
+   For intentional reconnection or fault-injection tests, begin the initial prompt with
+   `[TEST] Intentional reconnection test.` and require a `[TEST]` thread-title prefix and opening
+   status. Name the injected failure and expected recovery in that prompt. Real implementation
+   workers and real outage recovery are not tests; do not give them the test marker.
 5. Observe through native Amp events and supported structured APIs. Keep lifecycle observation
    independent of model and provider. Avoid model calls for polling or animation. Do not parse
    assistant prose to determine acceptance. If disconnected, preserve ownership and work before
@@ -33,10 +37,13 @@ review feedback, or an answer to a question. Find its current stage and continue
    Reproduce the original failure after a fix. Keep verification asynchronous so plugins remain
    responsive. Keep full logs local and report only the result and decisive evidence.
 7. On rejection, return the failure to the same worker. Keep its thread, worktree, and evidence.
-   The current factory permits one automatic correction after the initial attempt. A second
-   verification failure becomes blocked for Foreman intervention. Delivery uncertainty, executor
-   recovery, changed requirements, permission decisions, and integration conflicts also require
-   orchestration. Resolve the blocker before resuming implementation on the original worker.
+   Every two verification or review rejections require a Foreman escalation checkpoint, not a
+   terminal attempt limit. Inspect the failed reproductions and record the next repair decision
+   with `resume`, naming the ticket. Retain the original worker and increasing attempt numbers.
+   A paused factory still needs `start` after `resume`. Every candidate must pass its normal gates;
+   escalation never grants acceptance. Delivery uncertainty, executor recovery, changed
+   requirements, permission decisions, and integration conflicts require resolution before
+   continuation.
    Do not hide failures, widen scope silently, or start a replacement to make checks appear green.
 8. After acceptance, transfer the exact changes into the coordinator checkout. Verify the combined
    result, update the ticket and workflow lessons, and create an atomic local commit. State the
@@ -55,6 +62,8 @@ review feedback, or an answer to a question. Find its current stage and continue
   without explicit authorization. Archiving a thread is not code integration or safe data deletion.
 - Do not archive or delete worker worktrees on acceptance alone. Preserve accepted code and evidence
   before authorized retirement. A question about safe archiving does not authorize archiving.
+- Keep each ticket's implementation worker thread unarchived for traceability. The operator permits
+  archiving finished review agents after their verdict and evidence are preserved.
 - Prefer the existing factory operations and Bun APIs. Do not build speculative services or turn
   workflow fixtures into code-quality projects. Keep each worker's input and output small.
 - Record ETA checkpoints at scope, implementation, verification, and real blockers. Completion
