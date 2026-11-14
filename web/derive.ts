@@ -4,7 +4,7 @@ import type { DashboardSnapshot } from "../factory/dashboard";
 // evidence.review is the cold review record bound to the task's current revision; null means none
 // is recorded, which on an accepted task is not proof that review was skipped.
 export type Task = DashboardSnapshot["tasks"][number] & {
-  evidence?: { review: { pending?: boolean } | null };
+  evidence?: { review: { pending?: boolean; attempt?: number } | null };
 };
 
 // One step chip of a COMING row, placed in SVG units.
@@ -53,7 +53,7 @@ export type View = {
   }[];
   landed: boolean; // a ticket was accepted since the previous poll
   reviewed: boolean; // that ticket has a recorded cold review, so its landing detours through it
-  startRow: number; // builder row (1-4) the foreman hands a queued ticket to, 0 for none
+  startRow: number; // builder row (1-4) the foreman hands a queued or blocked ticket to, 0 for none
   outRow: number; // builder row (1-4) the landing packet leaves from, 0 for none
   backRow: number; // builder row (1-4) a blocked packet returns to, 0 for none
 };
@@ -82,6 +82,13 @@ function pad<T>(items: T[], length: number): (T | undefined)[] {
 
 function cut(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+// How many characters of steps fit on the ACTIVE line beside its label. The label starts at
+// x=39 after "ACTIVE · " at about 9.5 units a character; the steps end at x=1060 at 6 units each.
+function stepRoom(label: string): number {
+  const labelEnd = 39 + 9.5 * ("ACTIVE · ".length + label.length);
+  return Math.max(0, Math.min(100, Math.floor((1060 - 16 - labelEnd) / 6)));
 }
 
 function describe(task: Task): string {
@@ -175,7 +182,10 @@ function settle(feed: Feed): Feed {
 }
 
 function nextLabel(active: Task | undefined, total: number): string {
-  if (active) return `${active.id}, ${active.status}`.toUpperCase();
+  // The feed carries the attempt only on a review record, so it shows during cold review.
+  const attempt = active?.evidence?.review?.attempt;
+  if (active)
+    return `${active.id}, ${active.status}${attempt ? ` · attempt ${attempt}` : ""}`.toUpperCase();
   return total ? "EVERY TICKET LANDED" : "NO TICKETS";
 }
 
@@ -219,6 +229,7 @@ export function derive(prev: Feed | null, raw: Feed, now: number): View {
     ),
   );
   const landing = became("accepted");
+  const label = nextLabel(pending[0], tasks.length);
   return {
     state: !next.fresh ? "stale" : next.enabled ? "live" : "paused",
     project: next.project.toUpperCase(),
@@ -226,8 +237,8 @@ export function derive(prev: Feed | null, raw: Feed, now: number): View {
     observed: observed(next, now),
     tally: tally(next),
     head: main[0]?.revision?.slice(0, 7) ?? "nothing landed yet",
-    next: nextLabel(pending[0], tasks.length),
-    activeSteps: cut(pending[0]?.steps.join(" → ") ?? "", 100),
+    next: label,
+    activeSteps: cut(pending[0]?.steps.join(" → ") ?? "", stepRoom(label)),
     waiting: idle[0] ? `${idle[0].id} · idle` : "",
     slots: idle.length,
     builders: pad(rows, ROWS).map(cell),
@@ -249,8 +260,12 @@ export function derive(prev: Feed | null, raw: Feed, now: number): View {
       })),
     coming: pad(pending, COMING_ROWS).map(ticketRow),
     startRow: rowOf(
-      tasks.find((t) => t.status === "working" && before.get(t.id) === "queued")
-        ?.id,
+      // A blocked ticket that resumes was handed back by the foreman, same as a first brief.
+      tasks.find(
+        (t) =>
+          t.status === "working" &&
+          ["queued", "blocked"].includes(before.get(t.id) ?? ""),
+      )?.id,
     ),
     landed: !!landing,
     reviewed: !!tasks.find((t) => t.id === landing)?.evidence?.review,

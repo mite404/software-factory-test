@@ -22,7 +22,7 @@ function feed(statuses: Task["status"][], extra: Partial<Feed> = {}): Feed {
   };
 }
 
-test("only a queued ticket that starts work gets a foreman hand-off", () => {
+test("only a queued or blocked ticket that starts work gets a foreman hand-off", () => {
   const view = derive(
     feed(["idle", "queued"]),
     feed(["working", "working"]),
@@ -30,6 +30,19 @@ test("only a queued ticket that starts work gets a foreman hand-off", () => {
   );
   expect(view.startRow).toBe(2);
   expect(derive(null, feed(["working"]), NOW).startRow).toBe(0);
+  // Real sequence from backup-adoption-ticket1 at 22:43:43: the foreman resumes a blocked ticket.
+  const resumed = derive(
+    feed(["accepted", "blocked"]),
+    feed(["accepted", "working"]),
+    NOW,
+  );
+  expect(resumed.startRow).toBe(1);
+  // A review dispatch reads "blocked" in the feed but is work in progress: no hand-off after it.
+  const dispatching = feed(["accepted", "blocked"]);
+  dispatching.tasks[1]!.evidence = { review: { pending: true } };
+  expect(derive(dispatching, feed(["accepted", "working"]), NOW).startRow).toBe(
+    0,
+  );
 });
 
 test("a ticket that lands keeps its builder row for one poll, then leaves", () => {
@@ -182,7 +195,14 @@ test("a pending review is never drawn blocked, and a vanished review is a reject
   expect(view.builders[0]!.status).toBe("working");
   expect(view.tally).toBe("1 landed · 0 queued");
 
-  expect(derive(dispatching, working, NOW).backRow).toBe(1); // review gone, not landed
+  const first = derive(dispatching, working, NOW);
+  expect(first.backRow).toBe(1); // review gone, not landed
+  dispatching.tasks[1]!.evidence = { review: { pending: true, attempt: 2 } };
+  expect(derive(working, dispatching, NOW).next).toBe(
+    "T2, WORKING · ATTEMPT 2",
+  );
+  const second = derive(dispatching, feed(["accepted", "blocked"]), NOW);
+  expect(second.backRow).toBe(1);
   expect(derive(working, working, NOW).backRow).toBe(0);
   const landed = feed(["accepted", "accepted"]);
   expect(derive(dispatching, landed, NOW).backRow).toBe(0);
