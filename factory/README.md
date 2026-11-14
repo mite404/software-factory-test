@@ -7,13 +7,44 @@ stories live in [the backlog](../docs/backlog.md).
 The [Foreman prompt](foreman.md) defines the current sequential orchestration procedure. It is a
 reusable prompt, not an automatically installed agent mode or a change to worker instructions.
 
+## Project definition and reload
+
+The project owns one version-1 definition: `factory/definition.yaml`, or legacy `.factory.json`.
+Both use the settings described by `factory/definition.schema.json`; instructions remain in the
+Markdown file referenced by `prd`. Independent copies of both definition files are a conflict,
+not an override order. Checks reject unknown settings, unsupported capabilities and unsafe paths.
+
+Run `bun factory/setup-factory.ts --repo /local/project/root --migrate` to move a validated legacy
+definition explicitly. Migration preserves its bytes, ownership and mode without overwriting an
+existing destination. JSON remains valid YAML. Repeating migration is safe, including recovery
+after an interrupted move. Checks, refresh, status and ordinary reads never migrate definitions.
+Use `--check` to validate authored settings and `--effective` to inspect the secret-free loaded
+digest, permissions and capabilities. The dashboard's `/api/definition` uses the same loaded view.
+
+The first enabled lifecycle operation accepts the initial definition into coordinator SQLite.
+After that, call the native control tool with `action: "reload"` to accept validated edits for
+future runs. Restarting the plugin or calling start does not implicitly reload. Until reload,
+effective views and the dashboard publisher keep using the previously accepted settings and queue
+path. Invalid or worker-issued reloads are refused. Permissions are always checked from the current
+authored definition, never granted by a historical pin. Backup settings remain independently gated.
+
+Runs retain only their definition digest; immutable settings and instructions are stored once per
+digest. Reload never changes active scope, checks, review policy or reviewer requirements. Worker
+messages contain the digest and scoped task, not the entire PRD; cold reviewers receive the pinned
+requirements. Explicit `retry-setup` alone uses freshly validated settings for the retried
+preparation and its worker, without reloading future dispatch. Commit tracked definition edits
+before dispatch or retry. Pinning does not relax landing checks: a dirty or advanced root still
+blocks an active candidate whose integration base no longer matches.
+
 ## Durable coordinator state
 
-The repository Git directory contains `factory/state.sqlite`, with schema version 1. Coordinator
+The repository Git directory contains `factory/state.sqlite`, with schema version 2. Coordinator
 ownership, retained ticket definitions, worker runs, and ordered events live there. Every lifecycle
 transition commits its state and event in one short transaction. Worker calls and asynchronous
 verification run outside transactions. The existing poteto bookkeeping lock and revision ledger
 remain separate and unchanged. Databases and SQLite journals stay inside Git metadata, not commits.
+Mutating lifecycle operations upgrade version-1 SQLite transactionally; read-only checks do not.
+Private backup supports both versions and records the snapshot's actual version in its manifest.
 
 The first mutating lifecycle operation imports validated `state.json` and `events.jsonl` records.
 The original files remain intact for recovery. Later operations use SQLite and ignore stale legacy
@@ -35,7 +66,7 @@ versions fail visibly before dispatch. Initialization does not grant execution p
 
 ## Back up private coordinator state
 
-Configure an existing private GitHub repository in `.factory.json` with
+Configure an existing private GitHub repository in the project definition with
 `"backup": { "repository": "owner/name", "projectKey": "stable-key" }` and explicitly grant
 `"backup": true` inside `permissions`. This permission does not grant worker execution or
 application publishing. Authenticate Git and `gh` through your existing credential mechanism.
@@ -88,13 +119,13 @@ before worker creation.
 
 Existing configuration without `workerEffort` keeps Amp's model default and is not rewritten.
 Repeated setup and refresh preserve saved model, effort, permissions, tickets, and runtime state.
-To change future workers, edit `workerModel` and `workerEffort` in `.factory.json`. These settings
-apply only when creating a new worker. Corrections continue on the same worker with its original
-settings, not a replacement.
+To change future workers, edit `workerModel` and `workerEffort` in the project definition,
+then reload. These settings apply only when creating a new worker. Corrections continue with
+the original settings, not a replacement.
 
 ## Prepare worker worktrees
 
-Preparation is opt-in. Set `setup` to a shell command in `.factory.json`, or pass
+Preparation is opt-in. Set `setup` to a shell command in the project definition, or pass
 `--setup 'bun install --frozen-lockfile'` during initial installation. Set `setupTimeoutMs` or pass
 `--setup-timeout-ms 120000` to choose a timeout. The default is 120,000 milliseconds. Timeouts must
 be positive integers no greater than 2,147,483,647 and require a setup command. Omitted setup keeps
@@ -128,7 +159,7 @@ with no worker thread.
 
 To recover, inspect the saved reason and log, fix the environment or saved setup command, then call
 the native factory control tool with `action: "retry-setup"`. Execution must remain enabled and
-permitted. Commit any root checkout changes, including edits to tracked `.factory.json`, before
+permitted. Commit any root checkout changes, including edits to the tracked definition, before
 retrying. A dirty root is rejected before setup or worker creation. Retry uses the current
 configured command and timeout in the same worktree. If the clean root has advanced, retry
 fast-forwards the unowned preparation worktree to root HEAD and records that new base before running
@@ -146,7 +177,8 @@ creation or delivery remains parked and cannot be retried with `retry-setup`.
 
 ## Conditional post-graft review
 
-Review is opt-in: pass `--review` during initial setup or set `review: true` in `.factory.json`.
+Review is opt-in: pass `--review` during initial setup or set `review: true` in the project
+definition and reload for future runs.
 Missing or false preserves gate-only acceptance. Refresh never enables review or rewrites saved
 configuration. Invalid review, ticket size, or risk values fail parsing.
 

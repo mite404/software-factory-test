@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import type { AgentReasoningEffort } from "@ampcode/plugin";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { validReview, type Review } from "./review";
@@ -20,7 +21,18 @@ type Preparation = {
   log: string;
   pid?: number;
 };
-export type Run =
+export type DefinitionPin = {
+  digest: string;
+  scope: string[];
+  verify: string;
+  review: boolean;
+  workerModel: `${string}/${string}`;
+  workerEffort?: AgentReasoningEffort;
+  instructions: string;
+  tickets: string;
+  setup?: { command: string; timeoutMs: number };
+};
+export type Run = (
   | (Preparation & { kind: "preparing" })
   | (Preparation & { kind: "preparation-failed"; reason: string })
   | { kind: "creating"; base: string; worktree: string }
@@ -50,7 +62,8 @@ export type Run =
       thread: ThreadID;
       insight: string;
       review?: Review;
-    };
+    }
+) & { definition?: string };
 export type State = {
   enabled: boolean;
   owner?: ThreadID;
@@ -147,12 +160,49 @@ function validRepair(
     run.thread === originalThread &&
     Number.isSafeInteger(Number(run.attempt) + 1) &&
     run.delivery === "sent" &&
-    run.review === undefined
+    run.review === undefined &&
+    (run.definition === undefined || validDigest(run.definition))
+  );
+}
+
+function validDigest(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+}
+
+function definitionFields(value: unknown) {
+  const pin = record(value);
+  const patterns = [
+    [pin.digest, /^[a-f0-9]{64}$/],
+    [pin.workerModel, /^[^/]+\/.+$/],
+    [pin.verify, /\S/],
+    [pin.tickets, /\S/],
+  ] as const;
+  return (
+    patterns.every(
+      ([value, pattern]) => typeof value === "string" && pattern.test(value),
+    ) &&
+    Array.isArray(pin.scope) &&
+    pin.scope.length > 0 &&
+    pin.scope.every(text) &&
+    typeof pin.review === "boolean" &&
+    typeof pin.instructions === "string" &&
+    new Set<unknown>([
+      undefined,
+      "none",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]).has(pin.workerEffort)
   );
 }
 
 function validateRun(id: string, value: unknown) {
   const run = record(value);
+  if (run.definition !== undefined && !validDigest(run.definition))
+    throw new Error(`Invalid definition pin ${id}`);
   const validate =
     typeof run.kind === "string" && Object.hasOwn(runValidators, run.kind)
       ? runValidators[run.kind]
@@ -210,7 +260,7 @@ function database(directory: string, readonly: boolean) {
     const version = db
       .query<{ user_version: number }, []>("PRAGMA user_version")
       .get()!.user_version;
-    if (version !== 1)
+    if (version !== 1 && version !== 2)
       throw new Error(`Unsupported factory schema version ${version}`);
     const integrity = db
       .query<{ quick_check: string }, []>("PRAGMA quick_check")
@@ -261,6 +311,56 @@ function saveEvent(db: Database, event: Event) {
   db.query(
     "INSERT INTO events (at, ticket, action, detail) VALUES (?, ?, ?, ?)",
   ).run(event.at, event.ticket, event.action, event.detail);
+}
+
+function definitionTables(db: Database) {
+  if (
+    db.query<{ user_version: number }, []>("PRAGMA user_version").get()!
+      .user_version === 2
+  )
+    return;
+  db.run(`
+    CREATE TABLE IF NOT EXISTS definitions (digest TEXT PRIMARY KEY, data TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS loaded_definition (id INTEGER PRIMARY KEY CHECK (id = 1), digest TEXT NOT NULL);
+    PRAGMA user_version = 2;
+  `);
+}
+
+/** Read an immutable pin or the accepted factory definition without writing storage. @throws On corrupt or missing referenced definitions. */
+export function factoryDefinition(
+  directory: string,
+  digest?: string,
+): DefinitionPin | undefined {
+  if (!existsSync(join(directory, "state.sqlite"))) return undefined;
+  const db = database(directory, true);
+  try {
+    if (
+      db.query<{ user_version: number }, []>("PRAGMA user_version").get()!
+        .user_version === 1
+    )
+      return undefined;
+    const row =
+      digest === undefined
+        ? db
+            .query<{ data: string }, []>(
+              "SELECT data FROM definitions JOIN loaded_definition USING (digest) WHERE id = 1",
+            )
+            .get()
+        : db
+            .query<{ data: string }, [string]>(
+              "SELECT data FROM definitions WHERE digest = ?",
+            )
+            .get(digest);
+    if (!row) {
+      if (digest !== undefined) throw new Error("Missing pinned definition");
+      return undefined;
+    }
+    const pin: unknown = JSON.parse(row.data);
+    if (!definitionFields(pin)) throw new Error("Invalid stored definition");
+    return pin as DefinitionPin;
+  } finally {
+    db.close();
+  }
 }
 
 /** Read durable or validated legacy state without creating runtime files. @throws On invalid storage. */
@@ -324,9 +424,11 @@ export function openPersistence(directory: string, queue: Task[]) {
             ticket TEXT NOT NULL, action TEXT NOT NULL, detail TEXT NOT NULL);
           PRAGMA user_version = 1;
         `);
+        definitionTables(db);
         saveState(db, imported.state);
         for (const event of imported.events) saveEvent(db, event);
       }
+      definitionTables(db);
       const state = readState(db);
       const upsert = db.query(
         "INSERT OR REPLACE INTO tickets (id, data) VALUES (?, ?)",
@@ -351,6 +453,18 @@ export function openPersistence(directory: string, queue: Task[]) {
     })();
     return {
       state,
+      /** Save a validated immutable definition, optionally accepting it for future dispatch. @throws On storage failure. */
+      definition(pin: DefinitionPin, load = false) {
+        db.transaction(() => {
+          db.query(
+            "INSERT OR IGNORE INTO definitions (digest, data) VALUES (?, ?)",
+          ).run(pin.digest, JSON.stringify(pin));
+          if (load)
+            db.query(
+              "INSERT OR REPLACE INTO loaded_definition (id, digest) VALUES (1, ?)",
+            ).run(pin.digest);
+        })();
+      },
       tickets: db
         .query<{ data: string }, []>("SELECT data FROM tickets ORDER BY rowid")
         .all()

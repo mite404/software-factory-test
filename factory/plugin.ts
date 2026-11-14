@@ -7,12 +7,22 @@ import type { DashboardSnapshot } from "./dashboard";
 import { factoryStatus, type Run } from "./persistence";
 import {
   assertControlCaller,
-  configuration,
+  effectiveConfiguration,
   createFactory,
   tasks,
   type Bookkeeping,
   type NativeHost,
 } from "./native";
+
+const controlActions = [
+  "status",
+  "start",
+  "pause",
+  "reconcile",
+  "retry-setup",
+  "resume",
+  "reload",
+] as const;
 
 function activity(value: unknown): Awaited<ReturnType<NativeHost["state"]>> {
   switch (value) {
@@ -197,7 +207,7 @@ export default function registerFactory(
     if (stopped || publishing) return;
     publishing = true;
     try {
-      const config = await configuration(root);
+      const config = await effectiveConfiguration(root);
       const queue = tasks(JSON.parse(await readFile(config.tickets, "utf8")));
       const state = await factory.tick("status");
       const snapshot: DashboardSnapshot = {
@@ -255,22 +265,13 @@ export default function registerFactory(
   const suffix = createHash("sha256").update(root).digest("hex").slice(0, 8);
   amp.registerTool({
     name: `factory_control_${suffix}`,
-    description: `Control the factory in ${root}. status is read-only. message-foreman delivers message text from a registered worker or reviewer to the owning Foreman without granting control; delivery errors have unknown outcomes, so do not retry blindly. start requires explicit user authorization and permissions.execute=true in .factory.json. pause stops dispatch. reconcile observes persisted work without granting permissions. retry-setup explicitly reruns parked preparation in the same worktree before creating a worker. resume requires the owning Foreman, a blocked ticket, and a decision explaining the next repair; it queues the same worker without starting a paused factory or accepting code. backup publishes private SQLite state and requires explicit user authorization and permissions.backup=true.`,
+    description: `Control the factory in ${root}. status is read-only. reload validates the authored definition for future runs without executing commands or changing active pins. message-foreman delivers message text from a registered worker or reviewer to the owning Foreman without granting control; delivery errors have unknown outcomes, so do not retry blindly. start requires explicit user authorization and permissions.execute=true in the project definition. pause stops dispatch. reconcile observes persisted work without granting permissions. retry-setup explicitly reruns parked preparation in the same worktree before creating a worker. resume requires the owning Foreman, a blocked ticket, and a decision explaining the next repair; it queues the same worker without starting a paused factory or accepting code. backup publishes private SQLite state and requires explicit user authorization and permissions.backup=true.`,
     inputSchema: {
       type: "object",
       properties: {
         action: {
           type: "string",
-          enum: [
-            "status",
-            "start",
-            "pause",
-            "reconcile",
-            "retry-setup",
-            "resume",
-            "message-foreman",
-            "backup",
-          ],
+          enum: [...controlActions, "message-foreman", "backup"],
         },
         ticket: { type: "string" },
         decision: { type: "string" },
@@ -280,29 +281,22 @@ export default function registerFactory(
       additionalProperties: false,
     },
     async execute(input, ctx) {
-      const action = input.action;
-      if (action === "message-foreman")
+      const requested = input.action;
+      if (requested === "message-foreman")
         return messageForeman(input.message, ctx.thread.id);
-      if (action === "backup") {
+      if (requested === "backup") {
         assertControlCaller(factoryStatus(factory.directory), ctx.thread.id);
         return JSON.stringify(await backup(root));
       }
-      if (
-        action !== "status" &&
-        action !== "start" &&
-        action !== "pause" &&
-        action !== "reconcile" &&
-        action !== "retry-setup" &&
-        action !== "resume"
-      )
-        throw new Error("Unknown action");
+      const action = controlActions.find((action) => action === requested);
+      if (!action) throw new Error("Unknown action");
       const state = await factory.tick(
         action,
         ctx.thread.id,
         (id) => observe(id, ctx.tools),
         repairRequest(input),
       );
-      await publish(ctx.tools);
+      if (action !== "reload") await publish(ctx.tools);
       return JSON.stringify(state);
     },
   });

@@ -149,11 +149,61 @@ async function fixture(
     reload() {
       factory = createFactory(root, host, openStore);
     },
+    loadDefinition() {
+      return factory.tick("reload", "T-owner");
+    },
     async close() {
       await rm(root, { recursive: true, force: true });
     },
   };
 }
+
+test("review requirements keep the dispatched brief across queue edits and reload", async () => {
+  const f = await fixture();
+  try {
+    const configPath = join(f.root, ".factory.json");
+    const queuePath = join(f.root, "tickets.json");
+    const originalConfig = await readFile(configPath, "utf8");
+    const originalQueue = await readFile(queuePath, "utf8");
+    const originalInstructions = await readFile(join(f.root, "prd.md"), "utf8");
+    const queue = JSON.parse(originalQueue);
+    const brief = queue[0].brief;
+    queue[0].brief = "Changed live brief";
+    await writeFile(queuePath, JSON.stringify(queue));
+    await writeFile(join(f.root, ".git/info/exclude"), "future-tickets.json\n");
+    queue[0].brief = "Changed reload brief";
+    await writeFile(join(f.root, "future-tickets.json"), JSON.stringify(queue));
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        ...JSON.parse(originalConfig),
+        tickets: "future-tickets.json",
+      }),
+    );
+    await writeFile(join(f.root, "prd.md"), "Changed reload instructions");
+    await f.loadDefinition();
+    await writeFile(configPath, originalConfig);
+    await writeFile(queuePath, originalQueue);
+    await writeFile(join(f.root, "prd.md"), originalInstructions);
+    f.reload();
+    for (const attempt of [1, 2]) {
+      await f.submit(attempt);
+      await f.tick();
+      const message = f.messages.at(-1)!.message;
+      expect(message).toContain(brief);
+      expect(message).toContain(originalInstructions);
+      expect(message).not.toContain("Changed live brief");
+      expect(message).not.toContain("Changed reload brief");
+      expect(message).not.toContain("Changed reload instructions");
+      if (attempt === 1) {
+        await f.verdict("issues");
+        await f.tick();
+      }
+    }
+  } finally {
+    await f.close();
+  }
+});
 
 test.each([
   ["openai/gpt-6.1-sol", "anthropic/claude-fable-5-2"],

@@ -1,9 +1,17 @@
 import type { AgentReasoningEffort } from "@ampcode/plugin";
 import { execFileSync, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import {
+  link,
+  lstat,
+  mkdir,
+  readFile,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import definitionSchema from "./definition.schema.json";
 import {
   reviewPrompt,
   reviewVerdict,
@@ -12,11 +20,13 @@ import {
 } from "./review";
 import {
   factoryStatus,
+  factoryDefinition,
   openPersistence,
   taskSteps,
   type ThreadID,
   type Task,
   type Run,
+  type DefinitionPin,
   type State,
 } from "./persistence";
 
@@ -145,7 +155,9 @@ export function localPath(root: string, value: string): string {
 
 function backupTarget(value: unknown) {
   if (value === undefined) return undefined;
-  const { repository, projectKey } = object(value);
+  const raw = object(value);
+  knownKeys(raw, definitionSchema.properties.backup.properties);
+  const { repository, projectKey } = raw;
   if (
     typeof repository !== "string" ||
     !/^[a-zA-Z0-9][a-zA-Z0-9-]*\/[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(
@@ -159,14 +171,15 @@ function backupTarget(value: unknown) {
   return { repository, projectKey };
 }
 
-/** Parse trusted operator configuration; setup does not grant action permissions. @throws On invalid input. */
-export async function configuration(root: string) {
-  const raw = object(
-    JSON.parse(await readFile(join(root, ".factory.json"), "utf8")),
-  );
-  if (raw.version !== 1 || raw.capacity !== 1)
-    throw new Error("This slice requires version 1 and capacity 1");
+function knownKeys(raw: Record<string, unknown>, properties: object) {
+  for (const key of Object.keys(raw))
+    if (!Object.hasOwn(properties, key))
+      throw new Error(`Unsupported definition setting ${key}`);
+}
+
+function actionPermissions(raw: Record<string, unknown>) {
   const permissions = object(raw.permissions);
+  knownKeys(permissions, definitionSchema.properties.permissions.properties);
   const backup = backupTarget(raw.backup);
   if (
     permissions.backup !== undefined &&
@@ -181,8 +194,16 @@ export async function configuration(root: string) {
     throw new Error(
       "Only local execution is supported; publishing and external tickets must stay disabled",
     );
+  return {
+    execute: permissions.execute,
+    backup,
+    backupAllowed: permissions.backup === true,
+  };
+}
+
+function workerRole(raw: Record<string, unknown>) {
   const model = text(raw.workerModel);
-  if (!model.includes("/")) throw new Error("Expected provider/model");
+  if (!/^[^/]+\/.+$/.test(model)) throw new Error("Expected provider/model");
   const [provider, ...name] = model.split("/");
   const workerModel: `${string}/${string}` = `${provider}/${name.join("/")}`;
   const workerEffort = parseWorkerEffort(raw.workerEffort);
@@ -190,38 +211,181 @@ export async function configuration(root: string) {
     throw new Error("Invalid review; expected boolean");
   const review = raw.review === true;
   if (review) reviewerModel(workerModel);
-  const prd = localPath(root, text(raw.prd));
-  const tickets = localPath(root, text(raw.tickets));
-  const scope = strings(raw.scope);
+  return { workerModel, workerEffort, review };
+}
+
+function allowedScope(root: string, value: unknown) {
+  const scope = strings(value);
   if (!scope.length) throw new Error("At least one allowed path is required");
   for (const path of scope) {
-    localPath(root, path);
+    const normalized = relative(root, localPath(root, path));
     if (
-      path === "." ||
-      path.startsWith(".git") ||
-      path.startsWith(".amp") ||
-      path.startsWith(".factory")
+      normalized === "" ||
+      [".git", ".amp", ".factory"].some((prefix) =>
+        normalized.startsWith(prefix),
+      ) ||
+      normalized === "factory/definition.yaml"
     )
       throw new Error(
         "Scope must exclude factory configuration and runtime files",
       );
   }
+  return scope;
+}
+
+async function validateConfiguration(
+  root: string,
+  raw: Record<string, unknown>,
+) {
+  knownKeys(raw, definitionSchema.properties);
+  if (raw.version !== 1 || raw.capacity !== 1)
+    throw new Error("This slice requires version 1 and capacity 1");
+  if (raw.mode !== undefined) text(raw.mode);
+  if (
+    raw.orchestratorModel !== undefined &&
+    !/^[^/]+\/.+$/.test(text(raw.orchestratorModel))
+  )
+    throw new Error("Expected orchestrator provider/model");
+  if (
+    raw.bookkeepingSHA256 !== undefined &&
+    !/^[a-f0-9]{64}$/.test(text(raw.bookkeepingSHA256))
+  )
+    throw new Error("Invalid bookkeeping digest");
+  const role = workerRole(raw);
+  const permissions = actionPermissions(raw);
+  const prd = localPath(root, text(raw.prd));
+  const tickets = localPath(root, text(raw.tickets));
+  const scope = allowedScope(root, raw.scope);
   const verify = text(raw.verify);
   const setup = parseSetup(raw.setup, raw.setupTimeoutMs);
-  await readFile(prd, "utf8");
+  const instructions = await readFile(prd, "utf8");
+  tasks(JSON.parse(await readFile(tickets, "utf8")));
   return {
-    workerModel,
-    workerEffort,
-    review,
+    ...role,
+    ...permissions,
     prd,
     tickets,
     scope,
     verify,
     setup,
-    execute: permissions.execute,
-    backup,
-    backupAllowed: permissions.backup === true,
+    instructions,
   };
+}
+
+/** Resolve one authored definition without running project commands or mutating state. @throws On conflicts or invalid inputs. */
+export async function configuration(root: string) {
+  const yaml = localPath(root, "factory/definition.yaml");
+  const legacy = localPath(root, ".factory.json");
+  if (existsSync(yaml) && existsSync(legacy))
+    throw new Error("Conflicting definitions; finish explicit --migrate first");
+  const source = existsSync(yaml) ? yaml : legacy;
+  const content = await readFile(source, "utf8");
+  const raw = object(
+    source === yaml ? Bun.YAML.parse(content) : JSON.parse(content),
+  );
+  const config = await validateConfiguration(root, raw);
+  const digest = createHash("sha256")
+    .update(content)
+    .update("\0")
+    .update(config.instructions)
+    .digest("hex");
+  return { ...config, digest };
+}
+
+/** Move the legacy definition to its YAML home explicitly, retaining bytes, ownership and mode. @throws On invalid or conflicting definitions. */
+export async function migrateDefinition(root: string) {
+  const yaml = localPath(root, "factory/definition.yaml");
+  const legacy = localPath(root, ".factory.json");
+  if (existsSync(yaml) && existsSync(legacy)) {
+    const [old, migrated] = await Promise.all([lstat(legacy), lstat(yaml)]);
+    if (!old.isFile() || old.dev !== migrated.dev || old.ino !== migrated.ino)
+      throw new Error(
+        "Conflicting definitions; migration refuses to overwrite project edits",
+      );
+    await validateConfiguration(
+      root,
+      object(Bun.YAML.parse(await readFile(yaml, "utf8"))),
+    );
+    await unlink(legacy);
+    return;
+  }
+  await configuration(root);
+  if (existsSync(yaml)) return;
+  if (!(await lstat(legacy)).isFile())
+    throw new Error("Migration requires a regular definition file");
+  await mkdir(join(root, "factory"), { recursive: true });
+  // JSON is YAML 1.2. Linking retains metadata and cannot overwrite a concurrently authored file.
+  await link(legacy, yaml);
+  await unlink(legacy);
+}
+
+/** Return only public-safe capabilities, never commands, instructions, paths or backup targets. @throws On invalid definitions. */
+export async function effectiveDefinition(root: string) {
+  const config = await effectiveConfiguration(root);
+  return {
+    version: 1,
+    digest: config.digest,
+    permissions: {
+      execute: config.execute,
+      backup: config.backupAllowed,
+      publish: false,
+      externalTickets: false,
+    },
+    capabilities: { review: config.review, setup: config.setup !== undefined },
+  };
+}
+
+/** Resolve the durable loaded definition with current, never pinned, permissions. @throws On invalid project or stored definitions. */
+export async function effectiveConfiguration(root: string) {
+  const current = await configuration(root);
+  const loaded = factoryDefinition(
+    join(git(root, "rev-parse", "--absolute-git-dir"), "factory"),
+  );
+  return loaded
+    ? {
+        ...current,
+        ...loaded,
+        setup: loaded.setup,
+        workerEffort: loaded.workerEffort,
+      }
+    : current;
+}
+
+function definitionPin(
+  config: Awaited<ReturnType<typeof configuration>>,
+): DefinitionPin {
+  const {
+    digest,
+    scope,
+    verify,
+    review,
+    workerModel,
+    workerEffort,
+    instructions,
+    tickets,
+    setup,
+  } = config;
+  return {
+    digest,
+    scope,
+    verify,
+    review,
+    workerModel,
+    ...(workerEffort === undefined ? {} : { workerEffort }),
+    instructions,
+    tickets,
+    setup,
+  };
+}
+
+function runDefinition(
+  run: Run,
+  config: Awaited<ReturnType<typeof configuration>>,
+  directory: string,
+): DefinitionPin {
+  return run.definition
+    ? factoryDefinition(directory, run.definition)!
+    : config;
 }
 
 /** Parse ticket identities and dependencies at the file boundary. @throws On invalid tickets. */
@@ -300,16 +464,26 @@ function allowedChanges(
   revision: string,
   scope: string[],
 ) {
-  const changed = git(worktree, "diff", "--name-only", base, revision)
+  const changed = git(
+    worktree,
+    "diff",
+    "--no-renames",
+    "--name-only",
+    base,
+    revision,
+  )
     .split("\n")
     .filter(Boolean);
   return (
     changed.length > 0 &&
-    changed.every((path) =>
-      scope.some(
-        (prefix) =>
-          path === prefix || (prefix.endsWith("/") && path.startsWith(prefix)),
-      ),
+    changed.every(
+      (path) =>
+        path !== "factory/definition.yaml" &&
+        scope.some(
+          (prefix) =>
+            path === prefix ||
+            (prefix.endsWith("/") && path.startsWith(prefix)),
+        ),
     )
   );
 }
@@ -461,8 +635,9 @@ async function candidateEvidence(
   report: Record<string, unknown>,
   config: Awaited<ReturnType<typeof configuration>>,
 ) {
-  const revision = candidate(run, report, config.scope);
-  const result = revision ? await verify(run.worktree, config.verify) : null;
+  const pinned = runDefinition(run, config, directory);
+  const revision = candidate(run, report, pinned.scope);
+  const result = revision ? await verify(run.worktree, pinned.verify) : null;
   const log = join(directory, `${task.id}-${run.attempt}.log`);
   await writeFile(
     log,
@@ -522,7 +697,7 @@ function controlState(
   if (action === "start") {
     if (!execute)
       throw new Error(
-        "Grant permissions.execute in .factory.json before starting",
+        "Grant permissions.execute in the project definition before starting",
       );
     state.owner ??= owner;
     if (!state.owner) throw new Error("Starting requires an owner thread");
@@ -535,6 +710,16 @@ function restoreTickets(queue: Task[], persisted: Task[], state: State) {
   for (const task of persisted)
     if (state.runs[task.id] && !queue.some((row) => row.id === task.id))
       queue.push(task);
+}
+
+function retryAdmission(state: State, action: string) {
+  if (action !== "retry-setup") return true;
+  const runs = Object.values(state.runs);
+  if (runs.some((run) => run.kind === "creating" || run.kind === "uncertain"))
+    return false;
+  if (!state.enabled || !runs.some(isPreparation))
+    throw new Error("No preparation to retry");
+  return true;
 }
 
 /** Create the sequential dispatcher. Unknown remote effects are parked, never retried blindly. */
@@ -564,6 +749,7 @@ export function createFactory(
     run: Extract<Run, { kind: "running" }>,
     config: Awaited<ReturnType<typeof configuration>>,
   ) {
+    const pinned = runDefinition(run, config, directory);
     const dependencies = stateCache.runs;
     const insights = task.after.flatMap((id) => {
       const dependency = dependencies[id];
@@ -571,23 +757,25 @@ export function createFactory(
         ? [`${id}: ${dependency.insight} (${dependency.revision})`]
         : [];
     });
-    return `Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAllowed paths: ${config.scope.join(", ")}. Check: ${config.verify}.\nDependency evidence: ${insights.join("; ") || "none"}.\n${run.feedback ? `Repair feedback: ${run.feedback}\n` : ""}Use a local commit for the change. Do not push, deploy, create tickets, edit factory files, or delegate.\nForeman: ${stateCache.owner}. Send questions and blockers there with send_thread_message, or the factory control action message-foreman with message text. Messaging does not grant factory control.\nAfter finishing, write JSON to ${join(directory, `${task.id}.report.json`)}: {"attempt":${run.attempt},"kind":"candidate","revision":"<full git HEAD>","insight":"<short verified finding>"}. If blocked, use {"attempt":${run.attempt},"kind":"blocked","reason":"<needed decision>"}. Report briefly here too.`;
+    return `Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAllowed paths: ${pinned.scope.join(", ")}. Check: ${pinned.verify}.\nDefinition: ${run.definition ?? "legacy unpinned"}.\nDependency evidence: ${insights.join("; ") || "none"}.\n${run.feedback ? `Repair feedback: ${run.feedback}\n` : ""}Use a local commit for the change. Do not push, deploy, create tickets, edit factory files, or delegate.\nForeman: ${stateCache.owner}. Send questions and blockers there with send_thread_message, or the factory control action message-foreman with message text. Messaging does not grant factory control.\nAfter finishing, write JSON to ${join(directory, `${task.id}.report.json`)}: {"attempt":${run.attempt},"kind":"candidate","revision":"<full git HEAD>","insight":"<short verified finding>"}. If blocked, use {"attempt":${run.attempt},"kind":"blocked","reason":"<needed decision>"}. Report briefly here too.`;
   }
 
   let stateCache: State = { enabled: false, runs: {} };
+
   async function reconcile(
     action: "start" | "pause" | "reconcile" | "retry-setup" | "resume",
     owner?: ThreadID,
     observe: NativeHost["state"] = host.state,
     repairRequest?: { ticket: string; decision: string },
   ) {
-    const config = await configuration(root);
-    const queue = tasks(JSON.parse(await readFile(config.tickets, "utf8")));
     await mkdir(directory, { recursive: true });
     const store = openStore(join(directory, "bookkeeping"));
     let persistence: ReturnType<typeof openPersistence> | undefined;
     try {
       await store.init();
+      const config = await effectiveConfiguration(root);
+      assertControlCaller(factoryStatus(directory), owner);
+      const queue = tasks(JSON.parse(await readFile(config.tickets, "utf8")));
       persistence = openPersistence(directory, queue);
       const state = persistence.state;
       restoreTickets(queue, persistence.tickets, state);
@@ -595,6 +783,16 @@ export function createFactory(
         persistence!.commit(state, ticket, action, detail);
       stateCache = state;
       controlState(state, action, config.execute, owner);
+      function acceptInitialDefinition() {
+        if (
+          !state.enabled ||
+          action === "retry-setup" ||
+          factoryDefinition(directory)
+        )
+          return;
+        persistence!.definition(definitionPin(config), true);
+      }
+      acceptInitialDefinition();
       async function preflightCheckpoint(
         task: Task,
         blocked: Extract<Run, { kind: "blocked" }>,
@@ -623,7 +821,7 @@ export function createFactory(
           attempt: 1,
           delivery: "sent",
           workerModel: config.workerModel,
-          requirements: `${task.brief}\n${await readFile(config.prd, "utf8")}`,
+          requirements: `${task.brief}\n${config.instructions}`,
         };
       }
       async function legacyRepairCheckpoint(
@@ -660,7 +858,7 @@ export function createFactory(
           attempt: 2,
           delivery: "sent",
           workerModel: config.workerModel,
-          requirements: `${task.brief}\n${await readFile(config.prd, "utf8")}`,
+          requirements: `${task.brief}\n${config.instructions}`,
         };
       }
       async function repairCheckpoint(
@@ -783,11 +981,17 @@ export function createFactory(
         if (
           git(root, "status", "--porcelain") ||
           !cleanCandidate(run, revision) ||
-          !allowedChanges(run.worktree, run.base, revision, config.scope) ||
+          !allowedChanges(
+            run.worktree,
+            run.base,
+            revision,
+            runDefinition(run, config, directory).scope,
+          ) ||
           (target !== run.base && target !== revision)
         ) {
           state.runs[task.id] = {
             kind: "blocked",
+            definition: run.definition,
             thread: run.thread,
             reason: "Integration target changed; reconcile before landing",
           };
@@ -803,6 +1007,7 @@ export function createFactory(
         });
         state.runs[task.id] = {
           kind: "done",
+          definition: run.definition,
           thread: run.thread,
           revision,
           review: run.review,
@@ -828,7 +1033,7 @@ export function createFactory(
         );
         if (revision) {
           if (
-            config.review &&
+            runDefinition(run, config, directory).review &&
             (task.size !== "small" || task.risky || run.attempt > 1)
           ) {
             await beginReview(task, run, revision, log);
@@ -849,6 +1054,7 @@ export function createFactory(
         } else {
           state.runs[task.id] = {
             kind: "blocked",
+            definition: run.definition,
             thread: run.thread,
             reason: `Verification rejected attempt ${run.attempt}; Foreman escalation required: ${evidence}`,
             repair: run,
@@ -871,7 +1077,12 @@ export function createFactory(
       ) {
         const review = run.review!;
         if (!review.thread || review.delivery !== "queued") return;
-        const message = reviewPrompt(review, run.requirements!);
+        const message = reviewPrompt(
+          review,
+          run.definition
+            ? `${run.requirements}\n${runDefinition(run, config, directory).instructions}`
+            : run.requirements!,
+        );
         review.delivery = "sending";
         commit(task.id, "review-sending", JSON.stringify(review));
         await host.send(review.thread, message);
@@ -895,6 +1106,7 @@ export function createFactory(
         ) {
           state.runs[task.id] = {
             kind: "blocked",
+            definition: run.definition,
             thread: run.thread,
             reason: "Integration target changed; reconcile before landing",
           };
@@ -916,7 +1128,7 @@ export function createFactory(
           worktree,
           model,
           log,
-          command: config.verify,
+          command: runDefinition(run, config, directory).verify,
           delivery: "creating",
           report: join(
             directory,
@@ -962,6 +1174,7 @@ export function createFactory(
         if (!reviewIdentity(root, run.worktree, review)) {
           state.runs[task.id] = {
             kind: "blocked",
+            definition: run.definition,
             thread: run.thread,
             reason:
               "Reviewed candidate or integration base changed; revalidate before landing",
@@ -977,7 +1190,14 @@ export function createFactory(
         if (verdict.kind === "issues")
           return reject(task, run, verdict.evidence);
         const report = await currentReport(directory, task, run.attempt);
-        if (!report || candidate(run, report, config.scope) !== review.revision)
+        if (
+          !report ||
+          candidate(
+            run,
+            report,
+            runDefinition(run, config, directory).scope,
+          ) !== review.revision
+        )
           return;
         await accept(
           task,
@@ -995,6 +1215,7 @@ export function createFactory(
         if (run.delivery === "sending") {
           state.runs[task.id] = {
             kind: "uncertain",
+            definition: run.definition,
             thread: run.thread,
             reason: "Delivery outcome unknown; inspect thread before recovery",
           };
@@ -1010,6 +1231,7 @@ export function createFactory(
         if (activity !== "idle") {
           state.runs[task.id] = {
             kind: "blocked",
+            definition: run.definition,
             thread: run.thread,
             reason: `Worker ${activity}; inspect before resuming`,
             checkpoint: run,
@@ -1022,6 +1244,7 @@ export function createFactory(
         if (report.kind === "blocked") {
           state.runs[task.id] = {
             kind: "blocked",
+            definition: run.definition,
             thread: run.thread,
             reason: text(report.reason),
             checkpoint: run,
@@ -1035,24 +1258,32 @@ export function createFactory(
       }
 
       async function createWorker(task: Task, base: string, worktree: string) {
+        const definition = state.runs[task.id]?.definition ?? config.digest;
+        const pinned = factoryDefinition(directory, definition)!;
         if (state.runs[task.id]?.kind !== "creating") {
-          state.runs[task.id] = { kind: "creating", base, worktree };
+          state.runs[task.id] = {
+            kind: "creating",
+            base,
+            worktree,
+            definition,
+          };
           commit(task.id, "creating", base);
         }
         const thread = await host.create(
           state.owner!,
-          config.workerModel,
-          config.workerEffort,
+          pinned.workerModel,
+          pinned.workerEffort,
         );
         const run: Extract<Run, { kind: "running" }> = {
           kind: "running",
+          definition,
           base,
           worktree,
           thread,
           attempt: 1,
           delivery: "queued",
-          workerModel: config.workerModel,
-          requirements: `${task.brief}\n${await readFile(config.prd, "utf8")}`,
+          workerModel: pinned.workerModel,
+          requirements: task.brief,
         };
         state.runs[task.id] = run;
         commit(task.id, "created", thread);
@@ -1061,15 +1292,22 @@ export function createFactory(
         return state;
       }
 
-      async function prepare(task: Task, base: string, worktree: string) {
-        if (!config.setup)
+      async function prepare(
+        task: Task,
+        base: string,
+        worktree: string,
+        preparationConfig = config,
+      ) {
+        if (!preparationConfig.setup)
           throw new Error("Configure setup before retrying preparation");
+        persistence!.definition(definitionPin(preparationConfig));
         const run: Extract<Run, { kind: "preparing" }> = {
           kind: "preparing",
+          definition: preparationConfig.digest,
           base,
           worktree,
-          command: config.setup.command,
-          timeoutMs: config.setup.timeoutMs,
+          command: preparationConfig.setup.command,
+          timeoutMs: preparationConfig.setup.timeoutMs,
           log: join(directory, `${task.id}-setup-${randomUUID()}.log`),
         };
         await writeFile(
@@ -1151,7 +1389,12 @@ export function createFactory(
         const base = git(root, "rev-parse", "HEAD");
         const worktree = join(directory, "worktrees", next.id);
         if (config.setup) return prepare(next, base, worktree);
-        state.runs[next.id] = { kind: "creating", base, worktree };
+        state.runs[next.id] = {
+          kind: "creating",
+          base,
+          worktree,
+          definition: config.digest,
+        };
         commit(next.id, "creating", base);
         addWorktree(next, base, worktree);
         return createWorker(next, base, worktree);
@@ -1189,7 +1432,7 @@ export function createFactory(
               );
             git(run.worktree, "merge", "--ff-only", base);
           }
-          return prepare(task, base, run.worktree);
+          return prepare(task, base, run.worktree, await configuration(root));
         }
         throw new Error("No preparation to retry");
       }
@@ -1204,7 +1447,13 @@ export function createFactory(
   /** Serialize local callbacks; the poteto lock excludes other plugin processes. @throws On unsafe state or failed I/O. */
   function tick(
     action:
-      "status" | "start" | "pause" | "reconcile" | "retry-setup" | "resume",
+      | "status"
+      | "start"
+      | "pause"
+      | "reconcile"
+      | "retry-setup"
+      | "resume"
+      | "reload",
     owner?: ThreadID,
     observe: NativeHost["state"] = host.state,
     repairRequest?: Parameters<typeof reconcile>[3],
@@ -1212,10 +1461,34 @@ export function createFactory(
     const result = pending
       .catch(() => {})
       .then(async () => {
+        if (action === "reload") {
+          assertControlCaller(factoryStatus(directory), owner);
+          await configuration(root);
+          const store = openStore(join(directory, "bookkeeping"));
+          try {
+            await store.init();
+            const next = await configuration(root);
+            assertControlCaller(factoryStatus(directory), owner);
+            const persistence = openPersistence(directory, []);
+            try {
+              persistence.definition(definitionPin(next), true);
+              persistence.event("factory", "reloaded", next.digest);
+              return persistence.state;
+            } finally {
+              persistence.close();
+            }
+          } finally {
+            await store.close();
+          }
+        }
         if (action === "status") {
           await configuration(root);
           return factoryStatus(directory);
         }
+        const initial = factoryStatus(directory);
+        assertControlCaller(initial, owner);
+        await configuration(root);
+        if (!retryAdmission(initial, action)) return initial;
         return reconcile(action, owner, observe, repairRequest);
       });
     pending = result;

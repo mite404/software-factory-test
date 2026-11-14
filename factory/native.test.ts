@@ -12,8 +12,16 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { configuration, createFactory, tasks, type NativeHost } from "./native";
+import {
+  configuration,
+  effectiveDefinition,
+  effectiveConfiguration,
+  createFactory,
+  tasks,
+  type NativeHost,
+} from "./native";
 import { openStore } from "./bookkeeping.fixture";
+import { startDashboard } from "./dashboard";
 import { openPersistence } from "./persistence";
 
 const installer = resolve(import.meta.dir, "setup-factory.ts");
@@ -231,6 +239,323 @@ test.each([false, true])(
     expect(f.counts()).toEqual({ creates: 1, sends: 2 });
   },
 );
+
+test.each(["{", "{}", '[{"id":"A","brief":"","after":[]}]'])(
+  "malformed queue %s is refused before storage opens",
+  async (queue) => {
+    const f = await preparationFixture(() => "true; ");
+    await writeFile(join(f.root, "tickets.json"), queue);
+    for (const flag of ["--check", "--effective", "--migrate"]) {
+      const result = spawnSync("bun", [installer, "--repo", f.root, flag], {
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(1);
+    }
+    const engine = createFactory(f.root, f.host, () => {
+      throw new Error("Must reject before storage");
+    });
+    for (const action of ["status", "start", "reload", "reconcile"] as const)
+      expect(engine.tick(action, "T-owner")).rejects.toThrow(
+        /JSON|Tickets|text/,
+      );
+    expect(
+      await Bun.file(join(engine.directory, "state.sqlite")).exists(),
+    ).toBe(false);
+  },
+);
+
+test.each(["restart", "worker retry", "empty retry"])(
+  "unloaded edits stay unloaded after %s",
+  async (action) => {
+    const f = await preparationFixture(() => "true; ");
+    const path = join(f.root, ".factory.json");
+    const raw = await Bun.file(path).json();
+    await writeFile(
+      join(f.root, "tickets.json"),
+      JSON.stringify([
+        { id: "A", brief: "First", after: [] },
+        { id: "B", brief: "Second", after: [] },
+      ]),
+    );
+    f.git("add", ".");
+    f.git(
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "commit",
+      "-qm",
+      "queue",
+    );
+    const engine = f.factory();
+    await engine.tick("start", "T-owner");
+    const before = await effectiveDefinition(f.root);
+    await writeFile(join(f.root, "future-tickets.json"), "[]");
+    await writeFile(
+      path,
+      JSON.stringify({
+        ...raw,
+        review: true,
+        verify: "false",
+        tickets: "future-tickets.json",
+      }),
+    );
+    f.git("add", ".");
+    f.git(
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "commit",
+      "-qm",
+      "future definition",
+    );
+    const next = action === "restart" ? f.factory() : engine;
+    if (action !== "restart") {
+      const bytes = await readFile(join(engine.directory, "state.sqlite"));
+      expect(
+        next.tick(
+          "retry-setup",
+          action === "worker retry" ? "T-prepared" : "T-owner",
+        ),
+      ).rejects.toThrow();
+      expect(await readFile(join(engine.directory, "state.sqlite"))).toEqual(
+        bytes,
+      );
+    }
+    expect(await effectiveDefinition(f.root)).toEqual(before);
+    expect((await effectiveConfiguration(f.root)).tickets).toBe(
+      join(f.root, "tickets.json"),
+    );
+    const saved = await readFile(join(engine.directory, "state.sqlite"));
+    const effective = spawnSync(
+      "bun",
+      [installer, "--repo", f.root, "--effective"],
+      { encoding: "utf8" },
+    );
+    expect(effective.status).toBe(0);
+    expect(JSON.parse(effective.stdout)).toEqual(before);
+    const server = startDashboard({ root: f.root, port: 0 });
+    try {
+      expect(
+        await (
+          await fetch(`http://127.0.0.1:${server.port}/api/definition`)
+        ).json(),
+      ).toEqual(before);
+    } finally {
+      await server.stop(true);
+    }
+    expect(await readFile(join(engine.directory, "state.sqlite"))).toEqual(
+      saved,
+    );
+    await writeFile(
+      join(engine.directory, "A.report.json"),
+      JSON.stringify({
+        attempt: 1,
+        kind: "blocked",
+        reason: "Fixture stopped",
+      }),
+    );
+    f.host.state = async () => "idle";
+    f.host.create = async () => "T-second";
+    f.host.send = async () => {};
+    const state = await next.tick("reconcile");
+    expect(JSON.stringify(state.runs.B?.definition)).toContain(before.digest);
+  },
+);
+
+test("reload pins future definitions while active checks, scope and instructions survive restart", async () => {
+  const f = await preparationFixture(() => "true; ");
+  const path = join(f.root, ".factory.json");
+  const raw = await Bun.file(path).json();
+  raw.verify = 'test "$(cat src/value)" = good';
+  raw.backup = {
+    repository: "private/backup-target",
+    projectKey: "hidden-backup-key",
+  };
+  raw.permissions.backup = true;
+  await writeFile(path, JSON.stringify(raw));
+  await writeFile(
+    join(f.root, "tickets.json"),
+    JSON.stringify([
+      { id: "A", brief: "First", after: [] },
+      { id: "B", brief: "Second", after: ["A"] },
+    ]),
+  );
+  f.git("add", ".");
+  f.git(
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "commit",
+    "-qm",
+    "pin fixture",
+  );
+  const original = await configuration(f.root);
+  const messages: string[] = [];
+  let creates = 0;
+  f.host.create = async () => `T-pin-${++creates}`;
+  f.host.send = async (_thread, message) => {
+    messages.push(message);
+  };
+  const first = f.factory();
+  const started = await first.tick("start", "T-owner");
+  const pin = started.runs.A?.definition;
+  expect(pin).toBe(original.digest);
+  expect(messages[0]).not.toContain("backup");
+  expect(JSON.stringify(pin)).not.toContain("hidden-backup-key");
+  const reopened = f.factory();
+  expect((await reopened.tick("status")).runs.A?.definition).toEqual(pin);
+  const changed = {
+    ...raw,
+    scope: ["docs/"],
+    verify: "false",
+    review: true,
+    workerModel: "anthropic/claude-sonnet-4.6",
+  };
+  await writeFile(path, JSON.stringify(changed));
+  await writeFile(join(f.root, "prd.md"), "Changed future instructions");
+  const future = await configuration(f.root);
+  expect(future.digest).not.toBe(original.digest);
+  const beforeReload = await readFile(join(reopened.directory, "state.sqlite"));
+  expect((await reopened.tick("reload", "T-owner")).runs.A?.definition).toEqual(
+    pin,
+  );
+  expect(await readFile(join(reopened.directory, "state.sqlite"))).not.toEqual(
+    beforeReload,
+  );
+  const afterReload = await readFile(join(reopened.directory, "state.sqlite"));
+  expect((await effectiveDefinition(f.root)).digest).toBe(future.digest);
+  const refused = createFactory(f.root, f.host, () => {
+    throw new Error("Must authorize before opening bookkeeping");
+  });
+  expect(refused.tick("reload", "T-pin-1")).rejects.toThrow(
+    /Workers cannot control/,
+  );
+  await writeFile(path, JSON.stringify({ ...changed, version: 2 }));
+  expect(reopened.tick("reload", "T-owner")).rejects.toThrow(/version 1/);
+  expect(await readFile(join(reopened.directory, "state.sqlite"))).toEqual(
+    afterReload,
+  );
+  await writeFile(path, JSON.stringify(raw));
+  await writeFile(join(f.root, "prd.md"), "Fixture");
+  await mkdir(join(f.worktree, "src"));
+  await writeFile(join(f.worktree, "src/value"), "good");
+  f.git("-C", f.worktree, "add", "src/value");
+  f.git(
+    "-C",
+    f.worktree,
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "commit",
+    "-qm",
+    "candidate",
+  );
+  const revision = f.git("-C", f.worktree, "rev-parse", "HEAD");
+  await writeFile(
+    join(reopened.directory, "A.report.json"),
+    JSON.stringify({ attempt: 1, kind: "candidate", revision }),
+  );
+  f.host.state = async () => "idle";
+  const settled = await f.factory().tick("reconcile");
+  expect(settled.runs.A).toMatchObject({
+    kind: "done",
+    revision,
+    definition: pin,
+  });
+  expect(settled.runs.B).toMatchObject({
+    kind: "running",
+    definition: future.digest,
+    workerModel: "anthropic/claude-sonnet-4.6",
+  });
+  expect(messages[1]).not.toContain("Changed future instructions");
+  expect(messages[1]).toContain("Allowed paths: docs/. Check: false.");
+});
+
+test("definition rename is rejected and private instructions stay deduplicated", async () => {
+  const f = await preparationFixture(() => "true; ");
+  const raw = await Bun.file(join(f.root, ".factory.json")).json();
+  await mkdir(join(f.root, "factory"));
+  await writeFile(
+    join(f.root, "factory/definition.yaml"),
+    JSON.stringify({ ...raw, scope: ["factory/"] }),
+  );
+  await rm(join(f.root, ".factory.json"));
+  const instructions = "Private PRD paragraph. ".repeat(2000);
+  await writeFile(join(f.root, "prd.md"), instructions);
+  f.git("add", ".");
+  f.git(
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "commit",
+    "-qm",
+    "definition",
+  );
+  const messages: string[] = [];
+  f.host.send = async (_thread, message) => {
+    messages.push(message);
+  };
+  const engine = f.factory();
+  const started = await engine.tick("start", "T-owner");
+  expect(JSON.stringify(started).length).toBeLessThan(2000);
+  f.git(
+    "-C",
+    f.worktree,
+    "mv",
+    "factory/definition.yaml",
+    "factory/notes.yaml",
+  );
+  f.git(
+    "-C",
+    f.worktree,
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "commit",
+    "-qm",
+    "rename",
+  );
+  const revision = f.git("-C", f.worktree, "rev-parse", "HEAD");
+  await writeFile(
+    join(engine.directory, "A.report.json"),
+    JSON.stringify({ attempt: 1, kind: "candidate", revision }),
+  );
+  f.host.state = async () => "idle";
+  const rejected = await engine.tick("reconcile");
+  expect(rejected.runs.A).toMatchObject({ kind: "running", attempt: 2 });
+  expect(await Bun.file(join(f.root, "factory/definition.yaml")).exists()).toBe(
+    true,
+  );
+  expect(messages.join("\n")).not.toContain("Private PRD paragraph");
+  expect(JSON.stringify(rejected).length).toBeLessThan(2000);
+  const db = new Database(join(engine.directory, "state.sqlite"), {
+    readonly: true,
+  });
+  try {
+    expect(db.query("SELECT count(*) AS n FROM definitions").get()).toEqual({
+      n: 1,
+    });
+    const stored = JSON.stringify(
+      db.query("SELECT data FROM definitions").all(),
+    );
+    expect(stored).toContain("Private PRD paragraph");
+    expect(
+      JSON.stringify(
+        db
+          .query("SELECT data FROM runs UNION ALL SELECT detail FROM events")
+          .all(),
+      ),
+    ).not.toContain("Private PRD paragraph");
+  } finally {
+    db.close();
+  }
+});
 
 test.each(["", "bun install --frozen-lockfile && "])(
   "setup %s finishes before worker creation and delivery",

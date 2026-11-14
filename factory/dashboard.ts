@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { effectiveDefinition } from "./native";
 import { factoryRecords, taskSteps, type Run } from "./persistence";
 
 export type DashboardSnapshot = {
@@ -210,6 +211,20 @@ function targetBranch(root: string) {
   );
 }
 
+async function definitionResponse(
+  root: string,
+  headers: Record<string, string>,
+) {
+  try {
+    return Response.json(await effectiveDefinition(root), { headers });
+  } catch {
+    return Response.json(
+      { error: "Definition unavailable or invalid" },
+      { status: 503, headers },
+    );
+  }
+}
+
 /** Serve a curated, read-only status projection, never raw factory files. @throws If Git or HTML is unavailable. */
 export function startDashboard({ root, port }: { root: string; port: number }) {
   const directory = execFileSync(
@@ -236,6 +251,7 @@ export function startDashboard({ root, port }: { root: string; port: number }) {
       const file = Bun.file(join(web, path));
       if (await file.exists()) return new Response(file, { headers });
     }
+    if (path === "/api/definition") return definitionResponse(root, headers);
     return null;
   }
   return Bun.serve({

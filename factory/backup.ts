@@ -275,7 +275,8 @@ async function snapshotDatabase(root: string, directory: string) {
       snapshot,
     ),
   );
-  if (schemaVersion !== 1) throw new BackupRefusal("Unsupported backup schema");
+  if (schemaVersion !== 1 && schemaVersion !== 2)
+    throw new BackupRefusal("Unsupported backup schema");
   return { snapshot, schemaVersion };
 }
 

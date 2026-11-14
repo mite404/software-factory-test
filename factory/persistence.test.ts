@@ -173,6 +173,16 @@ test("durable records retain ticket identity without importing legacy or writing
   expect(await readdir(f.directory)).toEqual(["state.json"]);
   const storage = openPersistence(f.directory, queue);
   storage.close();
+  const old = new Database(join(f.directory, "state.sqlite"));
+  old.run(
+    "DROP TABLE definitions; DROP TABLE loaded_definition; PRAGMA user_version = 1",
+  );
+  old.close();
+  const legacyBytes = await readFile(join(f.directory, "state.sqlite"));
+  expect(factoryStatus(f.directory)).toEqual(parked);
+  expect(await readFile(join(f.directory, "state.sqlite"))).toEqual(
+    legacyBytes,
+  );
   const reopened = openPersistence(f.directory, []);
   reopened.close();
   await writeFile(join(f.directory, "state.json"), "invalid legacy");
@@ -220,7 +230,7 @@ test("migration preserves nonempty ownership and history exactly once across res
     expect(await f.factory().tick("reconcile")).toEqual(parked);
   expect(f.calls()).toBe(0);
   const db = new Database(join(f.directory, "state.sqlite"));
-  expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 1 });
+  expect(db.query("PRAGMA user_version").get()).toEqual({ user_version: 2 });
   expect(
     db
       .query(
@@ -336,7 +346,7 @@ test.each(["corrupt", "newer", "unversioned"])(
     if (kind === "corrupt") await writeFile(path, "not a SQLite database");
     else {
       const db = new Database(path, { create: true });
-      db.run(`PRAGMA user_version = ${kind === "newer" ? 2 : 0}`);
+      db.run(`PRAGMA user_version = ${kind === "newer" ? 3 : 0}`);
       db.close();
     }
     const bytes = await readFile(path);
@@ -366,6 +376,7 @@ test("manifest removal retains the original worker and its delivery recovery", a
   storage.close();
   const expected = {
     kind: "uncertain",
+    definition: original?.definition,
     thread: "T-original",
     reason: "Delivery outcome unknown; inspect thread before recovery",
   } as const;

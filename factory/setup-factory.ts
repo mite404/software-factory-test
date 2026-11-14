@@ -17,7 +17,9 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import {
   configuration,
+  effectiveDefinition,
   localPath,
+  migrateDefinition,
   parseSetup,
   parseWorkerEffort,
   reviewerModel,
@@ -44,14 +46,14 @@ function resolveStore(path?: string) {
   return store;
 }
 
-async function requireConfiguration(root: string) {
-  if (!existsSync(join(root, ".factory.json")))
-    throw new Error("Cannot refresh before factory setup");
-  await configuration(root);
-}
-
 async function checkOrReuse(root: string, pluginPath: string, check: boolean) {
-  if (!check && !existsSync(join(root, ".factory.json"))) return false;
+  if (
+    !check &&
+    ![".factory.json", "factory/definition.yaml"].some((path) =>
+      existsSync(join(root, path)),
+    )
+  )
+    return false;
   await configuration(root);
   await access(pluginPath);
   process.stdout.write(
@@ -65,16 +67,14 @@ async function checkOrReuse(root: string, pluginPath: string, check: boolean) {
 async function existingSetup(
   root: string,
   pluginPath: string,
-  check: boolean,
-  refresh: boolean,
+  values: ReturnType<typeof options>,
 ) {
-  if (check && refresh)
-    throw new Error("--check cannot be combined with --refresh");
-  if (refresh) {
-    await requireConfiguration(root);
+  if (await definitionOperation(root, values)) return true;
+  if (values.refresh) {
+    await configuration(root);
     return false;
   }
-  return checkOrReuse(root, pluginPath, check);
+  return checkOrReuse(root, pluginPath, values.check);
 }
 
 async function bundlePlugin(root: string, store: string) {
@@ -126,6 +126,8 @@ function options() {
       store: { type: "string" },
       check: { type: "boolean", default: false },
       refresh: { type: "boolean", default: false },
+      migrate: { type: "boolean", default: false },
+      effective: { type: "boolean", default: false },
     },
   });
   if (values.review) reviewerModel(values["worker-model"]);
@@ -170,6 +172,34 @@ async function excludePlugin(root: string) {
   await writeFile(exclude, old + "\n/.amp/plugins/software-factory.js\n");
 }
 
+async function definitionOperation(
+  root: string,
+  values: ReturnType<typeof options>,
+) {
+  if (
+    [values.check, values.refresh, values.migrate, values.effective].filter(
+      Boolean,
+    ).length > 1
+  )
+    throw new Error(
+      "Choose only one of --check, --refresh, --migrate, --effective",
+    );
+  if (values.migrate) {
+    await migrateDefinition(root);
+    process.stdout.write(
+      "MIGRATION OK; definition is factory/definition.yaml\n",
+    );
+    return true;
+  }
+  if (values.effective) {
+    process.stdout.write(
+      JSON.stringify(await effectiveDefinition(root)) + "\n",
+    );
+    return true;
+  }
+  return false;
+}
+
 async function main() {
   const values = options();
   const workerEffort = parseWorkerEffort(values["worker-effort"]);
@@ -177,7 +207,7 @@ async function main() {
   const configPath = join(root, ".factory.json");
   const pluginPath = join(root, ".amp/plugins/software-factory.js");
   const refresh = values.refresh;
-  if (await existingSetup(root, pluginPath, values.check, refresh)) return;
+  if (await existingSetup(root, pluginPath, values)) return;
   if (!refresh) await initialInputs(root, values);
   const store = resolveStore(values.store);
   const plugin = await bundlePlugin(root, store);

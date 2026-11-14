@@ -242,7 +242,7 @@ process.exit(code);
       JSON.parse(git(remote, "show", "main:projects/alpha/manifest.json")),
     ).toEqual({
       projectKey: "alpha",
-      schemaVersion: 1,
+      schemaVersion: 2,
       applicationRevision: git(project, "rev-parse", "HEAD"),
     });
     expect((await backup(project)).lastConfirmed?.revision).toBe(revision);
