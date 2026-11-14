@@ -7,6 +7,8 @@
 - Risk: elevated; incidental events must not hide a stall or cause duplicate workers.
 - Depends on: foreman-watchdog-ticket1.
 - Planned at: `2c00930f414d29708ad022384d5c1912ce6b067a`, 2026-11-14. Local only.
+- Native accepted at attempt one on candidate `4f4f3c4d15afe6cc51f12f01007688dd1777a276`, then
+  merged through PR #12 on 2026-11-14. Live alert delivery is foreman-watchdog-ticket3.
 
 ## Why this matters
 
@@ -83,7 +85,7 @@ Run shared preflight in `docs/v1-execution.md`; authoring has not run implementa
 
 ## Done when
 
-- [ ] Unresolved incidents cause bounded nudges and first-threshold user-alert intent.
-- [ ] Diagnostic events cannot conceal a stall; active/unknown work cannot be duplicated.
-- [ ] Excessive repair attempts request non-blocking alerts independently of progress timing.
-- [ ] Full gates, guard and fresh cold review pass with restart and threshold-boundary evidence.
+- [x] Unresolved incidents cause bounded nudges and first-threshold user-alert intent.
+- [x] Diagnostic events cannot conceal a stall; active/unknown work cannot be duplicated.
+- [x] Excessive repair attempts request non-blocking alerts independently of progress timing.
+- [x] Full gates, guard and fresh cold review pass with restart and threshold-boundary evidence.

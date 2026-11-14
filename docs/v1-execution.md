@@ -114,7 +114,8 @@ Definition [v1-ticket2](feats/v1/v1-ticket2.md) passed native gates and fresh co
 four on candidate `901ae38e20fc3517170b43c8b9bea78f6920add1`. It was transferred from the previous
 coordinator orb as a checksum-verified Git bundle, merged onto parent main by the Foreman, and
 passed the combined gate with 150 tests. foreman-watchdog-ticket1 was then accepted natively at
-attempt two and merged through PR #8; see workflow trial 11. foreman-watchdog-ticket2 and safe
+attempt two and merged through PR #8; see workflow trial 11. foreman-watchdog-ticket2 was accepted
+at attempt one and merged through PR #12; see workflow trial 12. foreman-watchdog-ticket3 and safe
 planned intake are next. Keep preserved backup owners until required evidence preservation is
 confirmed. Native acceptance does not authorize retirement.
 

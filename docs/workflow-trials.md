@@ -351,6 +351,32 @@ Edge cases this run exposed:
 
 Accepted work still crosses from the clone to the parent by hand. Nothing was retired.
 
+## Trial 12 passed: watchdog ticket 2 accepted on its first attempt
+
+2026-11-14. `foreman-watchdog-ticket2` ran through the native factory on the dogfood clone, with
+watchdog ticket 1 live in the installed plugin. One Sol 6.1 medium worker implemented it; a fresh
+Fable 5.2 reviewer checked the pinned revision.
+
+- Candidate 1 at `4f4f3c4` passed the full gate and the cold review with no findings. Its commit
+  already carried both Amp trailers.
+- The Foreman cherry-picked it onto parent main, reran the full gate (165 tests) and merged PR #12
+  only after the `quality` check passed on its exact head.
+
+Durations from the factory's `events` table: 43 min 24 s from dispatch to the candidate reaching
+review, 5 min 19 s of cold review, and 48 min 54 s from dispatch to accepted.
+
+Edge cases this run exposed:
+
+- The worker messaged the Foreman before its own thread went idle. The factory reads a candidate
+  only from an idle worker, so the first `reconcile` did nothing and wrote no event. The Foreman
+  reconciled again about five minutes later.
+- Nothing woke the Foreman for the candidate or the verdict; no stop occurred, so ticket 1's
+  notices had nothing to deliver. Live wake-up of a real Foreman thread remains unproven.
+- The event log has no row for a submitted candidate or a gate start, so worker time and gate time
+  cannot be separated. Integration, CI and merge write no rows either.
+- The coordinator database has never been backed up. The backup command needs a private
+  repository that does not exist yet.
+
 [trial-artifact]:
   https://ampcode.com/artifacts/factory-workflow-trials-36c5101e-8f2e-4e6c-ab3f-0a4425873f7e
 [source-workflow]: https://ampcode.com/threads/T-01a1ce51-ec2c-73cf-9b63-a2eb9f40442b
