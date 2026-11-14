@@ -12,6 +12,7 @@ import {
 } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import definitionSchema from "./definition.schema.json";
+import type { Executor } from "./executor";
 import {
   deliverAlerts,
   reconcileSchedule,
@@ -129,6 +130,7 @@ export type NativeHost = {
     model: `${string}/${string}`,
     effort?: AgentReasoningEffort,
     role?: "reviewer",
+    executor?: Executor,
   ): Promise<ThreadID>;
   send(thread: ThreadID, message: string): Promise<void>;
   /** Observe activity; unavailable evidence is unknown and preserves running ownership. */
@@ -284,11 +286,19 @@ function workerRole(raw: Record<string, unknown>) {
   const [provider, ...name] = model.split("/");
   const workerModel: `${string}/${string}` = `${provider}/${name.join("/")}`;
   const workerEffort = parseWorkerEffort(raw.workerEffort);
+  const workerRunner =
+    raw.workerRunner === undefined ? undefined : text(raw.workerRunner);
   if (raw.review !== undefined && typeof raw.review !== "boolean")
     throw new Error("Invalid review; expected boolean");
   const review = raw.review === true;
   if (review) reviewerModel(workerModel);
-  return { workerModel, workerEffort, review };
+  return { workerModel, workerEffort, workerRunner, review };
+}
+
+function workerExecutor(workerRunner: string | undefined): Executor {
+  return workerRunner === undefined
+    ? "local"
+    : { type: "runner", id: workerRunner };
 }
 
 function allowedScope(root: string, value: unknown) {
@@ -427,6 +437,7 @@ export async function effectiveConfiguration(root: string) {
         setup: loaded.setup,
         watchdog: loaded.watchdog ?? defaultWatchdog,
         workerEffort: loaded.workerEffort,
+        workerRunner: loaded.workerRunner,
       }
     : current;
 }
@@ -441,6 +452,7 @@ function definitionPin(
     review,
     workerModel,
     workerEffort,
+    workerRunner,
     instructions,
     tickets,
     setup,
@@ -453,6 +465,7 @@ function definitionPin(
     review,
     workerModel,
     ...(workerEffort === undefined ? {} : { workerEffort }),
+    ...(workerRunner === undefined ? {} : { workerRunner }),
     instructions,
     tickets,
     setup,
@@ -1411,6 +1424,7 @@ export function createFactory(
             definition: run.definition,
             thread: run.thread,
             reason: "Integration target changed; reconcile before landing",
+            executor: run.executor,
           };
           commit(task.id, "blocked", "target-changed", "target-changed");
           return;
@@ -1426,6 +1440,7 @@ export function createFactory(
           kind: "done",
           definition: run.definition,
           thread: run.thread,
+          executor: run.executor,
           revision,
           review: run.review,
           insight:
@@ -1475,6 +1490,7 @@ export function createFactory(
             thread: run.thread,
             reason: `Verification rejected attempt ${run.attempt}; Foreman escalation required: ${evidence}`,
             repair: run,
+            executor: run.executor,
           };
           commit(task.id, "escalated", evidence, "verification-rejected");
         }
@@ -1526,6 +1542,7 @@ export function createFactory(
             definition: run.definition,
             thread: run.thread,
             reason: "Integration target changed; reconcile before landing",
+            executor: run.executor,
           };
           commit(task.id, "blocked", "target-changed", "target-changed");
           return;
@@ -1545,6 +1562,7 @@ export function createFactory(
           worktree,
           model,
           log,
+          executor: run.executor ?? "local",
           command: runDefinition(run, config, directory).verify,
           delivery: "creating",
           report: join(
@@ -1571,6 +1589,7 @@ export function createFactory(
           model,
           "high",
           "reviewer",
+          review.executor,
         );
         review.delivery = "queued";
         commit(task.id, "review-created", JSON.stringify(review));
@@ -1615,6 +1634,7 @@ export function createFactory(
             thread: run.thread,
             reason:
               "Reviewed candidate or integration base changed; revalidate before landing",
+            executor: run.executor,
           };
           commit(
             task.id,
@@ -1661,6 +1681,7 @@ export function createFactory(
             incident: run.incident,
             thread: run.thread,
             reason: "Delivery outcome unknown; inspect thread before recovery",
+            executor: run.executor,
           };
           commit(task.id, "uncertain", "delivery-unknown");
           return state;
@@ -1678,6 +1699,7 @@ export function createFactory(
             thread: run.thread,
             reason: `Worker ${activity}; inspect before resuming`,
             checkpoint: run,
+            executor: run.executor,
           };
           commit(task.id, "blocked", activity, activityReasons[activity]);
           return;
@@ -1691,6 +1713,7 @@ export function createFactory(
             thread: run.thread,
             reason: text(report.reason),
             checkpoint: run,
+            executor: run.executor,
           };
           commit(task.id, "blocked", text(report.reason));
           return;
@@ -1703,12 +1726,14 @@ export function createFactory(
       async function createWorker(task: Task, base: string, worktree: string) {
         const definition = state.runs[task.id]?.definition ?? config.digest;
         const pinned = factoryDefinition(directory, definition)!;
+        const executor = workerExecutor(pinned.workerRunner);
         if (state.runs[task.id]?.kind !== "creating") {
           state.runs[task.id] = {
             kind: "creating",
             base,
             worktree,
             definition,
+            executor,
           };
           commit(task.id, "creating", base);
         }
@@ -1716,10 +1741,13 @@ export function createFactory(
           state.owner!,
           pinned.workerModel,
           pinned.workerEffort,
+          undefined,
+          executor,
         );
         const run: Extract<Run, { kind: "running" }> = {
           kind: "running",
           definition,
+          executor,
           base,
           worktree,
           thread,
@@ -1837,6 +1865,7 @@ export function createFactory(
           base,
           worktree,
           definition: config.digest,
+          executor: workerExecutor(config.workerRunner),
         };
         commit(next.id, "creating", base);
         addWorktree(next, base, worktree);

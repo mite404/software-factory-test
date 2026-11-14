@@ -247,19 +247,20 @@ async function damageCandidate(
 }
 
 test.each([
-  ["valid", 1],
-  ["revision", 2],
-  ["dirty", 2],
-  ["scope", 2],
-  ["verification", 2],
-  ["integration", 1],
-  ["permission", 1],
-  ["responsive", 1],
-  ["review", 1],
-  ["escalation", 3],
+  ["valid", 1, undefined, "local"],
+  ["revision", 2, undefined, "local"],
+  ["dirty", 2, undefined, "local"],
+  ["scope", 2, undefined, "local"],
+  ["verification", 2, undefined, "local"],
+  ["integration", 1, undefined, "local"],
+  ["permission", 1, undefined, "local"],
+  ["responsive", 1, undefined, "local"],
+  ["review", 1, undefined, "local"],
+  ["review", 1, "fixture-runner", { type: "runner", id: "fixture-runner" }],
+  ["escalation", 3, undefined, "local"],
 ] as const)(
-  "disconnected recovery preserves ownership and the %s gate",
-  async (gate, attempt) => {
+  "disconnected recovery preserves the %s gate at attempt %s on runner %s",
+  async (gate, attempt, workerRunner, executor) => {
     const root = await mkdtemp(join(tmpdir(), "factory-plugin-"));
     const ready = join(root, ".git/factory/verify-ready");
     const release = join(root, ".git/factory/verify-release");
@@ -293,6 +294,7 @@ test.each([
           capacity: 1,
           workerModel: "openai/gpt-6.1-sol",
           review: gate === "review",
+          workerRunner,
           prd: "prd.md",
           tickets: "tickets.json",
           scope: ["src/"],
@@ -311,6 +313,7 @@ test.each([
       git(root, "commit", "-qm", "fixture");
       let creates = 0;
       const models: Parameters<PluginAPI["createAgent"]>[0][] = [];
+      const executors: unknown[] = [];
       const sends: string[] = [];
       const notices: string[] = [];
       let noticeFails = false;
@@ -345,7 +348,8 @@ test.each([
         createAgent(options: Parameters<PluginAPI["createAgent"]>[0]) {
           models.push(options);
           return {
-            async createThread() {
+            async createThread(options: { executor: unknown }) {
+              executors.push(options.executor);
               creates++;
               return { id: ["T-worker", "T-reviewer"][creates - 1] };
             },
@@ -428,8 +432,10 @@ test.each([
         }));
       load();
       const original = (await control("start")).runs.A;
+      expect(executors).toEqual([executor]);
       expect(original).toMatchObject({
         kind: "running",
+        executor,
         thread: "T-worker",
         attempt: 1,
         delivery: "sent",
@@ -623,6 +629,13 @@ test.each([
       }
       async function reviewCandidate() {
         if (gate !== "review") return;
+        const configPath = join(root, ".factory.json");
+        const savedConfig = await readFile(configPath, "utf8");
+        const nextConfig = JSON.parse(savedConfig);
+        nextConfig.workerRunner = "next-runner";
+        await writeFile(configPath, JSON.stringify(nextConfig));
+        await control("reload");
+        await writeFile(configPath, savedConfig);
         disconnected = false;
         const pending = (await control("reconcile")).runs.A;
         expect(pending).toMatchObject({
@@ -631,8 +644,10 @@ test.each([
             stage: "post-graft",
             thread: "T-reviewer",
             delivery: "sent",
+            executor,
           },
         });
+        expect(executors).toEqual([executor, executor]);
         expect(ledger).toEqual([]);
         expect(await readFile(join(root, "src/value"), "utf8")).toBe("old");
         expect(models[1]).toMatchObject({
@@ -696,6 +711,7 @@ test.each([
         kind: "done",
         thread: "T-worker",
         revision,
+        executor,
       });
       expect(await readFile(join(root, "src/value"), "utf8")).toBe("good");
       expect((await control("reconcile")).runs.A).toEqual(accepted);

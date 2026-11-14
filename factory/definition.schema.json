@@ -18,6 +18,7 @@
     "capacity": { "const": 1 },
     "mode": { "type": "string", "minLength": 1 },
     "workerModel": { "type": "string", "pattern": "^[^/]+/.+$" },
+    "workerRunner": { "type": "string", "pattern": "\\S" },
     "workerEffort": {
       "enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
     },

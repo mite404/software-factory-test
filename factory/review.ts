@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import type { ThreadID } from "./persistence";
+import { validExecutor, type Executor } from "./executor";
 
 export type Review = {
   ticket: string;
@@ -15,6 +16,7 @@ export type Review = {
   delivery: "creating" | "queued" | "sending" | "sent";
   thread?: ThreadID;
   evidence?: string;
+  executor?: Executor;
 };
 
 /** Validate persisted review ownership at the storage boundary. */
@@ -35,6 +37,7 @@ export function validReview(value: unknown): boolean {
     Number.isSafeInteger(row.attempt) &&
     Number(row.attempt) > 0 &&
     row.stage === "post-graft" &&
+    validExecutor(row.executor) &&
     new Set<unknown>(["creating", "queued", "sending", "sent"]).has(
       row.delivery,
     ) &&

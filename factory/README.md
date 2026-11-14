@@ -278,6 +278,28 @@ To change future workers, edit `workerModel` and `workerEffort` in the project d
 then reload. These settings apply only when creating a new worker. Corrections continue with
 the original settings, not a replacement.
 
+### Run workers on a supervised runner
+
+Set optional `workerRunner: "factory-dogfood"` in the project definition and reload to create
+future worker and reviewer threads with `{ type: "runner", id: "factory-dogfood" }`. The setting
+must be a nonblank string. It is pinned for the run, including review and same-worker repair.
+Without it, new threads use `local`, which uses the Foreman's current client as executor.
+Creation failure on the named runner remains visibly parked in `creating` with a creation-unknown
+incident. The factory never falls back to `local` or starts, stops, or supervises runners.
+
+The operator can supervise the runner from the factory repository root with:
+
+```sh
+amp orb service start factory-runner --command 'amp --no-tui --runner-id factory-dogfood'
+```
+
+New run and review records include `executor` in SQLite and factory control status. Historical
+records without that field mean `local`; opening them does not rewrite them or move their threads.
+The Foreman observed a runner-created test thread execute commands again after the runner service
+restarted. Creation through the plugin and tool continuity across a Foreman CLI or mid-turn runner
+restart remain unproven live. The Foreman owns that live proof after acceptance. Fixture hosts test
+the plugin request and durable records without creating real threads or running a real runner.
+
 ## Prepare worker worktrees
 
 Preparation is opt-in. Set `setup` to a shell command in the project definition, or pass

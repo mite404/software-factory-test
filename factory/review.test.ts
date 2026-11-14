@@ -226,7 +226,13 @@ test.each([
       expect(waiting.runs.A?.kind).toBe("running");
       expect(waiting.runs.B).toBeUndefined();
       expect(await readFile(join(f.root, "src/value"), "utf8")).toBe("old");
-      expect(f.settings[1]).toEqual(["T-owner", reviewer, "high", "reviewer"]);
+      expect(f.settings[1]).toEqual([
+        "T-owner",
+        reviewer,
+        "high",
+        "reviewer",
+        "local",
+      ]);
       const review = await f.review();
       expect(review.stage).toBe("post-graft");
       expect(review.worktree).not.toBe(f.worktree);
