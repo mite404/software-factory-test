@@ -31,8 +31,16 @@ review feedback, or an answer to a question. Find its current stage and continue
 5. Observe through native Amp events and supported structured APIs. Keep lifecycle observation
    independent of model and provider. Avoid model calls for polling or animation. Do not parse
    assistant prose to determine acceptance. If disconnected, preserve ownership and work before
-   recovery. CLI continuation needs explicit operator authorization; run a one-shot continuation
-   as a finite task, never an auto-restarting service.
+   recovery. The operator has given standing authorization to reconnect a disconnected worker or
+   reviewer with a one-shot `amp threads continue <thread ID> -x "<prompt>"`, so do not stop to
+   ask. A thread is disconnected when its tools fail with an executor error, or when it stays in
+   `running_tools` for three minutes after a delivery with no change in its worktree. Run the
+   continuation from that thread's worktree as a finite background shell task with stdin from
+   `/dev/null`, never as an auto-restarting service. Confirm the process has exited before
+   `reconcile`, and report each reconnection in your next reply. This authorization covers only
+   the same thread; it never permits a replacement worker or any other CLI continuation. Do not
+   pause the factory for a disconnection: it ignores a report whose attempt is not the current
+   one, so an idle worker with an older report is never read as a new candidate.
 6. Run `reconcile` once the worker is idle. Worker completion is a candidate, not acceptance, and
    you do not accept it yourself. The factory checks scope, a clean candidate tree, and the exact
    revision, then runs the definition's gate. A passing candidate goes to a cold reviewer: a fresh
