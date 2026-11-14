@@ -4,7 +4,8 @@
     "factory/plugin.ts",
     "factory/dashboard.ts",
     "factory/setup-factory.ts",
-    "web/index.html"
+    "web/index.html",
+    "web/replay.ts"
   ],
   "duplicates": { "minOccurrences": 3 },
   "rules": { "unused-dev-dependencies": "error" }

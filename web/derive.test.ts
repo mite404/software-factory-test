@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { derive, type Feed, type Task } from "./derive";
+import { feedAt, FRAMES } from "./replay";
 
 const NOW = Date.parse("2026-11-13T12:00:10Z");
 
@@ -206,4 +207,19 @@ test("a pending review is never drawn blocked, and a vanished review is a reject
   expect(derive(working, working, NOW).backRow).toBe(0);
   const landed = feed(["accepted", "accepted"]);
   expect(derive(dispatching, landed, NOW).backRow).toBe(0);
+});
+
+test("the recorded replay draws one reviewed landing, one rejection and one block", () => {
+  const views = FRAMES.map((_, n) =>
+    derive(n ? feedAt(n - 1) : null, feedAt(n), NOW),
+  );
+  const polls = (hit: (view: (typeof views)[number]) => unknown) =>
+    views.flatMap((view, n) => (hit(view) ? [n] : []));
+  expect(polls((view) => view.landed && view.reviewed)).toEqual([6]);
+  expect(polls((view) => view.backRow)).toEqual([3, 9]); // review vanished, then a plain block
+  expect(views[4]!.next).toBe("BACKUP-ADOPTION-TICKET1, WORKING · ATTEMPT 6");
+  // A long label leaves the steps less room: 9 + 44 characters end at 39 + 9.5 * 53 = 542.5,
+  // so (1060 - 16 - 542.5) / 6 = 83 characters of the 110 fit.
+  expect(views[4]!.activeSteps).toHaveLength(83);
+  expect(views[9]!.tally).toBe("3 landed · 0 queued · 1 blocked");
 });
