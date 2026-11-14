@@ -41,6 +41,7 @@ export type Run =
       reason: string;
       thread?: ThreadID;
       repair?: Extract<Run, { kind: "running" }>;
+      checkpoint?: Extract<Run, { kind: "running" }>;
     }
   | { kind: "uncertain"; reason: string; thread: ThreadID }
   | {
@@ -122,8 +123,11 @@ const runValidators: Record<string, (run: Record<string, unknown>) => boolean> =
     blocked: (run) =>
       text(run.reason) &&
       (run.thread === undefined || thread(run.thread)) &&
+      (run.checkpoint === undefined ||
+        (run.repair === undefined &&
+          validRepair(run.checkpoint, run.thread))) &&
       (run.repair === undefined ||
-        (validRepair(run.repair) && run.repair.thread === run.thread)),
+        (validRepair(run.repair, run.thread) && run.repair.attempt % 2 === 0)),
     uncertain: (run) => text(run.reason) && thread(run.thread),
     done: (run) =>
       text(run.revision) &&
@@ -134,12 +138,13 @@ const runValidators: Record<string, (run: Record<string, unknown>) => boolean> =
 
 function validRepair(
   value: unknown,
+  originalThread: unknown,
 ): value is Extract<Run, { kind: "running" }> {
   const run = record(value);
   return (
     run.kind === "running" &&
     runValidators.running!(run) &&
-    Number(run.attempt) % 2 === 0 &&
+    run.thread === originalThread &&
     Number.isSafeInteger(Number(run.attempt) + 1) &&
     run.delivery === "sent" &&
     run.review === undefined

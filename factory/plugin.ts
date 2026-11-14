@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { DashboardSnapshot } from "./dashboard";
-import type { Run } from "./persistence";
+import { factoryStatus, type Run } from "./persistence";
 import {
   configuration,
   createFactory,
@@ -102,7 +102,14 @@ export default function registerFactory(
           role === "reviewer"
             ? "Independently review the named post-graft code artifact. Read only code, requirements and coordinator gate evidence. Do not implement or delegate. Write only the requested verdict report."
             : "Implement the assigned factory ticket in its named local repository. Keep tool output concise.",
-        tools: ["shell_command", "shell_command_status", "apply_patch", "Read"],
+        tools: [
+          "shell_command",
+          "shell_command_status",
+          "apply_patch",
+          "Read",
+          "send_thread_message",
+          "plugin__*",
+        ],
         features: [],
       });
       const thread = await agent.createThread({
@@ -138,6 +145,31 @@ export default function registerFactory(
     },
   };
   const factory = createFactory(root, host, openStore);
+
+  async function messageForeman(
+    message: unknown,
+    caller: Parameters<NativeHost["send"]>[0],
+  ) {
+    if (typeof message !== "string" || !message.trim())
+      throw new Error("Message requires nonempty text");
+    const state = factoryStatus(factory.directory);
+    if (
+      !state.owner ||
+      !Object.values(state.runs).some(
+        (run) =>
+          (run.kind === "running" ||
+            run.kind === "blocked" ||
+            run.kind === "uncertain") &&
+          (run.thread === caller ||
+            ("review" in run && run.review?.thread === caller)),
+      )
+    )
+      throw new Error(
+        "Only a registered active worker or reviewer may message its Foreman",
+      );
+    await host.send(state.owner, `Factory worker ${caller}: ${message}`);
+    return JSON.stringify({ delivered: true, thread: state.owner });
+  }
 
   async function reviewProjection(
     run: Run,
@@ -221,7 +253,7 @@ export default function registerFactory(
   const suffix = createHash("sha256").update(root).digest("hex").slice(0, 8);
   amp.registerTool({
     name: `factory_control_${suffix}`,
-    description: `Control the factory in ${root}. status is read-only. start requires explicit user authorization and permissions.execute=true in .factory.json. pause stops dispatch. reconcile observes persisted work without granting permissions. retry-setup explicitly reruns parked preparation in the same worktree before creating a worker. resume requires the owning Foreman, a blocked ticket, and a decision explaining the next repair; it queues the same worker without starting a paused factory or accepting code.`,
+    description: `Control the factory in ${root}. status is read-only. message-foreman delivers message text from a registered worker or reviewer to the owning Foreman without granting control; delivery errors have unknown outcomes, so do not retry blindly. start requires explicit user authorization and permissions.execute=true in .factory.json. pause stops dispatch. reconcile observes persisted work without granting permissions. retry-setup explicitly reruns parked preparation in the same worktree before creating a worker. resume requires the owning Foreman, a blocked ticket, and a decision explaining the next repair; it queues the same worker without starting a paused factory or accepting code.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -234,16 +266,20 @@ export default function registerFactory(
             "reconcile",
             "retry-setup",
             "resume",
+            "message-foreman",
           ],
         },
         ticket: { type: "string" },
         decision: { type: "string" },
+        message: { type: "string", minLength: 1 },
       },
       required: ["action"],
       additionalProperties: false,
     },
     async execute(input, ctx) {
       const action = input.action;
+      if (action === "message-foreman")
+        return messageForeman(input.message, ctx.thread.id);
       if (
         action !== "status" &&
         action !== "start" &&

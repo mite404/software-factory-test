@@ -542,7 +542,7 @@ export function createFactory(
         ? [`${id}: ${dependency.insight} (${dependency.revision})`]
         : [];
     });
-    return `Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAllowed paths: ${config.scope.join(", ")}. Check: ${config.verify}.\nDependency evidence: ${insights.join("; ") || "none"}.\n${run.feedback ? `Repair feedback: ${run.feedback}\n` : ""}Use a local commit for the change. Do not push, deploy, create tickets, edit factory files, or delegate.\nAfter finishing, write JSON to ${join(directory, `${task.id}.report.json`)}: {"attempt":${run.attempt},"kind":"candidate","revision":"<full git HEAD>","insight":"<short verified finding>"}. If blocked, use {"attempt":${run.attempt},"kind":"blocked","reason":"<needed decision>"}. Report briefly here too.`;
+    return `Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAllowed paths: ${config.scope.join(", ")}. Check: ${config.verify}.\nDependency evidence: ${insights.join("; ") || "none"}.\n${run.feedback ? `Repair feedback: ${run.feedback}\n` : ""}Use a local commit for the change. Do not push, deploy, create tickets, edit factory files, or delegate.\nForeman: ${stateCache.owner}. Send questions and blockers there with send_thread_message, or the factory control action message-foreman with message text. Messaging does not grant factory control.\nAfter finishing, write JSON to ${join(directory, `${task.id}.report.json`)}: {"attempt":${run.attempt},"kind":"candidate","revision":"<full git HEAD>","insight":"<short verified finding>"}. If blocked, use {"attempt":${run.attempt},"kind":"blocked","reason":"<needed decision>"}. Report briefly here too.`;
   }
 
   let stateCache: State = { enabled: false, runs: {} };
@@ -566,11 +566,41 @@ export function createFactory(
         persistence!.commit(state, ticket, action, detail);
       stateCache = state;
       controlState(state, action, config.execute, owner);
-      async function repairCheckpoint(
+      async function preflightCheckpoint(
+        task: Task,
+        blocked: Extract<Run, { kind: "blocked" }>,
+        preflight: Record<string, unknown>,
+      ): Promise<Extract<Run, { kind: "running" }>> {
+        if (!blocked.thread) throw new Error("No resumable worker checkpoint");
+        const base = text(persistence!.lastEvent(task.id, "creating"));
+        const worktree = join(directory, "worktrees", task.id);
+        if (
+          preflight.reason !== blocked.reason ||
+          ["created", "sending", "sent"].some(
+            (action) =>
+              persistence!.lastEvent(task.id, action) !== blocked.thread,
+          ) ||
+          ["rejected", "repair-resumed", "review-created"].some(
+            (action) => persistence!.lastEvent(task.id, action) !== undefined,
+          ) ||
+          git(worktree, "rev-parse", "HEAD") !== base
+        )
+          throw new Error("Missing pre-upgrade preflight evidence");
+        return {
+          kind: "running",
+          thread: blocked.thread,
+          worktree,
+          base,
+          attempt: 1,
+          delivery: "sent",
+          workerModel: config.workerModel,
+          requirements: `${task.brief}\n${await readFile(config.prd, "utf8")}`,
+        };
+      }
+      async function legacyRepairCheckpoint(
         task: Task,
         blocked: Extract<Run, { kind: "blocked" }>,
       ): Promise<Extract<Run, { kind: "running" }>> {
-        if (blocked.repair) return blocked.repair;
         if (!blocked.thread)
           throw new Error("No resumable verification checkpoint");
         const verdict = text(persistence!.lastEvent(task.id, "review-verdict"));
@@ -603,6 +633,17 @@ export function createFactory(
           workerModel: config.workerModel,
           requirements: `${task.brief}\n${await readFile(config.prd, "utf8")}`,
         };
+      }
+      async function repairCheckpoint(
+        task: Task,
+        blocked: Extract<Run, { kind: "blocked" }>,
+      ) {
+        const saved = blocked.repair ?? blocked.checkpoint;
+        if (saved) return saved;
+        const preflight = await currentReport(directory, task, 1);
+        return preflight?.kind === "blocked"
+          ? preflightCheckpoint(task, blocked, preflight)
+          : legacyRepairCheckpoint(task, blocked);
       }
       async function verifyRepair(repair: Extract<Run, { kind: "running" }>) {
         if ((await observe(repair.thread)) !== "idle")
@@ -693,11 +734,12 @@ export function createFactory(
         run: Extract<Run, { kind: "running" }>,
         message: string,
       ) {
-        if (run.feedback && run.attempt % 2 === 1) await verifyRepair(run);
+        if (run.feedback) await verifyRepair(run);
         run.delivery = "sending";
         commit(task.id, "sending", run.thread);
         await host.send(run.thread, message);
         run.delivery = "sent";
+        delete run.feedback;
         commit(task.id, "sent", run.thread);
       }
 
@@ -941,6 +983,7 @@ export function createFactory(
             kind: "blocked",
             thread: run.thread,
             reason: `Worker ${activity}; inspect before resuming`,
+            checkpoint: run,
           };
           commit(task.id, "blocked", activity);
           return;
@@ -952,6 +995,7 @@ export function createFactory(
             kind: "blocked",
             thread: run.thread,
             reason: text(report.reason),
+            checkpoint: run,
           };
           commit(task.id, "blocked", text(report.reason));
           return;

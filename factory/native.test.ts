@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { configuration, createFactory, tasks, type NativeHost } from "./native";
 import { openStore } from "./bookkeeping.fixture";
+import { openPersistence } from "./persistence";
 
 const installer = resolve(import.meta.dir, "setup-factory.ts");
 const preparationRoots: string[] = [];
@@ -136,6 +137,100 @@ afterEach(async () => {
   for (const root of preparationRoots.splice(0))
     await rm(root, { recursive: true, force: true });
 });
+
+test.each([false, true])(
+  "owner resumes a preflight blocker in the original worker (legacy=%s)",
+  async (legacy) => {
+    const f = await preparationFixture(() => "");
+    await f.factory().tick("start", "T-owner");
+    await f.factory().tick("reconcile");
+    const original = (await f.factory().tick("status")).runs.A!;
+    expect(original.kind).toBe("running");
+    const directory = join(f.root, ".git/factory");
+    await writeFile(
+      join(directory, "A.report.json"),
+      JSON.stringify({
+        kind: "blocked",
+        attempt: 1,
+        reason: "Missing baseline",
+      }),
+    );
+    f.host.state = async () => "idle";
+    const state = await f.factory().tick("reconcile");
+    expect(state.runs.A).toMatchObject({
+      kind: "blocked",
+      thread: "T-prepared",
+    });
+    await f.factory().tick("pause");
+    if (legacy) {
+      const db = openPersistence(directory, []);
+      db.state.runs.A = {
+        kind: "blocked",
+        thread: "T-prepared",
+        reason: "Missing baseline",
+      };
+      db.commit(
+        db.state,
+        "factory",
+        "legacy-fixture",
+        "Plain pre-upgrade block",
+      );
+      db.close();
+    }
+    const request = { ticket: "A", decision: "Baseline restored; continue" };
+    expect(
+      f.factory().tick("resume", "T-prepared", f.host.state, request),
+    ).rejects.toThrow(/Workers/);
+    expect(
+      f.factory().tick("resume", "T-stranger", f.host.state, request),
+    ).rejects.toThrow(/Foreman/);
+    expect(
+      f.factory().tick("resume", "T-owner", async () => "unknown", request),
+    ).rejects.toThrow(/idle/);
+    await writeFile(join(f.worktree, "unfinished"), "retain");
+    expect(
+      f.factory().tick("resume", "T-owner", f.host.state, request),
+    ).rejects.toThrow(/changed/);
+    await rm(join(f.worktree, "unfinished"));
+    const resumed = await f
+      .factory()
+      .tick("resume", "T-owner", f.host.state, request);
+    expect(resumed.enabled).toBe(false);
+    expect(resumed.runs.A).toMatchObject({
+      kind: "running",
+      thread: "T-prepared",
+      attempt: 2,
+      delivery: "queued",
+    });
+    expect(f.counts()).toEqual({ creates: 1, sends: 1 });
+    expect(
+      f.factory().tick("resume", "T-owner", f.host.state, request),
+    ).rejects.toThrow(/blocked/);
+    const base = f.git("rev-parse", "HEAD");
+    f.git(
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "commit",
+      "--allow-empty",
+      "-qm",
+      "moved base",
+    );
+    expect(f.factory().tick("start", "T-owner")).rejects.toThrow(/changed/);
+    expect(f.counts()).toEqual({ creates: 1, sends: 1 });
+    f.git("reset", "--hard", base);
+    await f.factory().tick("start", "T-owner");
+    await f.factory().tick("reconcile");
+    expect((await f.factory().tick("status")).runs.A).toMatchObject({
+      kind: "running",
+      attempt: 2,
+      delivery: "sent",
+      thread: "T-prepared",
+    });
+    expect(f.counts()).toEqual({ creates: 1, sends: 2 });
+  },
+);
 
 test.each(["", "bun install --frozen-lockfile && "])(
   "setup %s finishes before worker creation and delivery",

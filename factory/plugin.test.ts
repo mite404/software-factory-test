@@ -35,6 +35,11 @@ test("plugin and HTTP keep private briefs and native titles out of public titles
   }));
   let dispose = () => {};
   let server: ReturnType<typeof startDashboard> | undefined;
+  let execute!: (
+    input: Record<string, unknown>,
+    ctx: PluginToolContext,
+  ) => Promise<unknown>;
+  const forwarded: { id: string; content: unknown }[] = [];
   try {
     git(root, "init", "-q");
     await writeFile(join(root, "prd.md"), "Fixture");
@@ -78,6 +83,7 @@ test("plugin and HTTP keep private briefs and native titles out of public titles
     storage.commit(
       {
         enabled: false,
+        owner: "T-owner",
         runs: {
           failed: { ...running, thread: "T-failed" },
           missing: { ...running, thread: "T-missing" },
@@ -108,6 +114,9 @@ test("plugin and HTTP keep private briefs and native titles out of public titles
       threads: {
         get(id: string) {
           return {
+            async appendUserMessage(message: { content: unknown }) {
+              forwarded.push({ id, content: message.content });
+            },
             state: {
               async get() {
                 return "running";
@@ -129,7 +138,9 @@ test("plugin and HTTP keep private briefs and native titles out of public titles
         },
       },
       logger: { log() {} },
-      registerTool() {},
+      registerTool(tool: { execute: typeof execute }) {
+        execute = tool.execute;
+      },
       onDispose(fn: () => void) {
         dispose = fn;
       },
@@ -139,6 +150,35 @@ test("plugin and HTTP keep private briefs and native titles out of public titles
       async close() {},
       ledger: { async record() {} },
     }));
+    const worker = {
+      thread: { id: "T-worker" },
+    } as unknown as PluginToolContext;
+    const contact = {
+      action: "message-foreman",
+      message: "Need baseline decision",
+    };
+    await execute(contact, worker);
+    expect(forwarded).toEqual([
+      {
+        id: "T-owner",
+        content: expect.stringContaining("T-worker: Need baseline decision"),
+      },
+    ]);
+    expect(execute({ ...contact, message: " " }, worker)).rejects.toThrow(
+      /nonempty/,
+    );
+    expect(
+      execute(contact, {
+        thread: { id: "T-stranger" },
+      } as unknown as PluginToolContext),
+    ).rejects.toThrow(/worker/);
+    expect(
+      execute(
+        { action: "resume", ticket: "native", decision: "Override" },
+        worker,
+      ),
+    ).rejects.toThrow(/Workers/);
+    expect(forwarded).toHaveLength(1);
     const path = join(directory, "dashboard.json");
     for (let i = 0; !existsSync(path) && i < 1200; i++) await Bun.sleep(5);
     const snapshot = JSON.parse(await readFile(path, "utf8"));
@@ -263,11 +303,7 @@ test.each([
       git(root, "add", ".");
       git(root, "commit", "-qm", "fixture");
       let creates = 0;
-      const models: {
-        model: string;
-        reasoningEffort?: string;
-        instructions: string;
-      }[] = [];
+      const models: Parameters<PluginAPI["createAgent"]>[0][] = [];
       const sends: string[] = [];
       const ledger: string[] = [];
       let disconnected = false;
@@ -292,11 +328,7 @@ test.each([
         };
       };
       const amp = {
-        createAgent(options: {
-          model: string;
-          reasoningEffort?: string;
-          instructions: string;
-        }) {
+        createAgent(options: Parameters<PluginAPI["createAgent"]>[0]) {
           models.push(options);
           return {
             async createThread() {
@@ -379,6 +411,9 @@ test.each([
         thread: "T-worker",
         attempt: 1,
         delivery: "sent",
+      });
+      expect(models[0]).toMatchObject({
+        tools: expect.arrayContaining(["send_thread_message"]),
       });
       await control("reconcile");
       expect(fallbackCalls).toBe(0);
