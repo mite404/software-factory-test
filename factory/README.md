@@ -225,6 +225,15 @@ Metadata must identify the configured repository as private on GitHub.com before
 proceeds, with explicit `PRIVATE` visibility. Enterprise-internal repositories are refused.
 Both the metadata lookup and publication target GitHub.com, regardless of `GH_HOST`.
 
+Commits and rebases use the identity Git resolves in the retained backup workspace, including
+identity environment variables. If Git cannot resolve an identity, the command falls back to
+`Factory backup <factory@localhost>` for that invocation. It never writes Git configuration or
+disables signing. If signing requires a particular identity, configure that identity through your
+existing Git settings. A refused commit reports `Backup commit was refused; inspect commit identity
+and signing configuration`, retains the last confirmed receipt, and leaves generated files staged
+for inspection. Fix the identity or signing configuration and retry. Raw Git diagnostics stay
+hidden.
+
 Only `projects/<projectKey>/state.sqlite` and `manifest.json` are staged. The manifest contains the
 stable project key, schema version, and application revision. SQLite `VACUUM INTO` creates a
 consistent snapshot, then `integrity_check` validates it. Both run asynchronously outside the

@@ -167,15 +167,31 @@ async function remoteContains(workspace: string, publication: Publication) {
   );
 }
 
-async function rebaseBackup(workspace: string, branch: string) {
+async function commitIdentity(workspace: string) {
   try {
-    await command(
-      workspace,
-      "git",
+    await command(workspace, "git", "var", "GIT_AUTHOR_IDENT");
+    await command(workspace, "git", "var", "GIT_COMMITTER_IDENT");
+    return [];
+  } catch {
+    return [
       "-c",
       "user.name=Factory backup",
       "-c",
       "user.email=factory@localhost",
+    ];
+  }
+}
+
+async function rebaseBackup(
+  workspace: string,
+  branch: string,
+  identity: string[],
+) {
+  try {
+    await command(
+      workspace,
+      "git",
+      ...identity,
       "rebase",
       "--no-autostash",
       `refs/remotes/origin/${branch}`,
@@ -335,7 +351,8 @@ export async function backup(root: string): Promise<Receipt> {
     )
       return receipt;
     await fetch();
-    await rebaseBackup(workspace, branch);
+    const identity = await commitIdentity(workspace);
+    await rebaseBackup(workspace, branch, identity);
     const { snapshot, schemaVersion } = await snapshotDatabase(root, directory);
     const path = join(workspace, "projects", target.projectKey);
     // Reject remote symlinks before writing the allowlisted project files.
@@ -365,17 +382,19 @@ export async function backup(root: string): Promise<Receipt> {
       `projects/${target.projectKey}/state.sqlite`,
       `projects/${target.projectKey}/manifest.json`,
     );
-    if (await git(workspace, "diff", "--cached", "--name-only"))
+    if (await git(workspace, "diff", "--cached", "--name-only")) {
       await git(
         workspace,
-        "-c",
-        "user.name=Factory backup",
-        "-c",
-        "user.email=factory@localhost",
+        ...identity,
         "commit",
         "-m",
         "Back up factory state",
-      );
+      ).catch(() => {
+        throw new BackupRefusal(
+          "Backup commit was refused; inspect commit identity and signing configuration",
+        );
+      });
+    }
     const publication = {
       ...target,
       branch,
