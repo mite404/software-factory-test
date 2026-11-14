@@ -3,6 +3,7 @@ import type { AgentReasoningEffort } from "@ampcode/plugin";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { validReview, type Review } from "./review";
+import { validExecutor, type Executor } from "./executor";
 
 export type ThreadID = `T-${string}`;
 export type WatchdogPolicy = {
@@ -54,6 +55,7 @@ export type DefinitionPin = {
   review: boolean;
   workerModel: `${string}/${string}`;
   workerEffort?: AgentReasoningEffort;
+  workerRunner?: string;
   instructions: string;
   tickets: string;
   watchdog?: WatchdogPolicy;
@@ -111,7 +113,12 @@ export type Run = (
       insight: string;
       review?: Review;
     }
-) & { definition?: string; incident?: StopIncident; watchdog?: Watchdog };
+) & {
+  definition?: string;
+  incident?: StopIncident;
+  watchdog?: Watchdog;
+  executor?: Executor;
+};
 export type State = {
   enabled: boolean;
   owner?: ThreadID;
@@ -141,6 +148,10 @@ function record(value: unknown): Record<string, unknown> {
 
 function text(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function optionalText(value: unknown): boolean {
+  return value === undefined || text(value);
 }
 
 /** Parse ordered authored labels; missing legacy labels become empty. @throws On malformed labels. */
@@ -225,8 +236,8 @@ function preparationRun(run: Record<string, unknown>): boolean {
 
 function reviewFields(run: Record<string, unknown>): boolean {
   return (
-    ["workerModel", "requirements", "feedback"].every(
-      (key) => run[key] === undefined || text(run[key]),
+    ["workerModel", "requirements", "feedback"].every((key) =>
+      optionalText(run[key]),
     ) &&
     (run.review === undefined || validReview(run.review))
   );
@@ -268,6 +279,7 @@ function validRepair(
   return (
     run.kind === "running" &&
     runValidators.running!(run) &&
+    validExecutor(run.executor) &&
     run.thread === originalThread &&
     Number.isSafeInteger(Number(run.attempt) + 1) &&
     run.delivery === "sent" &&
@@ -278,6 +290,22 @@ function validRepair(
 
 function validDigest(value: unknown): value is string {
   return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+}
+
+function workerSettings(pin: Record<string, unknown>): boolean {
+  return (
+    optionalText(pin.workerRunner) &&
+    new Set<unknown>([
+      undefined,
+      "none",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]).has(pin.workerEffort)
+  );
 }
 
 function definitionFields(value: unknown) {
@@ -298,16 +326,7 @@ function definitionFields(value: unknown) {
     typeof pin.review === "boolean" &&
     typeof pin.instructions === "string" &&
     (pin.watchdog === undefined || validWatchdogPolicy(pin.watchdog)) &&
-    new Set<unknown>([
-      undefined,
-      "none",
-      "minimal",
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-      "max",
-    ]).has(pin.workerEffort)
+    workerSettings(pin)
   );
 }
 
@@ -346,6 +365,8 @@ function validateRun(id: string, value: unknown) {
   const run = record(value);
   validateIncident(id, run.incident);
   validateTiming(id, run);
+  if (!validExecutor(run.executor))
+    throw new Error(`Invalid factory executor ${id}`);
   if (run.definition !== undefined && !validDigest(run.definition))
     throw new Error(`Invalid definition pin ${id}`);
   const validate =

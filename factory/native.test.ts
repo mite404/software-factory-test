@@ -168,6 +168,25 @@ afterEach(async () => {
     await rm(root, { recursive: true, force: true });
 });
 
+test("invalid worker runner settings reject dispatch before creating a thread", async () => {
+  const f = await preparationFixture(() => "");
+  const path = join(f.root, ".factory.json");
+  const raw = await Bun.file(path).json();
+  for (const workerRunner of [null, "", " \t", 42, {}, []]) {
+    await writeFile(path, JSON.stringify({ ...raw, workerRunner }));
+    expect(f.factory().tick("start", "T-owner")).rejects.toThrow(
+      "Expected nonempty text",
+    );
+    expect(f.counts()).toEqual({ creates: 0, sends: 0 });
+  }
+  await writeFile(path, JSON.stringify(raw));
+  expect((await f.factory().tick("start", "T-owner")).runs.A).toMatchObject({
+    kind: "running",
+    executor: "local",
+  });
+  expect(f.counts()).toEqual({ creates: 1, sends: 1 });
+});
+
 test("connected watchdog gates start, restores registration on reload and denies nonowners before effects", async () => {
   const f = await preparationFixture(() => "");
   let at = 1000;
@@ -2042,6 +2061,7 @@ test("unknown remote creation or delivery never starts replacement or independen
       ).toBe(0);
       const config = await Bun.file(join(root, ".factory.json")).json();
       config.permissions.execute = true;
+      config.workerRunner = "unavailable-runner";
       await writeFile(join(root, ".factory.json"), JSON.stringify(config));
       await writeFile(
         join(root, ".factory-tickets.json"),
@@ -2066,8 +2086,10 @@ test("unknown remote creation or delivery never starts replacement or independen
       ]);
       let creates = 0;
       let sends = 0;
+      const executors: unknown[] = [];
       const host: NativeHost = {
-        async create() {
+        async create(_parent, _model, _effort, _role, executor) {
+          executors.push(executor);
           creates++;
           if (failure === "create") throw new Error("lost creation response");
           return "T-unknown";
@@ -2090,6 +2112,11 @@ test("unknown remote creation or delivery never starts replacement or independen
       await reopened.tick("reconcile");
       expect(creates).toBe(1);
       expect(sends).toBe(failure === "create" ? 0 : 1);
+      expect(executors).toEqual([{ type: "runner", id: "unavailable-runner" }]);
+      expect((await reopened.tick("status")).runs.X).toMatchObject({
+        kind: failure === "create" ? "creating" : "uncertain",
+        executor: { type: "runner", id: "unavailable-runner" },
+      });
       expect((await reopened.tick("status")).runs.Y).toBeUndefined();
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -2136,7 +2163,10 @@ test.each(["high", undefined])(
       const config = await Bun.file(join(root, ".factory.json")).json();
       config.permissions.execute = true;
       if (effort === undefined) delete config.workerEffort;
-      else config.workerEffort = effort;
+      else {
+        config.workerEffort = effort;
+        config.workerRunner = "repair-runner";
+      }
       await writeFile(join(root, ".factory.json"), JSON.stringify(config));
       const savedConfig = await readFile(join(root, ".factory.json"), "utf8");
       expect((await configuration(root)).workerEffort).toBe(effort);
@@ -2182,7 +2212,17 @@ test.each(["high", undefined])(
           .toString(),
       ).toBe("SQLite format 3\u0000");
       expect(created).toBe(1);
-      expect(settings).toEqual([["T-owner", "openai/gpt-6.1-sol", effort]]);
+      expect(settings).toEqual([
+        [
+          "T-owner",
+          "openai/gpt-6.1-sol",
+          effort,
+          undefined,
+          effort === undefined
+            ? "local"
+            : { type: "runner", id: "repair-runner" },
+        ],
+      ]);
       const worktree = join(root, ".git/factory/worktrees/A");
       expect(await Bun.file(join(worktree, "src/value")).exists()).toBe(true);
       const candidate = async (
@@ -2362,6 +2402,10 @@ test.each(["high", undefined])(
           "T-owner",
           "openai/gpt-6.1-sol",
           effort,
+          undefined,
+          effort === undefined
+            ? "local"
+            : { type: "runner", id: "repair-runner" },
         ]),
       );
     } finally {

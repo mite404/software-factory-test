@@ -135,7 +135,13 @@ export default function registerFactory(
   }
 
   const host: NativeHost = {
-    async create(parentThreadID, model, reasoningEffort, role) {
+    async create(
+      parentThreadID,
+      model,
+      reasoningEffort,
+      role,
+      executor = "local",
+    ) {
       const agent = amp.createAgent({
         model,
         reasoningEffort,
@@ -154,7 +160,7 @@ export default function registerFactory(
         features: [],
       });
       const thread = await agent.createThread({
-        executor: "local",
+        executor,
         parentThreadID,
         features: [],
       });
