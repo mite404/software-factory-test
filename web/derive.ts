@@ -4,6 +4,7 @@ import type { DashboardSnapshot } from "../factory/dashboard";
 // evidence.review is the cold review record bound to the task's current revision; null means none
 // is recorded, which on an accepted task is not proof that review was skipped.
 export type Task = DashboardSnapshot["tasks"][number] & {
+  attempt?: number | null; // the worker's current attempt, null before a worker exists
   evidence?: { review: { pending?: boolean; attempt?: number } | null };
 };
 
@@ -178,8 +179,8 @@ function settle(feed: Feed): Feed {
 }
 
 function nextLabel(active: Task | undefined, total: number): string {
-  // The feed carries the attempt only on a review record, so it shows during cold review.
-  const attempt = active?.evidence?.review?.attempt;
+  // Older feeds carry the attempt only on a pending review record.
+  const attempt = active?.attempt ?? active?.evidence?.review?.attempt;
   if (active)
     return `${active.id}, ${active.status}${attempt ? ` · attempt ${attempt}` : ""}`.toUpperCase();
   return total ? "EVERY TICKET LANDED" : "NO TICKETS";
