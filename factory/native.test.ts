@@ -131,7 +131,8 @@ async function preparationFixture(
     },
     watch() {},
   };
-  const factory = () => createFactory(root, host, openStore);
+  const factory = (now?: () => number) =>
+    createFactory(root, host, openStore, now);
   return {
     root,
     worktree,
@@ -145,6 +146,332 @@ async function preparationFixture(
 afterEach(async () => {
   for (const root of preparationRoots.splice(0))
     await rm(root, { recursive: true, force: true });
+});
+
+test("watchdog bounds suspicion across reload, diagnostics, unknown activity and read-only reads", async () => {
+  const f = await preparationFixture(() => "");
+  let at = 1000;
+  const clock = () => at;
+  const engine = f.factory(clock);
+  await engine.tick("start", "T-owner");
+  const nudges: string[] = [];
+  f.host.send = async (thread, message) => {
+    expect(thread).toBe("T-owner");
+    nudges.push(message);
+    throw new Error("Ambiguous delivery");
+  };
+  at += 1_799_999;
+  await engine.tick("reconcile");
+  expect(nudges).toEqual([]);
+  const storage = openPersistence(engine.directory, [], clock);
+  storage.event("A", "error", "Diagnostic only");
+  storage.event("A", "observation-unavailable", "Diagnostic only");
+  storage.state.runs.B = {
+    kind: "done",
+    thread: "T-other",
+    revision: f.git("rev-parse", "HEAD"),
+    insight: "Unrelated progress",
+  };
+  storage.commit(storage.state, "B", "accepted", "abc");
+  storage.close();
+  at++;
+  const bytes = await readFile(join(engine.directory, "state.sqlite"));
+  await engine.tick("status");
+  const server = startDashboard({ root: f.root, port: 0 });
+  try {
+    expect(
+      (await fetch(`http://127.0.0.1:${server.port}/api/status`)).status,
+    ).toBe(200);
+  } finally {
+    await server.stop();
+  }
+  expect(await readFile(join(engine.directory, "state.sqlite"))).toEqual(bytes);
+  expect(nudges).toEqual([]);
+  f.host.state = async () => "unknown";
+  const suspected = (await f.factory(clock).tick("reconcile")).runs.A!;
+  expect(suspected).toMatchObject({
+    kind: "running",
+    thread: "T-prepared",
+    attempt: 1,
+  });
+  expect(suspected.watchdog).toMatchObject({
+    progressAt: 1000,
+    nudgedAt: 1_801_000,
+  });
+  expect(suspected.watchdog!.alerts).toEqual([
+    expect.objectContaining({
+      kind: "unresolved",
+      attempt: 1,
+      intendedAt: 1_801_000,
+    }),
+  ]);
+  expect(nudges).toEqual([expect.stringContaining("Diagnose current status")]);
+  at += 1_799_999;
+  await f.factory(clock).tick("reconcile");
+  expect(nudges).toHaveLength(1);
+  at++;
+  const second = (await f.factory(clock).tick("reconcile")).runs.A!;
+  expect(nudges).toHaveLength(2);
+  expect(second.watchdog!.alerts).toEqual(suspected.watchdog!.alerts);
+  expect(second.watchdog!.progressAt).toBe(1000);
+  expect(f.counts()).toEqual({ creates: 1, sends: 1 });
+  await engine.tick("pause");
+  at += 3_600_000;
+  await f.factory(clock).tick("reconcile");
+  expect(nudges).toHaveLength(2);
+});
+
+test("a crash after nudge reservation retains alert intent without immediate redelivery", async () => {
+  const f = await preparationFixture(() => "");
+  const engine = f.factory(() => 1000);
+  await engine.tick("start", "T-owner");
+  const child = spawnSync(process.execPath, [
+    "--eval",
+    `
+      import { createFactory } from ${JSON.stringify(join(import.meta.dir, "native.ts"))};
+      import { openStore } from ${JSON.stringify(join(import.meta.dir, "bookkeeping.fixture.ts"))};
+      const host = {
+        async create() { throw new Error("No replacement"); },
+        async send() { process.exit(23); },
+        async state() { return "unknown"; }, watch() {},
+      };
+      await createFactory(${JSON.stringify(f.root)}, host, openStore, () => 1801000).tick("reconcile");
+    `,
+  ]);
+  expect(child.status).toBe(23);
+  const reserved = (await engine.tick("status")).runs.A!;
+  expect(reserved.watchdog).toMatchObject({ nudgedAt: 1_801_000 });
+  expect(reserved.watchdog!.alerts).toHaveLength(1);
+  const nudges: string[] = [];
+  f.host.send = async (_id, message) => {
+    nudges.push(message);
+  };
+  await f.factory(() => 1_801_000).tick("reconcile");
+  expect(nudges).toEqual([]);
+  const retried = (await f.factory(() => 3_601_000).tick("reconcile")).runs.A!;
+  expect(nudges).toHaveLength(1);
+  expect(retried.watchdog!.alerts).toEqual(reserved.watchdog!.alerts);
+  expect(retried).toMatchObject({
+    kind: "running",
+    attempt: 1,
+    thread: "T-prepared",
+  });
+  expect(f.counts().creates).toBe(1);
+});
+
+test("stop notices do not reset an incident clock and repair opens a fresh episode", async () => {
+  const f = await preparationFixture(() => "");
+  let at = 1000;
+  const clock = () => at;
+  const engine = f.factory(clock);
+  await engine.tick("start", "T-owner");
+  f.host.state = async () => "idle";
+  const report = join(engine.directory, "A.report.json");
+  await writeFile(
+    report,
+    JSON.stringify({ kind: "blocked", attempt: 1, reason: "PRIVATE" }),
+  );
+  f.host.send = async () => {
+    throw new Error("Notice unavailable");
+  };
+  const stopped = (await engine.tick("reconcile")).runs.A!;
+  at += 900_000;
+  const notices: string[] = [];
+  f.host.send = async (_id, message) => {
+    notices.push(message);
+  };
+  const notified = (await f.factory(clock).tick("reconcile")).runs.A!;
+  expect(notified.incident).toMatchObject({
+    notifiedAt: 901_000,
+    delivery: "sent",
+  });
+  expect(notified.watchdog!.progressAt).toBe(1000);
+  at += 900_000;
+  const suspected = (await engine.tick("reconcile")).runs.A!;
+  expect(suspected.watchdog!.alerts).toHaveLength(1);
+  expect(notices).toHaveLength(2);
+  expect(notices[1]).toContain(stopped.incident!.id);
+  expect(notices.join("\n")).not.toContain("PRIVATE");
+  const storage = openPersistence(engine.directory, [], clock);
+  storage.state.runs.A!.watchdog!.alerts[0]!.acknowledgedAt = at;
+  storage.commit(
+    storage.state,
+    "A",
+    "alert-acknowledged",
+    "fixture delivery receipt",
+  );
+  storage.close();
+  const resumed = (
+    await f.factory(clock).tick("resume", "T-owner", f.host.state, {
+      ticket: "A",
+      incident: stopped.incident!.id,
+      decision: "Inspected baseline",
+    })
+  ).runs.A!;
+  expect(resumed).toMatchObject({
+    kind: "running",
+    attempt: 2,
+    thread: "T-prepared",
+  });
+  expect(resumed.watchdog!.episode).not.toBe(suspected.watchdog!.episode);
+  expect(resumed.watchdog!.alerts[0]!.acknowledgedAt).toBe(1_801_000);
+  at += 1_800_000;
+  const again = (await f.factory(clock).tick("reconcile")).runs.A!;
+  expect(
+    again.watchdog!.alerts.filter((alert) => alert.kind === "unresolved"),
+  ).toHaveLength(2);
+  expect(again.watchdog!.alerts[0]!.acknowledgedAt).toBe(1_801_000);
+  expect(f.counts().creates).toBe(1);
+});
+
+test("repair spending alerts at six and ten without parking or replacing the worker", async () => {
+  const f = await preparationFixture(() => "");
+  let at = 1000;
+  const clock = () => at;
+  const engine = f.factory(clock);
+  await engine.tick("start", "T-owner");
+  f.host.state = async () => "idle";
+  for (let attempt = 1; attempt <= 10; attempt++) {
+    const before = (await f.factory(clock).tick("status")).runs.A!;
+    expect(before).toMatchObject({
+      kind: "running",
+      attempt,
+      thread: "T-prepared",
+    });
+    expect(
+      before
+        .watchdog!.alerts.filter((alert) => alert.kind === "spending")
+        .map((alert) => alert.attempt),
+    ).toEqual(attempt < 6 ? [] : attempt < 10 ? [6] : [6, 10]);
+    if (attempt === 10) break;
+    at += 1000;
+    await writeFile(
+      join(engine.directory, "A.report.json"),
+      JSON.stringify({
+        kind: "candidate",
+        attempt,
+        revision: f.git("rev-parse", "HEAD"),
+      }),
+    );
+    const result = await f.factory(clock).tick("reconcile");
+    if (attempt % 2 === 0) {
+      expect(result.runs.A!.kind).toBe("blocked");
+      await f.factory(clock).tick("resume", "T-owner", f.host.state, {
+        ticket: "A",
+        incident: result.runs.A!.incident!.id,
+        decision: "Reviewed failed candidate",
+      });
+    } else expect(result.runs.A!.kind).toBe("running");
+    await f.factory(clock).tick("reconcile");
+  }
+  expect(f.counts()).toEqual({ creates: 1, sends: 10 });
+});
+
+test("legacy timing adopts once; complete and dependency-only work stay quiet", async () => {
+  const f = await preparationFixture(() => "");
+  let at = 1000;
+  const clock = () => at;
+  const engine = f.factory(clock);
+  await engine.tick("start", "T-owner");
+  const storage = openPersistence(engine.directory, [], clock);
+  delete storage.state.runs.A!.watchdog;
+  storage.commit(storage.state, "A", "legacy-fixture", "No watchdog fields");
+  storage.close();
+  at = 10_000_000;
+  const adopted = (await f.factory(clock).tick("reconcile")).runs.A!;
+  expect(adopted.watchdog).toMatchObject({ progressAt: at, alerts: [] });
+  const messages: string[] = [];
+  f.host.send = async (_id, message) => {
+    messages.push(message);
+  };
+  at += 1_800_000;
+  const suspected = (await f.factory(clock).tick("reconcile")).runs.A!;
+  expect(suspected.watchdog!.alerts).toHaveLength(1);
+  const finished = openPersistence(engine.directory, [], clock);
+  finished.state.runs.A = {
+    kind: "done",
+    thread: "T-prepared",
+    revision: "abc",
+    insight: "Complete",
+    watchdog: suspected.watchdog,
+  };
+  finished.commit(finished.state, "A", "accepted", "abc");
+  finished.close();
+  at += 9_000_000;
+  await f.factory(clock).tick("reconcile");
+  expect(messages).toHaveLength(1);
+  await engine.tick("pause");
+  const empty = openPersistence(engine.directory, [], clock);
+  empty.state.runs = {};
+  empty.state.enabled = true;
+  empty.commit(empty.state, "factory", "fixture", "Dependency waiting only");
+  empty.close();
+  await writeFile(
+    join(f.root, "tickets.json"),
+    JSON.stringify([
+      { id: "A", brief: "Waiting A", after: ["B"] },
+      { id: "B", brief: "Waiting B", after: ["A"] },
+    ]),
+  );
+  await f.factory(clock).tick("reconcile");
+  expect(messages).toHaveLength(1);
+  expect((await engine.tick("status")).runs).toEqual({});
+});
+
+test("watchdog policy validates in the project definition and pins active runs", async () => {
+  const f = await preparationFixture(() => "");
+  const path = join(f.root, ".factory.json");
+  const raw = JSON.parse(await readFile(path, "utf8"));
+  for (const watchdog of [
+    null,
+    {},
+    { suspicionMs: 0, spendingFirstAttempt: 6, spendingInterval: 4 },
+    { suspicionMs: 100, spendingFirstAttempt: 6, spendingInterval: 4, typo: 1 },
+    { suspicionMs: 100, spendingFirstAttempt: 1.5, spendingInterval: 4 },
+  ]) {
+    await writeFile(path, JSON.stringify({ ...raw, watchdog }));
+    expect(configuration(f.root)).rejects.toThrow(/watchdog/);
+  }
+  await writeFile(
+    path,
+    JSON.stringify({
+      ...raw,
+      watchdog: {
+        suspicionMs: 100,
+        spendingFirstAttempt: 6,
+        spendingInterval: 4,
+      },
+    }),
+  );
+  f.git("add", ".");
+  f.git(
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "commit",
+    "-qm",
+    "policy",
+  );
+  let at = 1000;
+  const clock = () => at;
+  await f.factory(clock).tick("start", "T-owner");
+  await writeFile(
+    path,
+    JSON.stringify({
+      ...raw,
+      watchdog: {
+        suspicionMs: 10_000,
+        spendingFirstAttempt: 6,
+        spendingInterval: 4,
+      },
+    }),
+  );
+  await f.factory(clock).tick("reload", "T-owner");
+  at += 100;
+  const suspected = (await f.factory(clock).tick("reconcile")).runs.A!;
+  expect(suspected.watchdog!.alerts).toHaveLength(1);
+  expect(suspected.watchdog!.nudgedAt).toBe(1100);
 });
 
 test("a rejected stop transaction cannot publish or resurrect its notice", async () => {
