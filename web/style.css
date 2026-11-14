@@ -997,7 +997,7 @@ body {
   background: #151517;
   color: var(--hi);
   font-size: 12px;
-  white-space: nowrap;
+  white-space: pre; /* a ticket tip is two lines: its state, then what it is about */
   pointer-events: none;
 }
 
