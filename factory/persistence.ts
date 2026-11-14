@@ -65,6 +65,11 @@ export type DefinitionPin = {
   watchdog?: WatchdogPolicy;
   setup?: { command: string; timeoutMs: number };
 };
+export type ProviderLimit = {
+  message: string;
+  observedAt: number;
+  resetAt?: number;
+};
 export type StopIncident = {
   id: string;
   ticket: string;
@@ -75,6 +80,7 @@ export type StopIncident = {
     | "verification-rejected"
     | "worker-blocked"
     | "worker-error"
+    | "provider-limit"
     | "approval-required"
     | "preparation-failed"
     | "preparation-interrupted"
@@ -82,7 +88,11 @@ export type StopIncident = {
     | "creation-unknown"
     | "target-changed"
     | "review-identity-changed";
-  recovery: "resume" | "retry-setup" | "inspect";
+  recovery: "resume" | "retry-setup" | "inspect" | "wait";
+  providerLimit?: ProviderLimit & {
+    thread: ThreadID;
+    continuation?: { at: number; outcome: "sending" | "sent" | "unknown" };
+  };
   delivery: "queued" | "sent";
   notifiedAt?: number;
 };
@@ -133,6 +143,8 @@ export type State = {
     schedule: "checking" | "installed" | "cleared" | "unknown" | "conflict";
     /** Thread to inspect before retrying an uncertain schedule effect or claiming an owner. */
     pendingThread?: ThreadID;
+    /** Last confirmed reset-aligned anchor; pending effects are tracked separately. */
+    wakeAt?: number;
     /** Last registration failure; owner control remains available without watchdog effects. */
     problem?: string;
     notifications: {
@@ -358,16 +370,43 @@ function definitionFields(value: unknown) {
   );
 }
 
+function validContinuation(value: unknown) {
+  if (value === undefined) return true;
+  const continuation = record(value);
+  return (
+    timestamp(continuation.at) &&
+    ["sending", "sent", "unknown"].includes(String(continuation.outcome))
+  );
+}
+
+function validateProviderIncident(
+  id: string,
+  incident: Record<string, unknown>,
+) {
+  if (incident.reason !== "provider-limit") return;
+  const limit = record(incident.providerLimit);
+  const valid =
+    thread(limit.thread) &&
+    text(limit.message) &&
+    timestamp(limit.observedAt) &&
+    (limit.resetAt === undefined || timestamp(limit.resetAt)) &&
+    validContinuation(limit.continuation);
+  if (incident.recovery !== "wait" || !valid)
+    throw new Error(`Invalid provider limit ${id}`);
+}
+
 function validateIncident(id: string, value: unknown) {
   if (value === undefined) return;
   const incident = record(value);
+  validateProviderIncident(id, incident);
   const enums = {
     delivery: ["queued", "sent"],
-    recovery: ["resume", "retry-setup", "inspect"],
+    recovery: ["resume", "retry-setup", "inspect", "wait"],
     reason: [
       "verification-rejected",
       "worker-blocked",
       "worker-error",
+      "provider-limit",
       "approval-required",
       "preparation-failed",
       "preparation-interrupted",
@@ -410,6 +449,7 @@ function validateMonitor(value: unknown) {
     const monitor = record(value);
     if (
       !text(monitor.fingerprint) ||
+      (monitor.wakeAt !== undefined && !timestamp(monitor.wakeAt)) ||
       !["pendingThread", "problem"].every(
         (key) => monitor[key] === undefined || text(monitor[key]),
       ) ||

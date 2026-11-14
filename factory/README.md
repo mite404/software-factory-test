@@ -97,6 +97,59 @@ the notice with a new ID. A stale ID cannot resume a later checkpoint or a diffe
 Status and HTTP reads neither drain notices nor change incident state. Notices contain no private
 worker reasons, instructions, paths, or review findings; diagnosis uses the private saved evidence.
 
+Provider usage limits use reason `provider-limit` and recovery `wait`. Connected owner observation
+reads `agentError` only from `amp.get_thread_status` for the matching thread. Recognition requires
+code `MODEL_PROVIDER_ERROR` and a JSON error with type `rate_limit_error` and a message string.
+Assistant prose, bare reset text, malformed payloads and other errors remain `worker-error` with
+their existing recovery (`resume` for a checkpointed worker, `inspect` for a reviewer). A connected
+owner can reclassify a worker error recorded earlier without provider details, restoring its saved
+checkpoint without replacing the worker or advancing attempts. Restoration waits until no other
+active or uncertain work owns implementation capacity; otherwise the stop remains for the Foreman.
+
+The incident privately stores `providerLimit.message` (the raw provider message), `observedAt`,
+the same worker or reviewer `thread`, and optional `resetAt`, in milliseconds since the Unix epoch.
+Recognized reset text is `resets H[:MM]am (UTC)` or `resets H[:MM]pm (UTC)`.
+The hour must be 1 through 12.
+With no date, choose the next occurrence only if it is within five hours plus five minutes of
+observation. Otherwise choose the previous occurrence and treat the reset as already due. This
+bounds the known five-hour usage window with a small clock margin, since first observation can
+happen after reset and Amp leaves the error in place. For example, `resets 7pm (UTC)` observed at
+17:19, 19:11 or 20:19 UTC means 19:00 that day, not tomorrow.
+Unknown formats and zones retain the limit with no parsed reset.
+Repeated observations retain the original instant rather than moving the deadline forward.
+
+Once the reset passes, any connected owner lifecycle reconciliation reserves one continuation in
+SQLite before appending it to the same thread. Observed running or idle activity also permits
+continuation before a stored reset. Without a parsed reset, 30 minutes since observation is due.
+Execution must remain enabled and permitted. Pausing prevents continuations. No `agent.start` hook
+is required for this path. `providerLimit.continuation` records its time and `sending`, `sent`, or
+`unknown` outcome. A crash or lost acknowledgment leaves the reservation held, never retried.
+Inspect an uncertain delivery before manual recovery. Only a wait without a continuation is exempt
+from ordinary stall nudges and spending alerts. A held continuation that does not recover becomes
+an ordinary stall. Other incidents retain their existing diagnosis path. A provider error observed
+after a confirmed sent continuation starts a new incident only if its provider message differs or
+its parsed reset is later than the continuation. Advancing the local observation clock alone is
+not evidence of a new error. Identical errors retain the incident, send no further continuation or
+stop notice, and receive ordinary stall monitoring. Sending and unknown remain held. Observed
+running or idle activity after any reservation clears the incident even without connected tools,
+so subscription wakes can settle reports and verdicts. A later error then opens a new incident.
+Other errors and approval requests follow their existing stop path, not a provider-recovery event.
+
+The owned watchdog targets the earliest pending reset plus one minute, using a UTC `DTSTART` and
+the existing 30-minute RRULE. With no parsed reset, it targets observation plus 31 minutes.
+The next connected reconciliation after the deadline restores the ordinary rule. Registration
+still inspects receipts, rejects drift in recurrence, run mode or enabled state, and preserves
+unrelated schedules.
+An unapplied anchor change is retried on the next read, not mistaken for configuration drift.
+`monitor.wakeAt` records only the confirmed anchor, separately from the pending schedule effect.
+UTC and TZID anchors are compared at the requested instant, including daylight-saving offsets.
+The Foreman receives the reset-aligned wake in its existing thread. Workers and reviewers receive
+one continuation per incident.
+Whether the Foreman's `agent.start` handler runs when its own model call fails on a provider limit
+remains unproven. If no connected owner observes a limit, only the ordinary watchdog remains.
+Fixtures prove these decisions, not a live limit, sleeping-orb wake, or successful model recovery.
+Those live proofs remain with the Foreman. No model or provider switch is performed.
+
 Serialized lifecycle reconciliation also checks a progress watchdog. The optional definition setting
 `watchdog` contains positive safe integers `suspicionMs` (default 1800000), `spendingFirstAttempt`
 (default 6), and `spendingInterval` (default 4). All three are required when the setting is
@@ -169,6 +222,9 @@ for that owner's next turn to restore monitoring. Automatic plugin-load recovery
 enabled factory lacks confirmed registration, including legacy state without monitor metadata.
 That guard applies only to automatic plugin-load recovery: explicit tool-less reconciles and
 subscription callbacks still settle and dispatch under their normal gates without watchdog effects.
+Runner creation still returns control before creating the thread. Its deferred continuation cannot
+use the finished tool context for status or watchdog calls; the next connected owner turn performs
+those effects. This does not change creation deferral or the exact-incident `retry-create` path.
 No keepAlive lease, global scheduler or hosted
 monitor is installed. Legacy SQLite opens unchanged; monitor metadata is added transactionally on
 the first connected lifecycle effect without changing existing definition pins or incident IDs.
@@ -216,8 +272,10 @@ schedule or notification calls.
   The object also contained `agentMode`, `reasoningEffort`, `disabledReason`, `nextRunAt`,
   `lastRunAt`, `lastRunError`, `createdAt` and `updatedAt`. There were no top-level `schedule`
   or `run_mode` fields. Compare the parsed RRULE frequency and interval in `trigger.schedule`,
-  `runMode` and `enabled`; ignore the platform anchor and unknown metadata. Fingerprint alone
-  determines ownership, even when those settings drift.
+  `runMode` and `enabled`. Ignore unknown metadata and the platform anchor for the ordinary rule.
+  For a provider-reset wake, also confirm the requested anchor by instant, accepting UTC or TZID
+  normalization. A healthy owned rule without that anchor is an unapplied change to retry, not
+  configuration drift. Fingerprint alone determines ownership, even when those settings drift.
 
 - `clear_schedule` returned `{"deleted":true}`; the next `get_schedule` returned `null`.
 

@@ -172,6 +172,136 @@ afterEach(async () => {
     await rm(root, { recursive: true, force: true });
 });
 
+test("provider reclassification cannot restore a second implementation owner", async () => {
+  const f = await preparationFixture(() => "");
+  await writeFile(
+    join(f.root, "tickets.json"),
+    JSON.stringify([
+      { id: "A", brief: "First", after: [] },
+      { id: "B", brief: "Second", after: [] },
+    ]),
+  );
+  f.git("add", ".");
+  f.git("commit", "-qm", "two tickets");
+  let creates = 0;
+  f.host.create = async () => (++creates === 1 ? "T-A" : "T-B");
+  const engine = createFactory(f.root, f.host, openStore, () => 1000);
+  const { tools } = watchdogFixture();
+  await engine.tick("start", "T-owner", f.host.state, undefined, tools);
+  f.host.state = async (thread) => (thread === "T-A" ? "error" : "running");
+  const blocked = await engine.tick("reconcile", "T-owner");
+  expect(blocked.runs.A).toMatchObject({
+    kind: "blocked",
+    incident: { reason: "worker-error", recovery: "resume" },
+  });
+  expect(blocked.runs.B).toMatchObject({ kind: "running", thread: "T-B" });
+  f.host.state = async (thread) =>
+    thread === "T-A"
+      ? {
+          kind: "provider-limit",
+          limit: { message: "Limit", observedAt: 1000, resetAt: 2000 },
+        }
+      : "running";
+  const connected = await engine.tick(
+    "reconcile",
+    "T-owner",
+    f.host.state,
+    undefined,
+    tools,
+  );
+  expect(connected.runs.A).toMatchObject({
+    kind: "blocked",
+    incident: { reason: "worker-error", recovery: "resume" },
+  });
+  expect(connected.runs.B).toMatchObject({ kind: "running", thread: "T-B" });
+  expect(creates).toBe(2);
+});
+
+test("a held provider continuation becomes an ordinary watchdog stall", async () => {
+  const f = await preparationFixture(() => "");
+  let at = 1000;
+  const engine = f.factory(() => at);
+  await engine.tick("start", "T-owner");
+  f.host.state = async () => ({
+    kind: "provider-limit",
+    limit: { message: "Limit", observedAt: at },
+  });
+  const sent: string[] = [];
+  f.host.send = async (thread) => {
+    sent.push(thread);
+    if (thread !== "T-owner") throw new Error("Unknown continuation delivery");
+  };
+  await engine.tick("reconcile");
+  at += 1_800_000;
+  const continued = (await engine.tick("reconcile")).runs.A!;
+  expect(continued.incident?.providerLimit?.continuation?.outcome).toBe(
+    "unknown",
+  );
+  at += 1_800_000;
+  const stalled = (await engine.tick("reconcile")).runs.A!;
+  expect(stalled.watchdog?.alerts).toContainEqual(
+    expect.objectContaining({ kind: "unresolved" }),
+  );
+  expect(sent.filter((thread) => thread === "T-prepared")).toHaveLength(1);
+  expect(sent).toContain("T-owner");
+  await writeFile(
+    join(engine.directory, "A.report.json"),
+    JSON.stringify({
+      attempt: 1,
+      kind: "blocked",
+      reason: "Needs a decision",
+    }),
+  );
+  f.host.state = async () => "idle";
+  const disconnected = createFactory(f.root, f.host, openStore, () => at);
+  const settled = (await disconnected.tick("reconcile", "T-owner")).runs.A!;
+  expect(settled).toMatchObject({
+    kind: "blocked",
+    reason: "Needs a decision",
+    incident: { reason: "worker-blocked", recovery: "resume" },
+  });
+  expect(sent.filter((thread) => thread === "T-prepared")).toHaveLength(1);
+});
+
+test.each([
+  ["error", "worker-error"],
+  ["awaiting-approval", "approval-required"],
+] as const)(
+  "provider wait yielding to %s records a stop, not recovery",
+  async (activity, reason) => {
+    const f = await preparationFixture(() => "");
+    let at = 1000;
+    const engine = f.factory(() => at);
+    await engine.tick("start", "T-owner");
+    f.host.state = async () => ({
+      kind: "provider-limit",
+      limit: { message: "Limit", observedAt: at, resetAt: 2000 },
+    });
+    await engine.tick("reconcile");
+    at = 2000;
+    await engine.tick("reconcile");
+    f.host.state = async () => activity;
+    const stopped = (await engine.tick("reconcile")).runs.A!;
+    expect(stopped).toMatchObject({ kind: "blocked", incident: { reason } });
+    const db = new Database(join(engine.directory, "state.sqlite"), {
+      readonly: true,
+    });
+    try {
+      const actions = db
+        .query<{ action: string }, []>(
+          "SELECT action FROM events WHERE ticket = 'A'",
+        )
+        .all()
+        .map(({ action }) => action);
+      expect(actions).toContain("provider-continuation-sent");
+      expect(actions).toContain("blocked");
+      expect(actions).not.toContain("provider-recovered");
+    } finally {
+      db.close();
+    }
+  },
+);
+
 test("planned intake survives refresh and restart without dispatch until owner admission", async () => {
   const f = await preparationFixture(() => "");
   const planned = [

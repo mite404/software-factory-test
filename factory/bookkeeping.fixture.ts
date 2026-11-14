@@ -31,7 +31,9 @@ export function watchdogFixture() {
             targetThreadID: "T-owner",
             trigger: {
               provider: "schedule",
-              schedule: `DTSTART:20261114T143900Z\n${String(input.schedule)}`,
+              schedule: String(input.schedule).startsWith("DTSTART:")
+                ? input.schedule
+                : `DTSTART:20261114T143900Z\n${String(input.schedule)}`,
               scheduleLabel: input.schedule_label,
             },
             runMode: input.run_mode,

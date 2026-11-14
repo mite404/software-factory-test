@@ -223,6 +223,97 @@ test.each([
   },
 );
 
+test.each([false, true])(
+  "provider anchor converges after failed set or TZID normalization (%s)",
+  async (normalize) => {
+    const at = Date.parse("2026-11-14T17:19:00Z");
+    const state: State = { enabled: true, owner: "T-owner", runs: {} };
+    const fixture = watchdogFixture();
+    let fail = false;
+    let sets = 0;
+    const tools: PluginTools = {
+      async call(name, input) {
+        if (name === "amp.set_schedule") {
+          sets++;
+          if (fail) {
+            fail = false;
+            throw new Error("Transient set failure before effect");
+          }
+        }
+        const result = await fixture.tools.call(name, input);
+        if (normalize && result && name === "amp.get_schedule") {
+          const value = structuredClone(result) as {
+            trigger: { schedule: string };
+          };
+          value.trigger.schedule = value.trigger.schedule
+            .replace(
+              "DTSTART:20261114T190100Z",
+              "DTSTART;TZID=America/New_York:20261114T140100",
+            )
+            .replaceAll("\n", "\r\n");
+          return value;
+        }
+        return result;
+      },
+    };
+    const sync = (time = at) =>
+      reconcileSchedule(
+        "/TEST/project",
+        "/TEST/git",
+        state,
+        [{ id: "A", brief: "Private", after: [] }],
+        tools,
+        () => {},
+        true,
+        "T-owner",
+        time,
+      );
+    await sync();
+    state.runs.A = {
+      kind: "running",
+      base: "abc",
+      worktree: "/TEST/worktree",
+      thread: "T-worker",
+      attempt: 1,
+      delivery: "sent",
+      incident: {
+        id: "limit",
+        ticket: "A",
+        owner: "T-owner",
+        base: "abc",
+        attempt: 1,
+        reason: "provider-limit",
+        recovery: "wait",
+        delivery: "sent",
+        providerLimit: {
+          thread: "T-worker",
+          message: "Private",
+          observedAt: at,
+          resetAt: Date.parse("2026-11-14T19:00:00Z"),
+        },
+      },
+    };
+    if (!normalize) {
+      fail = true;
+      expect(await sync().catch(String)).toMatch(/not confirmed/);
+    }
+    await sync();
+    expect(state.monitor?.schedule).toBe("installed");
+    expect(state.monitor?.wakeAt).toBe(Date.parse("2026-11-14T19:01:00Z"));
+    const count = sets;
+    await sync();
+    expect(sets).toBe(count);
+    await sync(Date.parse("2026-11-14T19:11:00Z"));
+    expect(state.monitor?.schedule).toBe("installed");
+    expect(state.monitor?.wakeAt).toBeUndefined();
+    expect(await fixture.tools.call("amp.get_schedule", {})).toMatchObject({
+      trigger: {
+        schedule: "DTSTART:20261114T143900Z\nRRULE:FREQ=MINUTELY;INTERVAL=30",
+      },
+    });
+  },
+);
+
 test("alert reservations survive reopen, bound a rolling hour and never retry unknown sends", async () => {
   const directory = await mkdtemp(join(tmpdir(), "factory-alerts-"));
   let at = 1000;

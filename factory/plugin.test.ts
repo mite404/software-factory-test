@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import type { PluginAPI, PluginToolContext } from "@ampcode/plugin";
 import { execFileSync } from "node:child_process";
 import { existsSync, writeFileSync } from "node:fs";
@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startDashboard } from "./dashboard";
 import registerFactory from "./plugin";
-import { openPersistence } from "./persistence";
+import { factoryStatus, openPersistence, type Run } from "./persistence";
 import { watchdogFixture } from "./bookkeeping.fixture";
 
 const git = (cwd: string, ...args: string[]) =>
@@ -351,6 +351,7 @@ test.each([
       let fallbackFails = false;
       let fallbackCalls = 0;
       let inFlight = 0;
+      let finishedContextCalls = 0;
       let execute!: (
         input: {
           action: string;
@@ -424,11 +425,22 @@ test.each([
         logger: { log() {} },
         on() {},
         registerTool(tool: { execute: typeof execute }) {
-          execute = async (...args) => {
+          execute = async (input, context) => {
+            let live = true;
+            const scoped = {
+              ...context,
+              tools: context.tools && {
+                async call(name: string, args: Record<string, unknown>) {
+                  if (!live) finishedContextCalls++;
+                  return context.tools.call(name, args);
+                },
+              },
+            };
             inFlight++;
             try {
-              return await tool.execute(...args);
+              return await tool.execute(input, scoped);
             } finally {
+              live = false;
               inFlight--;
             }
           };
@@ -471,6 +483,7 @@ test.each([
         }));
       load();
       const original = (await control("start")).runs.A;
+      expect(finishedContextCalls).toBe(0);
       expect(executors).toEqual([executor]);
       expect(original).toMatchObject({
         kind: "running",
@@ -712,6 +725,7 @@ test.each([
           thread: "T-reviewer",
           revision,
         });
+        expect(finishedContextCalls).toBe(0);
         expect(dashboard.tasks[0].title).toContain("post-graft review");
         expect(JSON.stringify(dashboard)).not.toContain(pending.review.report);
         const status = await (
@@ -1088,3 +1102,386 @@ test("setup recovery control preserves durable failure and compatible observatio
     await rm(root, { recursive: true, force: true });
   }
 }, 30000);
+
+test.each([
+  [false, false, { threadID: "T-worker" }, "sending", "T-worker", "resume"],
+  [false, true, { threadID: "T-worker" }, "unknown", "T-worker", "resume"],
+  [true, false, {}, "sending", "T-reviewer", "inspect"],
+  [true, true, undefined, "unknown", "T-reviewer", "inspect"],
+] as const)(
+  "provider wait resumes the same thread once (review=%s, lost send=%s)",
+  async (review, lostSend, metadata, heldOutcome, thread, errorRecovery) => {
+    const root = await mkdtemp(join(tmpdir(), "factory-provider-"));
+    const directory = join(root, ".git/factory");
+    const queue = [{ id: "A", brief: "Private assignment", after: [] }];
+    let at = Date.parse("2026-11-14T17:19:00Z");
+    const clock = spyOn(Date, "now").mockImplementation(() => at);
+    let dispose = () => {};
+    let execute!: (
+      input: Record<string, unknown>,
+      ctx: PluginToolContext,
+    ) => Promise<string>;
+    const sent: { thread: string; content: string }[] = [];
+    const notices: string[] = [];
+    const fixture = watchdogFixture();
+    let local = "error";
+    let error: unknown = {
+      code: "MODEL_PROVIDER_ERROR",
+      message: `Provider failed: ${JSON.stringify({ type: "error", error: { type: "rate_limit_error", message: "You've hit your 5-hour limit · resets 7pm (UTC)" } })}`,
+    };
+    let status = "error";
+    let persisted!: Run;
+    const amp = {
+      threads: {
+        get(id: string) {
+          return {
+            state: {
+              async get() {
+                return local;
+              },
+              subscribe() {
+                return { unsubscribe() {} };
+              },
+            },
+            title: {
+              subscribe() {
+                return { unsubscribe() {} };
+              },
+            },
+            async appendUserMessage(message: { content: string }) {
+              if (id === "T-owner") notices.push(message.content);
+              if (id === thread) {
+                expect(
+                  factoryStatus(directory).runs.A?.incident?.providerLimit
+                    ?.continuation?.outcome,
+                ).toBe("sending");
+                sent.push({ thread: id, content: message.content });
+                if (lostSend) throw new Error("Lost acknowledgment");
+              }
+            },
+          };
+        },
+      },
+      logger: { log() {} },
+      on() {},
+      registerTool(tool: { execute: typeof execute }) {
+        execute = tool.execute;
+      },
+      onDispose(fn: () => void) {
+        dispose = fn;
+      },
+    } as unknown as PluginAPI;
+    const tools: PluginToolContext["tools"] = {
+      async call(name, input) {
+        if (name === "amp.get_thread_status")
+          return {
+            metadata,
+            agentState: { state: status },
+            agentError: error,
+          };
+        return fixture.tools.call(name, input);
+      },
+    };
+    const ctx = {
+      thread: { id: "T-owner" },
+      tools,
+    } as unknown as PluginToolContext;
+    const control = async (action = "reconcile", context = ctx) =>
+      JSON.parse(await execute({ action }, context));
+    const seed = () => {
+      const storage = openPersistence(directory, queue);
+      storage.commit(
+        {
+          enabled: true,
+          owner: "T-owner",
+          runs: { A: structuredClone(persisted) },
+        },
+        "A",
+        "fixture",
+        "",
+      );
+      storage.close();
+    };
+    try {
+      git(root, "init", "-q");
+      git(root, "config", "user.name", "Fixture");
+      git(root, "config", "user.email", "fixture@example.invalid");
+      await writeFile(join(root, "prd.md"), "Fixture");
+      await writeFile(join(root, "tickets.json"), JSON.stringify(queue));
+      await writeFile(
+        join(root, ".factory.json"),
+        JSON.stringify({
+          version: 1,
+          capacity: 1,
+          workerModel: "openai/gpt-6.1-sol",
+          prd: "prd.md",
+          tickets: "tickets.json",
+          scope: ["src/"],
+          verify: "true",
+          permissions: {
+            execute: true,
+            publish: false,
+            externalTickets: false,
+          },
+        }),
+      );
+      git(root, "add", ".");
+      git(root, "commit", "-qm", "fixture");
+      const base = git(root, "rev-parse", "HEAD");
+      persisted = {
+        kind: "running",
+        thread: "T-worker",
+        base,
+        worktree: root,
+        attempt: 1,
+        delivery: "sent",
+        ...(review
+          ? {
+              review: {
+                ticket: "A",
+                attempt: 1,
+                revision: base,
+                base,
+                stage: "post-graft" as const,
+                worktree: root,
+                model: "anthropic/reviewer" as const,
+                report: join(directory, "review.json"),
+                log: "fixture",
+                command: "true",
+                delivery: "sent" as const,
+                thread: "T-reviewer" as const,
+              },
+            }
+          : {}),
+      };
+      seed();
+      registerFactory(amp, root, () => ({
+        async init() {},
+        async close() {},
+        ledger: { async record() {} },
+      }));
+      const noTools = {
+        ...ctx,
+        tools: undefined,
+      } as unknown as PluginToolContext;
+      expect((await control("reconcile", noTools)).runs.A.incident.reason).toBe(
+        "worker-error",
+      );
+      const first = (await control()).runs.A;
+      expect(first).toMatchObject({
+        kind: "running",
+        attempt: 1,
+        incident: {
+          reason: "provider-limit",
+          recovery: "wait",
+          providerLimit: {
+            thread,
+            message: (error as { message: string }).message,
+            observedAt: at,
+            resetAt: Date.parse("2026-11-14T19:00:00Z"),
+          },
+        },
+      });
+      const id = first.incident.id;
+      expect(await fixture.tools.call("amp.get_schedule", {})).toMatchObject({
+        trigger: {
+          schedule: "DTSTART:20261114T190100Z\nRRULE:FREQ=MINUTELY;INTERVAL=30",
+        },
+      });
+      at = Date.parse("2026-11-14T18:59:59Z");
+      await control();
+      expect(sent).toEqual([]);
+      await control("pause");
+      at = Date.parse("2026-11-14T19:00:00Z");
+      await control();
+      expect(sent).toEqual([]);
+      const after = (await control("start")).runs.A;
+      expect(after.incident.id).toBe(id);
+      expect(after.incident.providerLimit.continuation).toEqual({
+        at,
+        outcome: lostSend ? "unknown" : "sent",
+      });
+      expect(sent).toEqual([
+        {
+          thread,
+          content: expect.stringContaining(
+            "Continue the same factory assignment",
+          ),
+        },
+      ]);
+      const previousNotices = [...notices];
+      expect(previousNotices).toContainEqual(
+        expect.stringContaining("provider-limit"),
+      );
+      at += 1000;
+      await control();
+      expect((await control("status")).runs.A.incident.id).toBe(id);
+      expect(sent).toHaveLength(1);
+      expect(notices).toEqual(previousNotices);
+      await control("reconcile", {
+        ...ctx,
+        tools: undefined,
+      } as unknown as PluginToolContext);
+      const storage = openPersistence(directory, queue);
+      storage.state.runs.A!.incident!.providerLimit!.continuation!.outcome =
+        heldOutcome;
+      storage.commit(
+        storage.state,
+        "A",
+        "fixture-crash",
+        "Reserved before process exit",
+      );
+      storage.close();
+      dispose();
+      registerFactory(amp, root, () => ({
+        async init() {},
+        async close() {},
+        ledger: { async record() {} },
+      }));
+      at += 1000;
+      await control();
+      expect(sent).toHaveLength(1);
+      expect((await control("status")).runs.A.incident.id).toBe(id);
+      expect(await fixture.tools.call("amp.get_schedule", {})).toMatchObject({
+        trigger: {
+          schedule: "DTSTART:20261114T143900Z\nRRULE:FREQ=MINUTELY;INTERVAL=30",
+        },
+      });
+      local = status = "running";
+      await control("reconcile", {
+        ...ctx,
+        tools: undefined,
+      } as unknown as PluginToolContext);
+      expect((await control("status")).runs.A.incident).toBeUndefined();
+
+      local = status = "error";
+      error = {
+        code: "MODEL_PROVIDER_ERROR",
+        message: JSON.stringify({
+          error: { type: "rate_limit_error", message: "resets 12am (UTC)" },
+        }),
+      };
+      const midnight = (await control()).runs.A.incident;
+      expect(midnight.id).not.toBe(id);
+      expect(midnight.providerLimit.resetAt).toBe(
+        Date.parse("2026-11-15T00:00:00Z"),
+      );
+      seed();
+      error = {
+        code: "MODEL_PROVIDER_ERROR",
+        message: JSON.stringify({
+          error: { type: "rate_limit_error", message: "resets 7pm (UTC)" },
+        }),
+      };
+      for (const observation of ["19:11", "20:19"]) {
+        seed();
+        at = Date.parse(`2026-11-14T${observation}:00Z`);
+        const count = sent.length;
+        expect((await control()).runs.A.incident.providerLimit.resetAt).toBe(
+          Date.parse("2026-11-14T19:00:00Z"),
+        );
+        expect(sent).toHaveLength(count + 1);
+        await control();
+        expect(sent).toHaveLength(count + 1);
+        expect(await fixture.tools.call("amp.get_schedule", {})).toMatchObject({
+          trigger: {
+            schedule:
+              "DTSTART:20261114T143900Z\nRRULE:FREQ=MINUTELY;INTERVAL=30",
+          },
+        });
+      }
+
+      seed();
+      at = Date.parse("2026-11-14T17:19:00Z");
+      await control();
+      local = status = "running";
+      const beforeRecovery = sent.length;
+      await control();
+      expect(sent).toHaveLength(beforeRecovery + 1);
+      await control();
+      expect((await control("status")).runs.A.incident).toBeUndefined();
+      local = status = "error";
+
+      seed();
+      at = Date.parse("2026-11-14T19:00:00Z");
+      const continued = (await control()).runs.A.incident;
+      at += 1000;
+      error = {
+        code: "MODEL_PROVIDER_ERROR",
+        message: JSON.stringify({
+          error: { type: "rate_limit_error", message: "resets 8pm (UTC)" },
+        }),
+      };
+      const repeated = (await control()).runs.A.incident;
+      if (lostSend) {
+        expect(repeated.id).toBe(continued.id);
+        expect(repeated.providerLimit.continuation.outcome).toBe("unknown");
+      } else {
+        expect(repeated.id).not.toBe(continued.id);
+        expect(repeated.providerLimit.resetAt).toBe(
+          Date.parse("2026-11-14T20:00:00Z"),
+        );
+        expect(repeated.providerLimit.continuation).toBeUndefined();
+      }
+
+      for (const recoverEarly of [false, true]) {
+        seed();
+        error = {
+          code: "MODEL_PROVIDER_ERROR",
+          message: JSON.stringify({
+            error: {
+              type: "rate_limit_error",
+              message: recoverEarly ? "resets 7pm (Unknown)" : "Try later",
+            },
+          }),
+        };
+        const unknown = (await control()).runs.A.incident;
+        expect(unknown).toMatchObject({
+          reason: "provider-limit",
+          recovery: "wait",
+        });
+        expect(unknown.providerLimit.resetAt).toBeUndefined();
+        const count = sent.length;
+        at += 1_799_999;
+        await control();
+        expect(sent).toHaveLength(count);
+        if (recoverEarly) local = status = "running";
+        else at++;
+        await control();
+        expect(sent).toHaveLength(count + 1);
+        await control();
+        expect(sent).toHaveLength(count + 1);
+        local = status = "error";
+      }
+      for (const invalid of [
+        null,
+        {},
+        { code: "OTHER", message: "rate_limit_error" },
+        {
+          code: "MODEL_PROVIDER_ERROR",
+          message: "You've hit your limit · resets 7pm (UTC)",
+        },
+        {
+          code: "MODEL_PROVIDER_ERROR",
+          message:
+            '{"error":{"type":"api_error","message":"resets 7pm (UTC)"}}',
+        },
+        {
+          code: "MODEL_PROVIDER_ERROR",
+          message: '{"error":{"type":"rate_limit_error"}}',
+        },
+      ]) {
+        seed();
+        error = invalid;
+        expect((await control()).runs.A.incident).toMatchObject({
+          reason: "worker-error",
+          recovery: errorRecovery,
+        });
+      }
+    } finally {
+      dispose();
+      clock.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);

@@ -40,7 +40,11 @@ import {
   type State,
   type Watchdog,
   type WatchdogPolicy,
+  type ProviderLimit,
 } from "./persistence";
+
+type ConnectedTools = PluginTools & { isConnected?(): boolean };
+type Activity = Awaited<ReturnType<NativeHost["state"]>>;
 
 const activityReasons = {
   error: "worker-error",
@@ -58,6 +62,8 @@ const progressActions = new Set([
   "review-sent",
   "review-verdict",
   "review-recovered",
+  "provider-recovered",
+  "provider-continuation-sent",
   "accepted",
   "blocked",
   "escalated",
@@ -138,9 +144,48 @@ export type NativeHost = {
   state(
     this: void,
     thread: ThreadID,
-  ): Promise<"idle" | "running" | "awaiting-approval" | "error" | "unknown">;
+  ): Promise<
+    | "idle"
+    | "running"
+    | "awaiting-approval"
+    | "error"
+    | "unknown"
+    | { kind: "provider-limit"; limit: ProviderLimit }
+  >;
   watch(thread: ThreadID, wake: () => void): void;
 };
+
+function currentTools(tools: ConnectedTools | undefined) {
+  return tools?.isConnected?.() === false ? undefined : tools;
+}
+
+function providerRecovery(
+  limit: NonNullable<StopIncident["providerLimit"]>,
+  activity: Activity,
+  at: number,
+) {
+  if (activity === "error" || activity === "awaiting-approval") return "error";
+  const recovered = activity === "idle" || activity === "running";
+  if (limit.continuation) return recovered ? "recovered" : "wait";
+  const due =
+    recovered || at >= (limit.resetAt ?? limit.observedAt + 1_800_000);
+  return due ? "continue" : "wait";
+}
+
+function newProviderIncident(
+  incident: StopIncident | undefined,
+  activity: Extract<Activity, { kind: "provider-limit" }>,
+) {
+  const limit = incident?.providerLimit;
+  if (!limit) return true;
+  const continuation = limit.continuation;
+  return (
+    continuation?.outcome === "sent" &&
+    (activity.limit.message !== limit.message ||
+      (activity.limit.resetAt !== undefined &&
+        activity.limit.resetAt > continuation.at))
+  );
+}
 
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value))
@@ -961,7 +1006,7 @@ export function createFactory(
     owner?: ThreadID,
     observe: NativeHost["state"] = host.state,
     repairRequest?: { ticket: string; decision: string; incident: string },
-    tools?: PluginTools,
+    tools?: ConnectedTools,
   ) {
     await mkdir(directory, { recursive: true });
     const store = openStore(join(directory, "bookkeeping"));
@@ -1082,7 +1127,7 @@ export function createFactory(
           try {
             await host.send(
               notice.owner,
-              `Factory stop ${notice.id}. Ticket ${ticket}, attempt ${notice.attempt}, base ${notice.base}. Reason: ${notice.reason}. Recovery: ${notice.recovery}. Read current factory status and private evidence before deciding. ${notice.recovery === "resume" ? `Only the owning Foreman may resume with ticket ${ticket}, incident ${notice.id}, and a diagnosis decision. A paused factory stays paused.` : "Inspect and resolve this stop; this notice does not authorize resume or grant permission."}`,
+              `Factory stop ${notice.id}. Ticket ${ticket}, attempt ${notice.attempt}, base ${notice.base}. Reason: ${notice.reason}. Recovery: ${notice.recovery}. Read current factory status and private evidence before deciding. ${notice.recovery === "wait" ? "Connected owner reconciliation reserves one continuation to the same thread after the provider reset. Do not send a separate continuation or retry an uncertain send. Paused factories stay paused." : notice.recovery === "resume" ? `Only the owning Foreman may resume with ticket ${ticket}, incident ${notice.id}, and a diagnosis decision. A paused factory stays paused.` : "Inspect and resolve this stop; this notice does not authorize resume or grant permission."}`,
             );
             notice.delivery = "sent";
             notice.notifiedAt = now();
@@ -1100,7 +1145,8 @@ export function createFactory(
       async function reconcileWatchdog() {
         if (!state.enabled || !config.execute || !state.owner) return;
         for (const [ticket, run] of Object.entries(state.runs)) {
-          if (run.kind === "done") continue;
+          const limit = run.incident?.providerLimit;
+          if (run.kind === "done" || (limit && !limit.continuation)) continue;
           await reconcileRunWatchdog(ticket, run);
         }
       }
@@ -1161,6 +1207,7 @@ export function createFactory(
         }
       }
       async function installMonitoring(startAdmission = false) {
+        tools = currentTools(tools);
         try {
           await reconcileSchedule(
             root,
@@ -1176,6 +1223,7 @@ export function createFactory(
             },
             config.execute,
             owner,
+            now(),
           );
           if (startAdmission) state.owner ??= owner;
         } catch (error) {
@@ -1639,11 +1687,78 @@ export function createFactory(
         await deliverReview(task, run);
       }
 
+      async function continueProvider(
+        task: Task,
+        limit: NonNullable<StopIncident["providerLimit"]>,
+      ) {
+        const thread = limit.thread;
+        limit.continuation = { at: now(), outcome: "sending" };
+        commit(task.id, "provider-continuation-intended", thread);
+        try {
+          await host.send(
+            thread,
+            "Continue the same factory assignment after the provider usage limit. Preserve your work, attempt and reporting contract; do not create a replacement thread.",
+          );
+        } catch {
+          limit.continuation.outcome = "unknown";
+          commit(task.id, "provider-continuation-unknown", thread);
+          return;
+        }
+        limit.continuation.outcome = "sent";
+        commit(task.id, "provider-continuation-sent", thread);
+      }
+
+      async function providerWait(
+        task: Task,
+        run: Extract<Run, { kind: "running" }>,
+        thread: ThreadID,
+        activity: Activity,
+      ) {
+        if (
+          typeof activity === "object" &&
+          newProviderIncident(run.incident, activity)
+        ) {
+          delete run.incident;
+          incident(task.id, run, "provider-limit", "wait");
+          run.incident!.providerLimit = { ...activity.limit, thread };
+          commit(
+            task.id,
+            "stop-recorded",
+            "Provider usage limit; wait for reset",
+          );
+        }
+        const limit = run.incident?.providerLimit;
+        if (!limit) return false;
+        const recovery = providerRecovery(limit, activity, now());
+        if (recovery === "recovered") {
+          delete run.incident;
+          commit(task.id, "provider-recovered", thread);
+          return false;
+        }
+        if (!tools || recovery === "wait") return true;
+        if (recovery === "continue") {
+          await continueProvider(task, limit);
+          return true;
+        }
+        delete run.incident;
+        return false;
+      }
+
+      async function runActivity(
+        task: Task,
+        run: Extract<Run, { kind: "running" }>,
+        thread: ThreadID,
+      ) {
+        const activity = await observe(thread);
+        if (await providerWait(task, run, thread, activity)) return "unknown";
+        return typeof activity === "object" ? "unknown" : activity;
+      }
+
       async function reviewIdle(
         task: Task,
         run: Extract<Run, { kind: "running" }>,
       ) {
-        const activity = await observe(run.review!.thread!);
+        const activity = await runActivity(task, run, run.review!.thread!);
         if (activity === "error" || activity === "awaiting-approval") {
           const created = incident(
             task.id,
@@ -1732,7 +1847,7 @@ export function createFactory(
           await send(task, run, await prompt(task, run, config));
           return;
         }
-        const activity = await observe(run.thread);
+        const activity = await runActivity(task, run, run.thread);
         if (activity === "running" || activity === "unknown") return;
         if (activity !== "idle") {
           state.runs[task.id] = {
@@ -1915,6 +2030,25 @@ export function createFactory(
         return createWorker(next, base, worktree);
       }
 
+      async function reclassifyProviderError(task: Task, run: Run | undefined) {
+        if (
+          tools &&
+          run?.kind === "blocked" &&
+          run.incident?.reason === "worker-error" &&
+          run.checkpoint &&
+          !Object.values(state.runs).some(
+            (other) => other.kind !== "blocked" && other.kind !== "done",
+          )
+        ) {
+          const activity = await observe(run.checkpoint.thread);
+          if (typeof activity === "object") {
+            const checkpoint = { ...run.checkpoint, incident: undefined };
+            state.runs[task.id] = checkpoint;
+            await providerWait(task, checkpoint, checkpoint.thread, activity);
+          }
+        }
+      }
+
       async function settleRuns() {
         if (action === "retry-setup") {
           await retrySetup();
@@ -1922,6 +2056,7 @@ export function createFactory(
         }
         for (const task of queue) {
           const run = state.runs[task.id];
+          await reclassifyProviderError(task, run);
           if (run?.kind === "running") {
             const result = run.review
               ? await settleReview(task, run)
@@ -1978,12 +2113,13 @@ export function createFactory(
     owner?: ThreadID,
     observe: NativeHost["state"] = host.state,
     repairRequest?: Parameters<typeof reconcile>[3],
-    tools?: PluginTools,
+    tools?: ConnectedTools,
     admissionTicket?: string,
   ): Promise<State> {
     const result = pending
       .catch(() => {})
       .then(async () => {
+        tools = currentTools(tools);
         const initial = factoryStatus(directory);
         if (action === "status") {
           assertWatchdogCaller(initial, action, owner, tools);
@@ -2033,6 +2169,8 @@ export function createFactory(
                       persistence.state.monitor!.schedule,
                     ),
                   next.execute,
+                  owner,
+                  now(),
                 ).catch((error: unknown) => {
                   if (!(error instanceof WatchdogUnavailable)) throw error;
                   persistence.state.monitor!.problem = error.message;

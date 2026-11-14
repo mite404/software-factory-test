@@ -79,11 +79,71 @@ function repairRequest(input: Record<string, unknown>) {
   };
 }
 
-function reportedActivity(value: unknown, id: string) {
+function resetTime(message: string, observedAt: number) {
+  const match = /\bresets (\d{1,2})(?::([0-5]\d))?\s*(am|pm) \(UTC\)/i.exec(
+    message,
+  );
+  if (!match || Number(match[1]) < 1 || Number(match[1]) > 12) return;
+  const hour =
+    (Number(match[1]) % 12) + (match[3]!.toLowerCase() === "pm" ? 12 : 0);
+  const date = new Date(observedAt);
+  date.setUTCHours(hour, Number(match[2] ?? 0), 0, 0);
+  if (date.getTime() < observedAt) date.setUTCDate(date.getUTCDate() + 1);
+  // A persistent error may first be read after reset, not when the five-hour limit was hit.
+  if (date.getTime() - observedAt > 18_300_000)
+    date.setUTCDate(date.getUTCDate() - 1);
+  return date.getTime();
+}
+
+function rateLimitMessage(message: string) {
+  const start = message.indexOf("{");
+  if (start < 0) return;
+  try {
+    const payload = record(
+      JSON.parse(message.slice(start, message.lastIndexOf("}") + 1)),
+    );
+    const error = record(payload?.error) ?? payload;
+    if (error?.type !== "rate_limit_error" || typeof error.message !== "string")
+      return;
+    return error.message;
+  } catch {
+    return;
+  }
+}
+
+function providerActivity(
+  value: unknown,
+): Awaited<ReturnType<NativeHost["state"]>> {
+  const error = record(value);
+  if (
+    error?.code !== "MODEL_PROVIDER_ERROR" ||
+    typeof error.message !== "string"
+  )
+    return "error";
+  const message = rateLimitMessage(error.message);
+  if (message === undefined) return "error";
+  const observedAt = Date.now();
+  return {
+    kind: "provider-limit",
+    limit: {
+      message: error.message,
+      observedAt,
+      resetAt: resetTime(message, observedAt),
+    },
+  };
+}
+
+function reportedActivity(
+  value: unknown,
+  id: string,
+): Awaited<ReturnType<NativeHost["state"]>> {
   const result = record(value);
-  const metadata = record(result?.metadata);
-  const agentState = record(result?.agentState);
-  return metadata?.threadID === id ? activity(agentState?.state) : "unknown";
+  if (!result) return "unknown";
+  const threadID = record(result.metadata)?.threadID;
+  if (threadID !== undefined && threadID !== id) return "unknown";
+  const status = activity(record(result.agentState)?.state);
+  if (status === "error") return providerActivity(result.agentError);
+  return threadID === id ? status : "unknown";
 }
 
 const runStatuses = {
@@ -105,7 +165,7 @@ const activityStatuses = {
   "awaiting-approval": "blocked",
   error: "blocked",
 } satisfies Record<
-  Awaited<ReturnType<NativeHost["state"]>>,
+  Exclude<Awaited<ReturnType<NativeHost["state"]>>, object>,
   DashboardSnapshot["tasks"][number]["status"]
 >;
 
@@ -136,13 +196,16 @@ export default function registerFactory(
 
   async function observe(
     id: Parameters<NativeHost["state"]>[0],
-    tools?: PluginTools,
+    tools?: PluginTools & { isConnected?(): boolean },
   ) {
+    let local: Awaited<ReturnType<NativeHost["state"]>> = "unknown";
     try {
-      return activity(await amp.threads.get(id).state.get());
+      local = activity(await amp.threads.get(id).state.get());
+      if (local !== "error" || !tools) return local;
     } catch {
       if (!tools) return "unknown";
     }
+    if (tools.isConnected?.() === false) return local;
     try {
       const result = await tools.call("amp.get_thread_status", { thread: id });
       return reportedActivity(result, id);
@@ -248,12 +311,13 @@ export default function registerFactory(
     row.thread = review.thread ?? null;
     row.revision = review.revision;
     if (run.kind === "done") return row;
+    const observed = review.thread
+      ? await observe(review.thread, tools)
+      : "unknown";
     row.status =
       review.delivery === "creating" || review.delivery === "sending"
         ? "blocked"
-        : review.thread
-          ? activityStatuses[await observe(review.thread, tools)]
-          : "unknown";
+        : activityStatuses[typeof observed === "object" ? "error" : observed];
     return row;
   }
 
@@ -287,7 +351,10 @@ export default function registerFactory(
                 row.thread = run.thread;
                 if (run.kind === "running") {
                   const activity = await observe(run.thread, tools);
-                  row.status = activityStatuses[activity];
+                  row.status =
+                    activityStatuses[
+                      typeof activity === "object" ? "error" : activity
+                    ];
                 }
               }
               return reviewProjection(run, row, tools);
@@ -355,19 +422,24 @@ export default function registerFactory(
         ctx,
       );
       const request = repairRequest(input);
+      let connected = true;
+      const liveTools = tools && {
+        call: tools.call.bind(tools),
+        isConnected: () => connected,
+      };
       const control = async () => {
         const state = await factory.tick(
           action,
           ctx.thread.id,
-          (id) => observe(id, ctx.tools),
+          (id) => observe(id, liveTools),
           request,
-          tools,
+          liveTools,
           action === "admit" && typeof input.ticket === "string"
             ? input.ticket
             : undefined,
         );
         if (action !== "reload" && action !== "status")
-          await publish(ctx.tools);
+          await publish(liveTools);
         return JSON.stringify(state);
       };
       calls++;
@@ -380,6 +452,7 @@ export default function registerFactory(
         );
         return JSON.stringify(factoryStatus(factory.directory));
       } finally {
+        connected = false;
         if (!--calls) {
           resumeCreation?.();
           resumeCreation = undefined;
