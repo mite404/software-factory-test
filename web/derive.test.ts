@@ -183,6 +183,15 @@ test("a tooltip cuts a brief-length title and leaves a short one whole", () => {
   expect(short!.label).toBe("T2 · ticket 2 · idle");
 });
 
+test("a title equal to the ticket id is not printed a second time", () => {
+  const next = feed(["working", "queued"]);
+  next.tasks[0]!.title = next.tasks[0]!.id;
+  const view = derive(null, next, NOW);
+  expect(view.builders[0]!.label).toBe("T1 · working");
+  expect(view.coming[0]).toMatchObject({ id: "T1", title: "" });
+  expect(view.coming[1]!.title).toBe("ticket 2");
+});
+
 // Real sequence from backup-adoption-ticket1: "blocked" while its review is dispatched, then a
 // rejection whose own "blocked" falls between two polls.
 test("a pending review is never drawn blocked, and a vanished review is a rejection", () => {

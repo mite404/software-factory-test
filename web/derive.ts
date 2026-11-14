@@ -88,7 +88,8 @@ function cut(text: string, max: number): string {
 function describe(task: Task): string {
   const revision = task.revision ? ` · ${task.revision.slice(0, 7)}` : "";
   // The tooltip is one unwrapped line, so a brief-length title is cut to fit.
-  return `${task.id} · ${cut(task.title, 40)} · ${task.status}${revision}`;
+  const title = task.title === task.id ? "" : ` · ${cut(task.title, 40)}`;
+  return `${task.id}${title} · ${task.status}${revision}`;
 }
 
 function cell(task: Task | undefined): Cell {
@@ -140,7 +141,8 @@ function ticketRow(
     };
   return {
     id: task.id,
-    title: cut(task.title, 32),
+    // Public titles are usually the ticket id; do not print the same string twice.
+    title: task.title === task.id ? "" : cut(task.title, 32),
     status: task.status,
     steps: steps(task.status, task.evidence?.review?.pending === true),
     chips: row ? chips(task.steps) : [],
