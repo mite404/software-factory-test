@@ -176,6 +176,8 @@
 :root[data-theme="spec"] .wire {
   stroke: var(--line);
   stroke-width: 1.1;
+  /* The factory floats a little above its sheet. */
+  filter: drop-shadow(0 5px 1.5px rgba(60, 58, 50, 0.6));
 }
 :root[data-theme="spec"] .wire .head {
   stroke: var(--line);
@@ -456,21 +458,22 @@
   stroke: #1c1c1b;
   stroke-width: 8;
   stroke-linecap: round;
-  filter: drop-shadow(0 1px 0 #fff);
+  filter: drop-shadow(0 1px 0 #fff) drop-shadow(0 4px 3px rgba(83, 80, 70, 0.3));
 }
 :root[data-theme="spec"] .landed {
   r: 3.2px;
   fill: var(--g);
   stroke: transparent; /* keeps the hover target the size it was */
   stroke-width: 8;
-  filter: drop-shadow(0 0 2.5px var(--g));
+  /* Each LED lights the track around it and a little of the sheet behind. */
+  filter: drop-shadow(0 0 2.5px var(--g))
+    drop-shadow(0 0 7px color-mix(in oklab, var(--g) 60%, transparent));
 }
 :root[data-theme="spec"] .landed.last {
   r: 10px; /* the old white thumb's outer size, now all LED */
   fill: var(--g);
-  filter: drop-shadow(0 0 0.5px rgba(83, 80, 70, 0.8))
-    drop-shadow(0 2px 0 #d2d2cd)
-    drop-shadow(0.5px 3px 3px rgba(83, 80, 70, 0.25));
+  filter: drop-shadow(0 0 5px var(--g))
+    drop-shadow(0 0 16px color-mix(in oklab, var(--g) 55%, transparent));
 }
 
 /* ---------- full gate, planned: an empty socket with a short slider track in it ---------- */
