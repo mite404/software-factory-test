@@ -18,7 +18,7 @@ Merged, but at least one box, usually a live proof, is still open.
 | [foreman-watchdog-ticket3](feats/foreman-watchdog/foreman-watchdog-ticket3.md) | Outside-orb wake-up and alert delivery        | 2/4       |
 | [F003-provider-limit-resume](feats/durability/F003-provider-limit-resume.md)   | Same threads resume after a provider limit    | 5/6       |
 
-## Not started (47)
+## Not started (46)
 
 In dispatch order.
 
@@ -45,7 +45,6 @@ In dispatch order.
 | [F028-role-credentials](feats/config-layout/F028-role-credentials.md)                           | Each role sees only its own credentials         | 0/3       |
 | [F022-ticket-file-sync](feats/planned-intake/F022-ticket-file-sync.md)                          | Saved tickets appear as planned on their own    | 0/6       |
 | [F023-public-stop-reasons](feats/lifecycle-view/F023-public-stop-reasons.md)                    | A blocked or rejected ticket says why           | 0/6       |
-| [F024-serial-test-runs](feats/worker-feedback/F024-serial-test-runs.md)                         | Test runs on one machine take turns             | 0/5       |
 | [v1-ticket4](feats/v1/v1-ticket4.md)                                                            | Durable private evidence records                | 0/3       |
 | [v1-ticket11](feats/v1/v1-ticket11.md)                                                          | Required and advisory verification tools        | 0/3       |
 | [v1-ticket12](feats/v1/v1-ticket12.md)                                                          | Permission-bound native hooks                   | 0/3       |
@@ -72,7 +71,7 @@ In dispatch order.
 | [v1-ticket21](feats/v1/v1-ticket21.md)                                                          | Read-only effectiveness views                   | 0/3       |
 | [v1-ticket22](feats/v1/v1-ticket22.md)                                                          | Cross-orb v1 acceptance trial                   | 0/3       |
 
-## Done (14)
+## Done (15)
 
 | Ticket                                                                             | Outcome                                        | Done when |
 | ---------------------------------------------------------------------------------- | ---------------------------------------------- | --------- |
@@ -84,6 +83,7 @@ In dispatch order.
 | [F016-kit-page-default](feats/done/F016-kit-page-default.md)                       | The kit page is the only dashboard             | 5/5       |
 | [F021-merge-record](feats/done/F021-merge-record.md)                               | Each landed ticket records its pull request    | 5/5       |
 | [F019-gate-rerun-before-rejection](feats/done/F019-gate-rerun-before-rejection.md) | A load flake in the gate does not reject       | 6/6       |
+| [F024-serial-test-runs](feats/done/F024-serial-test-runs.md)                       | Test runs on one machine take turns            | 5/5       |
 | [noninteractive-launcher-ticket1](feats/done/noninteractive-launcher-ticket1.md)   |                                                | 4/4       |
 | [repair-escalation-ticket1](feats/done/repair-escalation-ticket1.md)               |                                                | 5/5       |
 | [ticket-step-labels-ticket1](feats/done/ticket-step-labels-ticket1.md)             |                                                | 6/6       |

@@ -115,9 +115,9 @@ A baseline failure goes back to the Foreman; it does not widen the worker's scop
 
 ## Done when
 
-- [ ] Two test runs started together on one machine execute one after the other, from any two
+- [x] Two test runs started together on one machine execute one after the other, from any two
       checkouts, with no caller doing anything.
-- [ ] A killed holder does not block the next run.
-- [ ] A waiting run says who holds the lock and for how long.
-- [ ] A lone run and CI behave as before.
-- [ ] Full gates, guard and a fresh cold review pass on the accepted revision.
+- [x] A killed holder does not block the next run.
+- [x] A waiting run says who holds the lock and for how long.
+- [x] A lone run and CI behave as before.
+- [x] Full gates, guard and a fresh cold review pass on the accepted revision.
