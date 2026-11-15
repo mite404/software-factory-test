@@ -487,6 +487,17 @@ two verification or review rejections. Owner-only `resume` records the next repa
 A gate rejection sends the worker the exit status, marked stdout and stderr tails of at most 8,192
 bytes combined cut on line boundaries, and the full log path, or names the precondition that
 prevented the run.
+
+A nonzero gate exit gets one rerun in the same worktree, only while the candidate HEAD and clean
+tree still match. Precondition failures, the ten-minute cap, and execution errors reject without
+a rerun. Logs remain at `<ticket>-<attempt>.log` and `<ticket>-<attempt>.rerun.log`. A second-run
+pass continues to cold review under the existing policy without spending a repair attempt. The
+`gate-flaked` event records both paths as JSON fields `log` and `rerunLog`; review and acceptance
+evidence point to the passing rerun log. A second failure rejects once, says the gate failed twice,
+and quotes the second run with both log paths. Output text never decides whether a gate flaked.
+The repository's `bunfig.toml` preloads `factory/test-setup.ts`, which gives each test 20 seconds
+instead of Bun's default five seconds. Bun 1.4.4 does not read a `[test].timeout` setting.
+
 A repair reruns the full gate and gets a fresh cold reviewer. Changed code or integration base
 blocks landing until revalidation; prior reports and worktrees remain available as evidence.
 
