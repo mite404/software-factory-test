@@ -39,9 +39,9 @@ the Foreman have to infer each difference.
 
 Keep the run kinds. Add one pure function that names a run's stage from the run and its
 incident: `queued`, `planned`, `preparing`, `creating`, `building`, `gating`, `reviewing`,
-`escalated`, `parked`, `waiting`, `blocked`, `uncertain`, `accepted` and `merged`. Each stage
-carries who must act, using the actor labels from F011 where they exist: operator, Foreman,
-clock or nobody.
+`escalated`, `parked`, `rate-limited`, `blocked`, `uncertain`, `accepted` and `merged`. Each
+stage carries who must act, using the actor labels from F011 where they exist: operator,
+Foreman, clock or nobody.
 
 Two stages need a recorded fact:
 
@@ -53,7 +53,21 @@ Two stages need a recorded fact:
   the commit's tree contains the accepted change. The stage is `merged` after that.
 
 Status, the dashboard feed and the stop notice read the stage from this one function. The
-existing five public statuses stay, derived from the stage.
+existing five public statuses stay, derived from the stage, until F017 removes them.
+
+The dashboard thread asked for these facts, so the page draws them without inferring:
+
+- The feed declares the stage list in order, with each stage's actor, once per response.
+- Each run carries its stage, actor, the time it entered the stage, the index of its pipeline
+  step, its attempt, and after a rejection which step rejected it: gate or cold review.
+- The stage for a provider-limit wait is named `rate-limited`, not `waiting`, and carries the
+  time the limit clears when the factory knows it.
+- Acceptance records the landing time and the worker report's one-line summary, cut to a fixed
+  length and published only after the same curation as titles.
+- The merge record carries the merge time, the pull request number and its URL, each validated.
+
+No `submitted` stage is added: a candidate is read and gated in the same reconcile call, so
+nothing can be observed between `building` and `gating`.
 
 ## Scope
 
