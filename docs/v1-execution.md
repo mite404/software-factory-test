@@ -28,6 +28,11 @@ prerequisites, not permission to dispatch every draft against today's base.
 | [F005-foreman-handoff](feats/durability/F005-foreman-handoff.md)                        | Guarded same-orb Foreman takeover               | foreman-watchdog-ticket3                                                 | F06, operator durability priority      |
 | [F006-limit-fallback-setting](feats/durability/F006-limit-fallback-setting.md)          | Wait or fall back on a provider limit           | F003-provider-limit-resume                                               | F03, operator autonomy priority        |
 | [F007-run-transition-table](feats/durability/F007-run-transition-table.md)              | One declared, tested run lifecycle table        | F003 to F006                                                             | F03, F07, operator durability priority |
+| [F008-gate-failure-feedback](feats/worker-feedback/F008-gate-failure-feedback.md)       | A failed gate returns its output to the worker  | F003-provider-limit-resume                                               | F03, operator leverage priority        |
+| [F009-attempt-cap-parking](feats/repair-escalation/F009-attempt-cap-parking.md)         | Twice-escalated ticket parks; queue continues   | F007-run-transition-table                                                | F03, operator autonomy priority        |
+| [F010-brief-fact-check](feats/worker-feedback/F010-brief-fact-check.md)                 | No worker starts on an incomplete brief         | F007-run-transition-table                                                | F02, F03                               |
+| [F011-step-actor-labels](feats/lifecycle-view/F011-step-actor-labels.md)                | Each step and exit names who performs it        | F007-run-transition-table                                                | F07                                    |
+| [F012-lifecycle-graph-view](feats/lifecycle-view/F012-lifecycle-graph-view.md)          | Lifecycle drawn with tickets on their states    | F007, F011-step-actor-labels                                             | F07                                    |
 | [v1-ticket4](feats/v1/v1-ticket4.md)                                                    | Durable private evidence records                | v1-ticket2                                                               | F02, F07, R6-R7                        |
 | [v1-ticket11](feats/v1/v1-ticket11.md)                                                  | Required and advisory verification tools        | v1-ticket2                                                               | F12, AC28, AC35-AC36                   |
 | [v1-ticket12](feats/v1/v1-ticket12.md)                                                  | Permission-bound native hooks                   | v1-ticket11                                                              | F12, AC27, AC29                        |
@@ -133,10 +138,11 @@ runner and merged through PR #25. The planned inventory has not been imported ye
 
 Next are the five durability units, in table order, which the operator approved after a provider
 limit stopped the factory for two hours. F003-provider-limit-resume is first. The factory runs one
-ticket at a time from merged main. v1-ticket10 keeps the recovery of outages that still happen,
-and v1-ticket8 keeps exclusive ownership across orbs. Keep preserved backup
-owners until required evidence preservation is confirmed. Native acceptance does not authorize
-retirement.
+ticket at a time from merged main. On 2026-11-15 the operator approved five more units, F008 to
+F012. The Foreman places F008 right after F003, because it is independent and the operator ranked it
+highest; F009 to F012 follow F007. v1-ticket10 keeps the recovery of outages that still happen, and
+v1-ticket8 keeps exclusive ownership across orbs. Keep preserved backup owners until required
+evidence preservation is confirmed. Native acceptance does not authorize retirement.
 
 Local sequential steel-thread evidence exists in workflow trials 8 and 9 and subsequent native
 acceptances. Cross-orb transfer, replacement restore, remote monitoring, and retirement still need
