@@ -410,7 +410,6 @@ function Coming({
           rowKey={(row) => row.id}
           value={shown.id}
           onValueChange={choose}
-          progress={shown.stage / STAGES}
           columns={COLUMNS}
         />
       ) : (
