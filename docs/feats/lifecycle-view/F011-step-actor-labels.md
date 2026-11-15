@@ -3,9 +3,11 @@
 ## Status
 
 - Goal: mark each pipeline step and each lifecycle exit with who performs it: the computer, a
-  model, the Foreman or the operator.
-- Initial priority: P2. Effort: Small.
-- Risk: normal; adds a read-only label to an existing table and projection.
+  model, the Foreman or the operator. Link every model step, and every stop, to the thread that
+  performed or caused it.
+- Initial priority: P2. Effort: Medium.
+- Risk: normal; adds read-only labels and thread references to an existing table and projection.
+  A stop gains one recorded field.
 - Depends on: F007-run-transition-table.
 - Planned at: `b3127226af36e10022461c1c626ea2602c70948c`, 2026-11-15. Local only.
 
@@ -16,6 +18,10 @@ performs costs a turn and can differ. A step the operator performs waits for a p
 which is which tells the Foreman where a retry is safe and tells the operator what is waiting
 for them. The operator approved taking this labelling from a state-machine job runner.
 
+The operator also asked for a link to the thread that errored, so an agent that keeps failing
+can be examined in its own transcript. On 2026-11-14 a reviewer thread errored and the stop
+notice said `worker-error`; nothing recorded which thread it was.
+
 ## Current state
 
 - `web/derive.ts` draws seven steps per ticket: worktree, setup, builder thread, `report.json`,
@@ -24,6 +30,13 @@ for them. The operator approved taking this labelling from a state-machine job r
   actor.
 - Control actions are owner-only, but nothing separates an exit the Foreman takes on its own
   from one that needs the operator.
+- `StopIncident` in `factory/persistence.ts` records the Foreman as `owner`. It has no field for
+  the thread whose error or rejection caused the stop.
+- `projectTask` in `factory/dashboard.ts` gives each ticket one `thread`. While a review record
+  exists it is replaced by the reviewer's thread, so the page links to one of the two and never
+  both.
+- Each attempt gets a fresh reviewer thread. Earlier reviewers appear only in the event log
+  (`review-created`, `review-verdict`, `rejected`).
 
 ## Approach
 
@@ -32,12 +45,21 @@ Add an `actor` to each exit in the F007 table, one of `computer`, `model`, `fore
 label in the read-only status projection and in the dashboard feed. The page shows the actor on
 each step as text. Extend the F007 walking test so every exit and step has an actor.
 
+Record on each new stop the thread that caused it and its role, `worker` or `reviewer`. The
+feed carries the worker thread and the current reviewer thread separately, the stop's thread,
+and for each rejected attempt the reviewer thread that rejected it, read from the event log.
+On the page the builder step links to the worker, the cold review step to that attempt's
+reviewer, a failed step to the thread that failed, and a short list of earlier rejections links
+to their reviewers. The stop notice names the role from the recorded field.
+
 ## Scope
 
-- In: the label, its projection, the dashboard step text, tests and README.
-- Out: changing who may perform any action, any new retry, and the lifecycle graph itself
-  (F012).
-- Preserve: step order and count, and every existing feed field.
+- In: the label, the stop's thread and role, their projection, the dashboard step text and
+  links, the notice wording, tests and README.
+- Out: changing who may perform any action, any new retry, the lifecycle graph itself (F012),
+  and showing verdict text or any transcript content on the page.
+- Preserve: step order and count, every existing feed field including the single `thread`, and
+  saved stops without the new field, which show no failed-thread link.
 
 ## Steps
 
@@ -46,13 +68,22 @@ each step as text. Extend the F007 walking test so every exit and step has an ac
 2. **Project the labels**. Include actors in `status` and the dashboard feed without private
    data.
 3. **Show actors on steps**. Read the step list from the feed and print each actor on the page.
-4. **Test and document**. Extend the walking test and add the actor column to the README.
+4. **Record the failing thread**. Save the causing thread and its role on each new stop, and
+   word the stop notice from that role.
+5. **Link steps to threads**. Project the worker, reviewer, stop and past-rejection threads, and
+   link each model step and failed step on the page.
+6. **Test and document**. Extend the walking test and add the actor column to the README.
 
 ## Test plan
 
 The walking test fails when an exit or step has no actor. The dashboard feed test expects the
-seven steps with their actors. Inspect the rendered page: each step shows its actor at the
-default width and nothing overlaps.
+seven steps with their actors. With the real Git and SQLite fixtures, a reviewer thread error
+records the reviewer's thread with role `reviewer`, and the notice says reviewer; a worker
+error records the worker. After two rejections the feed lists both rejecting reviewer threads
+in attempt order. Thread references are validated as thread IDs and a planted private canary
+stays out of the feed. A stop saved before this change still opens. Inspect the rendered page:
+each step shows its actor, a failed cold review links to the reviewer and not the worker, and
+nothing overlaps at the default width.
 
 ## Why this approach?
 
@@ -64,14 +95,14 @@ default width and nothing overlaps.
 
 ## Files You'll Touch
 
-| Path                                                | Role       | Contains                       | Edit or Read |
-| --------------------------------------------------- | ---------- | ------------------------------ | ------------ |
-| `factory/persistence.ts`                            | Records    | The F007 table                 | Edit         |
-| `factory/native.test.ts`                            | Tests      | The walking test               | Edit         |
-| `factory/dashboard.ts`, `factory/dashboard.test.ts` | Projection | Feed fields                    | Edit         |
-| `web/derive.ts`, `web/derive.test.ts`               | Page model | `STEPS`, `steps`               | Edit         |
-| `web/main.ts`, `web/index.html`, `web/style.css`    | Page       | Step drawing                   | Edit         |
-| `factory/README.md`                                 | Operation  | Lifecycle table and its actors | Edit         |
+| Path                                                    | Role       | Contains                                 | Edit or Read |
+| ------------------------------------------------------- | ---------- | ---------------------------------------- | ------------ |
+| `factory/persistence.ts`, `factory/persistence.test.ts` | Records    | The F007 table, `StopIncident`           | Edit         |
+| `factory/native.ts`, `factory/native.test.ts`           | Lifecycle  | Stop creation, notice text, walking test | Edit         |
+| `factory/dashboard.ts`, `factory/dashboard.test.ts`     | Projection | Feed fields                              | Edit         |
+| `web/derive.ts`, `web/derive.test.ts`                   | Page model | `STEPS`, `steps`                         | Edit         |
+| `web/main.ts`, `web/index.html`, `web/style.css`        | Page       | Step drawing                             | Edit         |
+| `factory/README.md`                                     | Operation  | Lifecycle table and its actors           | Edit         |
 
 Build order: labels, projection, page model, page, documents.
 
@@ -91,5 +122,13 @@ Run the shared preflight in `docs/v1-execution.md`. Baseline gates have not run 
 
 - [ ] Every exit and pipeline step has one actor, and a test fails when one is missing.
 - [ ] Status and the dashboard feed carry the labels.
-- [ ] The page shows each step's actor, checked in a rendered screenshot.
+- [ ] Each new stop records the thread that caused it and whether it was the worker or reviewer.
+- [ ] The page links the builder step to the worker, the review step to its reviewer, a failed
+      step to the failing thread, and earlier rejections to their reviewers.
+- [ ] The page shows each step's actor and links, checked in a rendered screenshot.
 - [ ] Full gates, guard and fresh cold review pass on the exact candidate.
+
+## Notes
+
+v1-ticket23 also plans to keep the worker's identity separate from the reviewer's in the feed.
+Whichever ticket lands second reuses the first one's fields instead of adding its own.
