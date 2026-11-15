@@ -466,11 +466,8 @@
   filter: drop-shadow(0 0 2.5px var(--g));
 }
 :root[data-theme="spec"] .landed.last {
-  r: 4.5px;
+  r: 10px; /* the old white thumb's outer size, now all LED */
   fill: var(--g);
-  stroke: #fbfbfa;
-  stroke-width: 11;
-  paint-order: stroke;
   filter: drop-shadow(0 0 0.5px rgba(83, 80, 70, 0.8))
     drop-shadow(0 2px 0 #d2d2cd)
     drop-shadow(0.5px 3px 3px rgba(83, 80, 70, 0.25));
