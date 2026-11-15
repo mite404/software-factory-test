@@ -5,10 +5,10 @@ a scope inventory, not acceptance evidence or authorization for external actions
 
 ## Count and order
 
-The inventory contains 29 remaining acceptance units from the original 32. Public-title privacy
-(v1-ticket1), canonical backup adoption (backup-adoption-ticket1), and the versioned definition
-(v1-ticket2) are accepted natively and no longer appear as implementation work below. Historical
-ticket files remain as evidence. Feature numbers describe areas, not dispatch IDs.
+The table below is the inventory; [backlog.md](backlog.md) counts what is open and done.
+Public-title privacy (v1-ticket1), canonical backup adoption (backup-adoption-ticket1), and the
+versioned definition (v1-ticket2) are accepted natively and no longer appear as implementation work
+below. Historical ticket files remain as evidence. Feature numbers describe areas, not dispatch IDs.
 
 The definition candidate is integrated into parent source and passed the combined gate. Next come
 watchdog and safe admission, followed by evidence, gates, recovery, and native execution. Service
@@ -157,12 +157,12 @@ ticket at a time from merged main. On 2026-11-15 the operator approved five more
 F012, and then F013, which follows F008. The Foreman places F008 right after F003, because it is
 independent and the operator ranked it highest; F009 to F012 follow F007. F014 and F015 were
 approved the same day: F014 runs after F009 and before F012, and F015 follows F013. Also that day
-the operator chose the kit page as the only dashboard: F016 runs right after F008 and before
-F013, and F017 follows F012. F019 runs right after F016. F021, F018 and F020, which
-the operator asked for the same day, follow in that order. v1-ticket10
-keeps the recovery of outages that still happen, and v1-ticket8 keeps exclusive ownership across
-orbs. Keep preserved backup owners until required evidence preservation is confirmed. Native
-acceptance does not authorize retirement.
+the operator chose the kit page as the only dashboard: F016 runs right after F008 and before F013,
+and F017 follows F012. F021, which the operator asked to land first so it can be tested, runs right
+after F016; F019, F018 and F020 follow in that order, then F013. v1-ticket10 keeps the recovery of
+outages that still happen, and v1-ticket8 keeps exclusive ownership across orbs. Keep preserved
+backup owners until required evidence preservation is confirmed. Native acceptance does not
+authorize retirement.
 
 Local sequential steel-thread evidence exists in workflow trials 8 and 9 and subsequent native
 acceptances. Cross-orb transfer, replacement restore, remote monitoring, and retirement still need

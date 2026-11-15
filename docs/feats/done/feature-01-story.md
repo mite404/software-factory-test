@@ -1,7 +1,7 @@
 # Story: refresh the installed factory without resetting work
 
 Status: locally verified, 2026-11-13. First backend dogfood ticket under F01 in
-[the backlog](../../backlog.md). Requirements come from [PRD R1](../../prd.md) and
+[the stories](../../stories.md). Requirements come from [PRD R1](../../prd.md) and
 [ADR-010](../../adr.md).
 
 ## 1. Refresh the repository adapter
