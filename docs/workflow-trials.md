@@ -141,7 +141,7 @@ Those boundaries must be tested before calling the replacement unattended.
 ## Trial 4: build one backend ticket through the native factory
 
 2026-11-13. The parent orchestrator authored
-[feature 01](features/feature-01/feature-01-impl.md), then copied its exact uncommitted source into
+[feature 01](feats/done/feature-01-impl.md), then copied its exact uncommitted source into
 a committed disposable repository. The queue contained only that ticket, capacity was one, and
 the worker model was `openai/gpt-6-luna`. No discovery worker, review panel, or nested agent ran.
 
@@ -169,7 +169,7 @@ Evidence and the repeatable probe remain under `.amp/in/scratchpad/factory-self-
 
 ## Trial 5: explicit Sol effort and a disconnected-worker recovery failure
 
-2026-11-13. [Feature 02](features/feature-02/feature-02-impl.md) used exactly
+2026-11-13. [Feature 02](feats/done/feature-02-impl.md) used exactly
 [one Sol implementation worker](https://ampcode.com/threads/T-01a1d2e7-167f-714d-9afc-3e9e116f9f71).
 A disposable bootstrap set medium through native Amp configuration and inspected the resolved
 agent definition before creation. The worker implemented the product's model/effort path.
@@ -196,7 +196,7 @@ Sources, bootstrap receipts, and full logs are under `.amp/in/scratchpad/factory
 
 ## Trial 6: recover the original disconnected candidate
 
-2026-11-13. [Feature 03](features/feature-03/feature-03-impl.md) used one Sol 6.1/medium worker.
+2026-11-13. [Feature 03](feats/done/feature-03-impl.md) used one Sol 6.1/medium worker.
 The initial patch passed local tests but failed live acceptance because synchronous verification
 blocked the plugin heartbeat. A diagnostic wrapper confirmed matching server idle state before
 the block. The same worker then lost executor connectivity before correcting that second failure.

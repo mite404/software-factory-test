@@ -20,7 +20,7 @@ they are not the active queue. No extra execution or remote permission is grante
 
 Core-first order after accepted backup adoption: definition v1-ticket2, three [Foreman watchdog
 tickets](feats/foreman-watchdog/foreman-watchdog-ticket1.md), then [safe planned
-intake](feats/planned-intake/planned-intake-ticket1.md). Evidence, gates, recovery and native
+intake](feats/done/planned-intake-ticket1.md). Evidence, gates, recovery and native
 execution follow; service/frontend acceptance comes afterward. The owner approved this priority and
 the watchdog's owned Amp schedule/user alerts, not unrelated external infrastructure. Full ordering
 and admission rules live in the inventory, not in these older feature narratives.
