@@ -585,6 +585,19 @@ Passing simulations alone does not satisfy native dispatch or restart acceptance
 Use GPT-6 Luna for low-token workflow trials. Production model selection is separate from discovery
 mode and may differ between orchestrator and worker. Comparative model quality remains unmeasured.
 
+## Deferred for review
+
+Possible features the operator has chosen not to build yet. Each names the evidence that would
+reopen it.
+
+- **Worker tool limits.** Restrict what a worker can run or reach, so it works in a narrower
+  sandbox than an open shell. The preferred form limits what the worker's runner account can
+  reach, such as push credentials and the `gh` token, over a command allowlist. Deferred on
+  2026-11-15: every rejection so far was a logic error caught in review, not a command a limit
+  would have stopped, and the factory already rejects a candidate that edits outside its allowed
+  paths. Review after the first weekly failure audit (F015-weekly-failure-audit) and build it if
+  the audit shows workers acting outside their ticket.
+
 ## Open decisions
 
 - Production model and effort selections, and the evidence needed to escalate a worker. Current

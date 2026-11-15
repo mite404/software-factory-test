@@ -7,8 +7,9 @@
 - Initial priority: P2. Effort: Medium.
 - Risk: normal; a read-only page section. A wrong drawing can mislead, so it is derived, not
   hand-drawn.
-- Depends on: F007-run-transition-table and F011-step-actor-labels. v1-ticket23 adds richer
-  stage facts and is not required.
+- Depends on: F007-run-transition-table, F011-step-actor-labels and F014-lifecycle-stages, whose
+  named stages are the nodes this view draws. v1-ticket23 adds richer stage facts and is not
+  required.
 - Planned at: `b3127226af36e10022461c1c626ea2602c70948c`, 2026-11-15. Local only.
 
 ## Why this matters
