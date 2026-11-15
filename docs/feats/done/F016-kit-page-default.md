@@ -108,11 +108,11 @@ Run the shared preflight in `docs/v1-execution.md`. Baseline gates have not run 
 
 ## Done when
 
-- [ ] The default URL shows the kit page; no `theme` or `kit` query is read.
-- [ ] No element, painting code or style rule remains that only the other renderer used.
-- [ ] Before and after screenshots of the kit page match at the default and a narrow width.
-- [ ] Every listed placeholder is still on the page with its label.
-- [ ] Full gates, guard and fresh cold review pass on the exact candidate.
+- [x] The default URL shows the kit page; no `theme` or `kit` query is read.
+- [x] No element, painting code or style rule remains that only the other renderer used.
+- [x] Before and after screenshots of the kit page match at the default and a narrow width.
+- [x] Every listed placeholder is still on the page with its label.
+- [x] Full gates, guard and fresh cold review pass on the exact candidate.
 
 ## Notes
 
