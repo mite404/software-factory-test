@@ -4,6 +4,13 @@ import type { State, Task } from "./persistence";
 
 const recurrence = "RRULE:FREQ=MINUTELY;INTERVAL=30";
 
+function anchor(at: number) {
+  return `DTSTART:${new Date(at)
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.\d{3}Z$/, "Z")}`;
+}
+
 /** Registration could not be confirmed; unlike persistence failures, owner control can continue. */
 export class WatchdogUnavailable extends Error {}
 
@@ -44,9 +51,40 @@ function matchingRecurrence(value: unknown) {
   );
 }
 
+function matchingAnchor(schedule: string, wakeAt: number | undefined) {
+  if (wakeAt === undefined) return true;
+  const lines = schedule.split(/\r?\n/);
+  if (lines.includes(anchor(wakeAt))) return true;
+  const zoned = /^DTSTART;TZID=([^:\r\n]+):(\d{8}T\d{6})\r?$/m.exec(schedule);
+  if (!zoned) return false;
+  try {
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat("en-US", {
+        timeZone: zoned[1],
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hourCycle: "h23",
+      })
+        .formatToParts(wakeAt)
+        .map(({ type, value }) => [type, value]),
+    );
+    return (
+      zoned[2] ===
+      `${parts.year}${parts.month}${parts.day}T${parts.hour}${parts.minute}${parts.second}`
+    );
+  } catch {
+    return false;
+  }
+}
+
 function registration(
   current: Record<string, unknown> | null,
   expected: Record<string, unknown>,
+  wakeAt?: number,
 ) {
   if (current === null) return "missing";
   const marker = String(expected.fingerprint);
@@ -60,13 +98,20 @@ function registration(
   return matchingRecurrence(trigger?.schedule) &&
     current.runMode === "existing" &&
     current.enabled === true
-    ? "owned"
+    ? matchingAnchor(trigger!.schedule as string, wakeAt)
+      ? "owned"
+      : "unanchored"
     : "drifted";
 }
 
-function satisfied(current: ReturnType<typeof registration>, wanted: boolean) {
+function satisfied(
+  current: ReturnType<typeof registration>,
+  wanted: boolean,
+  actualWake?: number,
+  expectedWake?: number,
+) {
   return wanted
-    ? current === "owned"
+    ? current === "owned" && actualWake === expectedWake
     : ["missing", "conflict"].includes(current);
 }
 
@@ -99,6 +144,7 @@ async function changeRegistration(
   tools: PluginTools,
   expected: Record<string, unknown>,
   wanted: boolean,
+  wakeAt?: number,
 ) {
   await tools
     .call(
@@ -107,15 +153,21 @@ async function changeRegistration(
         ? {
             title: expected.title,
             prompt: expected.prompt,
-            schedule: recurrence,
-            schedule_label: "Every 30 minutes",
+            schedule:
+              wakeAt === undefined
+                ? recurrence
+                : `${anchor(wakeAt)}\n${recurrence}`,
+            schedule_label:
+              wakeAt === undefined
+                ? "Every 30 minutes"
+                : "Provider reset, then every 30 minutes",
             run_mode: "existing",
           }
         : {},
     )
     .catch(() => undefined);
   // A lost acknowledgment is not a failed effect. Inspect before deciding anything else.
-  return registration(await readSchedule(tools), expected);
+  return registration(await readSchedule(tools), expected, wakeAt);
 }
 
 /** Reconcile only this factory's existing-thread schedule under the lifecycle lock.
@@ -130,6 +182,7 @@ export async function reconcileSchedule(
   save: () => void,
   execute = true,
   thread: ThreadID | undefined = state.owner,
+  at = Date.now(),
 ) {
   if (!tools || (state.enabled && !execute)) return;
   const fingerprint = createHash("sha256")
@@ -151,8 +204,18 @@ export async function reconcileSchedule(
     prompt,
   };
   const settled = wanted ? "installed" : "cleared";
+  const resets = Object.values(state.runs).flatMap((run) => {
+    const limit = run.kind !== "done" ? run.incident?.providerLimit : undefined;
+    if (!limit || limit.continuation) return [];
+    const due =
+      limit.resetAt === undefined
+        ? limit.observedAt + 1_800_000
+        : limit.resetAt;
+    return due > at ? [due + 60_000] : [];
+  });
+  const wakeAt = resets.length ? Math.min(...resets) : undefined;
   try {
-    const current = registration(await readSchedule(tools), expected);
+    const current = registration(await readSchedule(tools), expected, wakeAt);
     if (current === "conflict" && wanted) {
       monitor.schedule = "conflict";
       delete monitor.pendingThread;
@@ -164,7 +227,7 @@ export async function reconcileSchedule(
       throw new WatchdogUnavailable(
         "Owned watchdog configuration drifted; inspect recurrence, run mode and enabled state",
       );
-    if (satisfied(current, wanted)) {
+    if (satisfied(current, wanted, monitor.wakeAt, wakeAt)) {
       monitor.schedule = settled;
       delete monitor.pendingThread;
       delete monitor.problem;
@@ -175,10 +238,16 @@ export async function reconcileSchedule(
     monitor.pendingThread = thread;
     save();
     // SQLite intent is not a remote receipt. Always inspect, even after a successful call.
-    if (!satisfied(await changeRegistration(tools, expected, wanted), wanted))
+    if (
+      !satisfied(
+        await changeRegistration(tools, expected, wanted, wakeAt),
+        wanted,
+      )
+    )
       throw new WatchdogUnavailable(
         "Watchdog effect not confirmed; inspect actual schedule before another action",
       );
+    monitor.wakeAt = wakeAt;
     monitor.schedule = settled;
     delete monitor.pendingThread;
     delete monitor.problem;

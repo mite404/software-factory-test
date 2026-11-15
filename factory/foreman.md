@@ -114,6 +114,27 @@ the incident's supported recovery action only after resolving its cause. For `re
 the ticket, exact current incident ID and a diagnosis decision. Running or unknown activity keeps
 the existing worker. A stale alert is evidence to inspect, not permission to resume.
 
+For `provider-limit` with recovery `wait`, read the private `providerLimit` record. Connected owner
+reconciliation sends one continuation to the same worker or reviewer after `resetAt`, or earlier
+on observed recovery. An unknown reset falls back to observed recovery or 30 minutes since
+observation.
+Clock-only UTC resets more than five hours plus five minutes ahead mean the previous occurrence,
+already due. A first observation at 19:11 of `resets 7pm (UTC)` continues immediately, not tomorrow.
+The watchdog aims a wake at the reset plus one minute, then returns to its 30-minute rule.
+No model or provider switch occurs.
+Do not send a separate continuation. `continuation.outcome` values `sending` and `unknown` remain
+held across restart and require inspection, not a retry. After a sent continuation, only a different
+provider message or a parsed reset later than the continuation opens a new incident. A later read
+of the same error does not. Reserved continuations without recovery get ordinary stall monitoring.
+Observed idle or running activity clears a reserved incident even on a tool-less subscription wake;
+a later error then opens a new incident. Other errors do not record a provider-recovery event.
+Paused or execution-disabled factories do not send continuations. Other errors still require
+diagnosis. Normal gates remain mandatory.
+Do not assume `agent.start` runs when the Foreman's own model call fails on a limit; that remains
+unproven. Any connected owner reconcile can perform the wait path. No live limit recovery has been
+proven by fixture tests. Deferred runner creation cannot use its finished control context for
+watchdog or status tools; use a fresh connected reconcile after the call returns.
+
 Do not blindly resume, grant permission, replace a worker, accept code yourself or repeat an
 uncertain remote effect. Normal gates, cold review and same-worker repair still govern candidates.
 After an ambiguous schedule create or clear, inspect the actual schedule before any further
