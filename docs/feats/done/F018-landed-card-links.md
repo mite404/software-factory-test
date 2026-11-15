@@ -134,16 +134,16 @@ Run the shared preflight in `docs/v1-execution.md`. Baseline gates have not run 
 
 ## Done when
 
-- [ ] A landed ticket shows its own title and opens its worker's thread, not a reviewer's.
-- [ ] A click anywhere on a landed card, except the arrow, follows a real `<a target="_blank">`
+- [x] A landed ticket shows its own title and opens its worker's thread, not a reviewer's.
+- [x] A click anywhere on a landed card, except the arrow, follows a real `<a target="_blank">`
       to the ticket's thread, as the previous dashboard did.
-- [ ] The card shows "PR #N" beside the revision when the feed has a pull request.
-- [ ] The arrow beside the revision opens the pull request and shows only when the feed has a
+- [x] The card shows "PR #N" beside the revision when the feed has a pull request.
+- [x] The arrow beside the revision opens the pull request and shows only when the feed has a
       valid pull request URL.
-- [ ] Both links work by keyboard and have accessible names.
-- [ ] Screenshots and a recording of the hover, card click and arrow click are inspected and
+- [x] Both links work by keyboard and have accessible names.
+- [x] Screenshots and a recording of the hover, card click and arrow click are inspected and
       named in the report.
-- [ ] Full gates, guard and fresh cold review pass on the exact candidate.
+- [x] Full gates, guard and fresh cold review pass on the exact candidate.
 
 ## Notes
 

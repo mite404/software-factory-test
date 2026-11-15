@@ -396,7 +396,13 @@ test("HTTP reads durable acceptance without a heartbeat and never discloses priv
         enabled: true,
         owner: "T-private-owner",
         runs: {
-          A: { kind: "done", revision, thread: "T-worker", insight: canary },
+          A: {
+            kind: "done",
+            revision,
+            thread: "T-worker",
+            insight: canary,
+            review: { ...review, ticket: "A", thread: "T-cold-review" },
+          },
           B: {
             kind: "running",
             base: review.base,
@@ -422,8 +428,13 @@ test("HTTP reads durable acceptance without a heartbeat and never discloses priv
         id: "A",
         title: "A",
         status: "accepted",
+        thread: "T-worker",
         revision,
-        evidence: { acceptance: { revision }, review: null, gate: null },
+        evidence: {
+          acceptance: { revision },
+          review: { pending: false, thread: "T-cold-review", revision },
+          gate: { revision, base: review.base, stage: "post-graft" },
+        },
       },
       {
         id: "B",

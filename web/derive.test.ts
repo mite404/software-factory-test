@@ -23,6 +23,52 @@ function feed(statuses: Task["status"][], extra: Partial<Feed> = {}): Feed {
   };
 }
 
+test("ticket links are built only from validated thread and merge parts", () => {
+  const raw = feed(["accepted"]);
+  const task = raw.tasks[0]!;
+  task.thread = "T-worker_123";
+  task.merge = { pr: 42, url: "https://github.com/owner/repo.name/pull/42" };
+  const view = derive(null, raw, NOW);
+  expect(view.tickets[0]).toMatchObject({
+    href: "https://ampcode.com/threads/T-worker_123",
+    pullRequest: {
+      number: 42,
+      href: "https://github.com/owner/repo.name/pull/42",
+    },
+  });
+  expect(view.main[0]!.href).toBe("https://ampcode.com/threads/T-worker_123");
+  for (const url of [
+    "https://evil.test/owner/repo/pull/42",
+    "http://github.com/owner/repo/pull/42",
+    "https://github.com/owner/repo/pull/42/files",
+    "https://github.com/owner/repo/pull/42?next=evil",
+    "https://github.com/owner/repo/pull/42#fragment",
+    "https://github.com@evil.test/owner/repo/pull/42",
+    "https://github.com/owner/../pull/42",
+    "https://github.com/owner/repo/pull/43",
+    "https://github.com/owner/repo/pull/042",
+    "https://github.com/owner/repo/pull/42\n",
+    null,
+  ]) {
+    task.merge = { pr: 42, url };
+    expect(derive(null, raw, NOW).tickets[0]!.pullRequest).toEqual({
+      number: 42,
+      href: null,
+    });
+  }
+  for (const pr of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    task.merge = { pr, url: `https://github.com/owner/repo/pull/${pr}` };
+    expect(derive(null, raw, NOW).tickets[0]!.pullRequest).toBeNull();
+  }
+  task.merge = null;
+  for (const thread of [null, "https://evil.test", "T-../evil", "T-worker\n"]) {
+    task.thread = thread;
+    const ticket = derive(null, raw, NOW).tickets[0]!;
+    expect(ticket.href).toBeNull();
+    expect(ticket.pullRequest).toBeNull();
+  }
+});
+
 test("only a queued or blocked ticket that starts work gets a foreman hand-off", () => {
   const view = derive(
     feed(["idle", "queued"]),

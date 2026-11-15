@@ -6,7 +6,13 @@ import type { Feed, Task } from "./derive";
 
 // Real tickets in feed order. attempt is the cold review attempt each landed on, null for none.
 const TICKETS = [
-  { id: "feature-06", steps: [], revision: "cd75e02", attempt: null },
+  {
+    id: "feature-06",
+    steps: [],
+    revision: "cd75e02",
+    attempt: null,
+    merge: null,
+  },
   {
     id: "v1-ticket1",
     steps: [
@@ -16,6 +22,10 @@ const TICKETS = [
     ],
     revision: "af0ae26",
     attempt: 1,
+    merge: {
+      pr: 3,
+      url: "https://github.com/mite404/software-factory-test/pull/3",
+    },
   },
   {
     id: "backup-adoption-ticket1",
@@ -26,6 +36,7 @@ const TICKETS = [
     ],
     revision: "b649c8a",
     attempt: 6,
+    merge: { pr: 3, url: null },
   },
   {
     id: "v1-ticket2",
@@ -36,6 +47,7 @@ const TICKETS = [
     ],
     revision: null,
     attempt: null,
+    merge: null,
   },
 ];
 
@@ -78,8 +90,9 @@ export function feedAt(n: number): Feed {
         title: ticket.id,
         steps: ticket.steps,
         status: landed ? "accepted" : frame.status,
-        thread: null,
+        thread: `T-replay-${i}`,
         revision: attempt || landed ? ticket.revision : null,
+        merge: landed ? ticket.merge : null,
         attempt: attempt ?? null,
         evidence: { review: attempt ? { pending: !landed, attempt } : null },
       };

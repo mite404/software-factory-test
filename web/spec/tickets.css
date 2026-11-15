@@ -100,10 +100,38 @@
 
 /* The landed card: the kit's hover LCD, wider and in one column, for a ticket's record. */
 #kit-over [data-kit="hover-lcd"][data-variant="ticket"]:not(#_):not(#_) {
+  position: relative;
   grid-template-columns: minmax(0, 1fr);
   row-gap: 8px;
   width: 340px;
   padding: 16px 18px;
+}
+
+#kit-over [data-card-thread] {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  animation: none;
+}
+
+#kit-over [data-card-pr] {
+  position: relative;
+  z-index: 2;
+  display: inline-block;
+  padding: 2px 4px;
+  color: inherit;
+  text-decoration: none;
+  pointer-events: auto;
+}
+
+#kit-over a:focus-visible {
+  outline: 2px solid var(--key-ink);
+  outline-offset: 2px;
+}
+
+#kit-over [data-card-pr]:hover {
+  background: rgb(20 20 19 / 0.12);
 }
 
 #kit-over [data-variant="ticket"] > :is(strong, p, small, dl, ol):not(#_) {
@@ -111,6 +139,10 @@
 }
 
 #kit-over [data-variant="ticket"] strong {
+  position: relative;
+  z-index: 2;
+  pointer-events: none;
+  animation-fill-mode: backwards;
   font-size: 14px;
   line-height: 1.3;
 }
