@@ -1,0 +1,740 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&display=swap");
+
+/*
+ * spec skin: the synth layout rebuilt from the parts of the SPEC-01/HARDWARE kit
+ * (https://github.com/shuding/spec-01, MIT). A light moulded body, keys standing on a solid
+ * 3px edge, a dark display, grey LCD glass, 5px LEDs, a flat knob, a slider track with a printed
+ * tick scale, and badges with a status stripe. Values are the kit's unless a comment says why not.
+ * Layout is untouched.
+ */
+:root[data-theme="spec"] {
+  --u: calc(
+    min(96vw, 96vh * 1280 / 1152) / 1280
+  ); /* one SVG unit as a CSS length */
+  --o: oklch(
+    0.67 0.18 48
+  ); /* not kit: its key hue, with the 0.31 chroma pulled inside sRGB, where it clips to red */
+  --o-ink: oklch(0.58 0.155 48); /* small type and thin marks on light panels */
+  --o-lit: oklch(0.74 0.17 48); /* lit on a dark screen */
+  --o-edge: oklch(0.47 0.125 48); /* the solid edge under an orange key */
+  --g: oklch(0.72 0.19 150); /* ready */
+  --g-ink: oklch(
+    0.5 0.17 150
+  ); /* not kit: ready green darkened until small type reads */
+  --r: oklch(0.65 0.23 28); /* error */
+  --r-ink: oklch(0.52 0.22 28); /* not kit: error red darkened for small type */
+  --unlit: #cfcdc7;
+  --rim: rgba(83, 80, 70, 0.2);
+  --bg: #f5f5f2;
+  --hi: #1d1d1c;
+  --mid: #3a3a37;
+  --dim: #73716b; /* not kit: its #8f8d87 label grey, darkened for sentence-length text */
+  --line: #1d1d1c;
+  --edge: #c8c8c2;
+  --port: var(--unlit);
+  --amber: var(--o);
+  --red: var(--r);
+  --green: var(--g);
+  --ice: #c3d0d8; /* not kit: the freezer mist has to show on a white body */
+  --pkt: var(--o);
+  --tick: var(--g);
+  --t-sheen-1a: #ecece9; /* light key */
+  --t-sheen-1b: #fdfdfc;
+  --t-sheen-2a: #b6b7b1; /* LCD glass */
+  --t-sheen-2b: #c8c9c3;
+  --t-sheen-3a: oklch(0.64 0.172 48); /* orange key */
+  --t-sheen-3b: oklch(0.71 0.18 48);
+  --t-sheen-4a: #2c2c2a; /* dark key */
+  --t-sheen-4b: #1c1c1b;
+  --t-tab-1g: #f8f8f6; /* badge, ready */
+  --t-tab-1: var(--g);
+  --t-tab-2g: #232322; /* badge on a dark key, error */
+  --t-tab-2: var(--r);
+  --t-tab-3g: #f1f1ee; /* badge, queued */
+  --t-tab-3: #c9c8c3;
+  --t-segs-g: #060606; /* display glass with the bar graph's unlit ghost */
+  --t-segs: rgba(242, 242, 238, 0.07);
+  --t-knob-shade: rgba(83, 80, 70, 0.18);
+  --t-knob-ring: #2c2c2b;
+  --t-knob-cap: #fbfbfa;
+  --t-knob-lamp: var(--o);
+  --plate: var(--unlit);
+  --plate-glow: transparent;
+  color-scheme: light;
+}
+
+:root[data-theme="spec"] body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  background: #eeeeec;
+}
+
+/* The device body. Two things are printed on it in diagram units: the plate's LED, lit by the
+   feed state, and the tick scale under the main slider. */
+:root[data-theme="spec"] #stage {
+  flex: none;
+  width: calc(var(--u) * 1280);
+  height: auto;
+  aspect-ratio: 1280 / 1152;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border-radius: calc(var(--u) * 32);
+  background:
+    radial-gradient(
+      circle at 2.19% 3.2%,
+      var(--plate) 0 calc(var(--u) * 2.5),
+      transparent calc(var(--u) * 3)
+    ),
+    radial-gradient(
+      circle at 2.19% 3.2%,
+      var(--plate-glow) 0,
+      transparent calc(var(--u) * 8)
+    ),
+    url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 -120 1280 1152' preserveAspectRatio='none'><g fill='none' stroke='%231d1d1c'><path d='M959 204v7M990 204v7M1021 204v7M1052 204v7M1083 204v7M1114 204v7M1145 204v7M1176 204v7'/><path stroke-opacity='.6' d='M966.75 204v4M974.5 204v4M982.25 204v4M997.75 204v4M1005.5 204v4M1013.25 204v4M1028.75 204v4M1036.5 204v4M1044.25 204v4M1059.75 204v4M1067.5 204v4M1075.25 204v4M1090.75 204v4M1098.5 204v4M1106.25 204v4M1121.75 204v4M1129.5 204v4M1137.25 204v4M1152.75 204v4M1160.5 204v4M1168.25 204v4'/></g></svg>")
+      0 0 / 100% 100% no-repeat,
+    linear-gradient(#f5f5f2, #ecece8);
+  box-shadow:
+    inset 0 1px 0 #fff,
+    0 0 0 1px rgba(83, 80, 70, 0.055),
+    calc(var(--u) * 0.5) calc(var(--u) * 1) calc(var(--u) * 1)
+      rgba(83, 80, 70, 0.07),
+    calc(var(--u) * 1) calc(var(--u) * 2) calc(var(--u) * 2)
+      rgba(83, 80, 70, 0.07),
+    calc(var(--u) * 2) calc(var(--u) * 4) calc(var(--u) * 4)
+      rgba(83, 80, 70, 0.07),
+    calc(var(--u) * 4) calc(var(--u) * 8) calc(var(--u) * 8)
+      rgba(83, 80, 70, 0.07),
+    calc(var(--u) * 8) calc(var(--u) * 16) calc(var(--u) * 16)
+      rgba(83, 80, 70, 0.063);
+}
+:root[data-theme="spec"] #stage[data-state="live"] {
+  --plate: var(--g);
+  --plate-glow: color-mix(in oklab, var(--g) 50%, transparent);
+}
+:root[data-theme="spec"] #stage[data-state="paused"] {
+  --plate: var(--o);
+  --plate-glow: color-mix(in oklab, var(--o) 50%, transparent);
+}
+
+/* ---------- lettering: printed labels, uppercase and tracked ---------- */
+/* No shadow under type: at these sizes the kit's 1px offset copy reads as double vision. */
+:root[data-theme="spec"] .hi {
+  fill: var(--hi);
+  font-weight: 600;
+}
+:root[data-theme="spec"] .dim {
+  font-weight: 400;
+}
+:root[data-theme="spec"] .small {
+  font-size: 8.5px;
+  font-weight: 500;
+}
+:root[data-theme="spec"] .caps {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+}
+:root[data-theme="spec"] .amber {
+  fill: var(--o-ink);
+  font-weight: 600;
+}
+:root[data-theme="spec"] .red,
+:root[data-theme="spec"] .verdict.bad {
+  fill: var(--r-ink);
+  font-weight: 600;
+}
+:root[data-theme="spec"] :is(.green, .verdict.good) {
+  fill: var(--g-ink);
+  font-weight: 600;
+}
+:root[data-theme="spec"] #tally {
+  fill: var(--mid);
+  font-weight: 500;
+}
+/* the plate: the LED says live or paused, the code is bold ink */
+:root[data-theme="spec"] .state {
+  fill: var(--r-ink);
+  font-weight: 600;
+}
+:root[data-theme="spec"] [data-state="live"] .state {
+  fill: var(--hi);
+}
+:root[data-theme="spec"] [data-state="paused"] .state {
+  fill: var(--o-ink);
+}
+
+/* header clock: a small flat knob, its hand the pointer */
+:root[data-theme="spec"] .clock circle {
+  fill: #fbfbfa;
+  stroke: #2c2c2b;
+  stroke-width: 1.5;
+  filter: drop-shadow(0.5px 1.5px 1.5px rgba(83, 80, 70, 0.25));
+}
+:root[data-theme="spec"] .clock line {
+  stroke: var(--o-ink);
+  stroke-width: 1.6;
+}
+
+/* ---------- wires: printed ink hairlines, like the kit's tick scales ---------- */
+:root[data-theme="spec"] .wire {
+  stroke: var(--line);
+  stroke-width: 1.1;
+}
+:root[data-theme="spec"] .wire .head {
+  stroke: var(--line);
+  stroke-width: 1.3;
+}
+:root[data-theme="spec"] .wire.lane-up {
+  stroke: #8f8d87;
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+:root[data-theme="spec"] .rule {
+  stroke: var(--edge);
+  stroke-width: 1;
+  filter: drop-shadow(0 1px 0 #fff);
+}
+:root[data-theme="spec"] .arrow {
+  stroke: #8f8d87;
+  stroke-width: 1;
+  stroke-dasharray: none;
+}
+:root[data-theme="spec"] .gatewire {
+  stroke: var(--line);
+  stroke-width: 1.1;
+}
+:root[data-theme="spec"] .coming[data-status="idle"] ~ .gatewire {
+  stroke: var(--o-ink);
+  stroke-width: 1.6;
+}
+
+/* ports: bar LEDs set into the edge of each part; the landing lights them */
+:root[data-theme="spec"] :is(.port, .planned .port) {
+  fill: var(--unlit);
+  stroke: rgba(0, 0, 0, 0.25);
+  stroke-width: 0.6;
+  rx: 2.5px;
+}
+:root[data-theme="spec"] .port.cap {
+  fill: #1c1c1b;
+  stroke: none;
+  rx: 3.5px;
+}
+
+/* ---------- foreman and hand-off: light keys on their 3px edge ---------- */
+:root[data-theme="spec"] .box > rect:first-child {
+  fill: url(#t-sheen-1);
+  stroke: var(--rim);
+  stroke-width: 0.8;
+  rx: 13px;
+  filter: drop-shadow(0 3px 0 #dcdcd8)
+    drop-shadow(0.5px 3px 3px rgba(83, 80, 70, 0.16));
+}
+:root[data-theme="spec"] g[transform="translate(0 -22)"] .box text {
+  fill: var(--hi);
+  font-weight: 500;
+}
+
+/* ---------- submission: an LCD window, its three slots LCD segments ---------- */
+:root[data-theme="spec"]
+  #stage
+  > .box:not(.integrator, .review)
+  > rect:first-child,
+:root[data-theme="spec"] .gatewire + g > .box > rect:first-child {
+  fill: url(#t-sheen-2);
+  stroke: #f2f2f0;
+  stroke-width: 4;
+  rx: 12px;
+  filter: drop-shadow(0 0 0.6px rgba(83, 80, 70, 0.7)) drop-shadow(0 1px 0 #fff);
+}
+:root[data-theme="spec"] .slot circle {
+  fill: rgba(20, 20, 19, 0.09);
+  stroke: none;
+}
+:root[data-theme="spec"] .slot rect {
+  fill: #c4c5bf;
+  rx: 3px;
+}
+:root[data-theme="spec"] .slot[data-on] circle {
+  fill: #141413;
+  stroke: none;
+}
+
+/* ---------- integrator: the dark display; the press is drawn in its ink ---------- */
+:root[data-theme="spec"] .box.integrator > rect:first-child {
+  fill: url(#t-segs);
+  stroke: #222221;
+  stroke-width: 5;
+  rx: 8px;
+  filter: drop-shadow(0 1px 0 #fff)
+    drop-shadow(0.5px 2px 2px rgba(83, 80, 70, 0.2));
+}
+:root[data-theme="spec"] .plate .stem {
+  fill: #5c5c59;
+}
+:root[data-theme="spec"] :is(.plate .platen, .base) {
+  fill: #73736f; /* display ink at 45% */
+}
+:root[data-theme="spec"] .plate .face {
+  fill: #f2f2ee;
+}
+:root[data-theme="spec"] .load {
+  fill: var(--o-lit);
+  filter: drop-shadow(0 0 1.5px var(--o-lit))
+    drop-shadow(0 0 5px color-mix(in oklab, var(--o-lit) 45%, transparent));
+}
+:root[data-theme="spec"] .sparks {
+  stroke: #f2f2ee;
+}
+
+/* ---------- cold review: the flat knob on a white module tile ---------- */
+:root[data-theme="spec"] .box.review > rect:first-child {
+  fill: #fbfbfa;
+  stroke: rgba(83, 80, 70, 0.14);
+  stroke-width: 0.8;
+  rx: 8px; /* the freezer doors are clipped to this radius */
+  filter: drop-shadow(0.5px 1px 1px rgba(83, 80, 70, 0.12))
+    drop-shadow(2px 4px 4px rgba(83, 80, 70, 0.1));
+}
+/* One circle draws the whole knob: its dashed stroke is the tick ring, 28 ticks over 270
+   degrees from half past seven, and its fill the ringed cap with the pointer lamp. */
+:root[data-theme="spec"] .review circle:not(.sweep) {
+  r: 24px;
+  fill: url(#t-knob);
+  stroke: #1d1d1c;
+  stroke-width: 5;
+  stroke-dasharray: 1 3.189 1 3.189 1 3.189 1 3.189 1 3.189 1 3.189 1 3.189 1
+    3.189 1 3.189 1 3.189 1 3.189 1 3.189 1 3.189 1 3.189 1 3.189 1 3.189 1
+    3.189 1 3.189 1 3.189 1 3.189 1 3.189 1 3.189 1 3.189 1 3.189 1 3.189 1
+    3.189 1 3.189 1 36.699;
+  stroke-dashoffset: -56.549;
+}
+/* the verdict arc runs between the cap and the ticks */
+:root[data-theme="spec"] .review .sweep {
+  r: 19px;
+  fill: none;
+  stroke: var(--o);
+  stroke-width: 2.4;
+}
+:root[data-theme="spec"] .door > path:first-child {
+  fill: url(#t-sheen-4);
+  stroke: #0e0e0d;
+  stroke-width: 1;
+}
+:root[data-theme="spec"] .door .panel {
+  fill: #141413;
+  stroke: rgba(255, 255, 255, 0.07);
+}
+:root[data-theme="spec"] .door .plaque {
+  fill: var(--o);
+  stroke: none;
+}
+:root[data-theme="spec"] .door text {
+  fill: #fff;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+:root[data-theme="spec"] .door .lamp {
+  stroke: var(--o-lit);
+  opacity: 1;
+}
+
+/* ---------- builders: a key per ticket, an LED on each bot ---------- */
+:root[data-theme="spec"] .builder .bot rect {
+  fill: #fbfbfa;
+  stroke: #2c2c2b;
+  stroke-width: 1.2;
+  rx: 5px;
+}
+:root[data-theme="spec"] .builder .bot path {
+  stroke: #2c2c2b;
+  stroke-width: 1.2;
+}
+:root[data-theme="spec"] .builder .eye {
+  fill: #1d1d1c;
+}
+:root[data-theme="spec"] .builder .tip {
+  r: 2.5px;
+  fill: var(--unlit);
+  stroke: rgba(0, 0, 0, 0.25);
+  stroke-width: 0.5;
+}
+:root[data-theme="spec"] .builder .id {
+  font-size: 8.5px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  fill: var(--dim);
+}
+/* queued: the empty hole a key stands in */
+:root[data-theme="spec"] .builder .card rect {
+  fill: #e6e6e2;
+  stroke: rgba(83, 80, 70, 0.28);
+  stroke-width: 0.8;
+  rx: 7px;
+}
+:root[data-theme="spec"] .builder .ink {
+  stroke: #b4b2ac;
+}
+:root[data-theme="spec"] .builder[data-status="unknown"] .card rect {
+  stroke-dasharray: 2 2;
+}
+/* idle: a light key, its LED a white cap in an ink ring */
+:root[data-theme="spec"] .builder[data-status="idle"] .card rect {
+  fill: url(#t-sheen-1);
+  stroke: var(--rim);
+  filter: drop-shadow(0 2px 0 #d2d2cd)
+    drop-shadow(0.5px 3px 2.5px rgba(83, 80, 70, 0.2));
+}
+:root[data-theme="spec"] .builder[data-status="idle"] .ink {
+  stroke: var(--hi);
+}
+:root[data-theme="spec"] .builder[data-status="idle"] .tip {
+  fill: #fbfbfa;
+  stroke: #2c2c2b;
+  stroke-width: 1.2;
+}
+:root[data-theme="spec"] .builder[data-status="idle"] .id {
+  fill: var(--hi);
+  font-weight: 600;
+}
+/* accepted: a light key on a green edge, green LED */
+:root[data-theme="spec"] .builder[data-status="accepted"] .card rect {
+  fill: url(#t-sheen-1);
+  stroke: var(--g-ink);
+  stroke-width: 1;
+  filter: drop-shadow(0 2px 0 var(--g-ink))
+    drop-shadow(0 3px 4px color-mix(in oklab, var(--g) 45%, transparent));
+}
+:root[data-theme="spec"] .builder[data-status="accepted"] .ink {
+  stroke: var(--g-ink);
+}
+:root[data-theme="spec"] .builder[data-status="accepted"] .tip {
+  fill: var(--g);
+  stroke: none;
+  filter: drop-shadow(0 0 2px var(--g));
+}
+:root[data-theme="spec"] .builder[data-status="accepted"] .id {
+  fill: var(--g-ink);
+  font-weight: 600;
+}
+/* working: the orange key */
+:root[data-theme="spec"] .builder[data-status="working"] .card rect {
+  fill: url(#t-sheen-3);
+  stroke: none;
+  filter: drop-shadow(0 2px 0 var(--o-edge))
+    drop-shadow(0 4px 5px color-mix(in oklab, var(--o) 47%, transparent));
+}
+:root[data-theme="spec"]
+  [data-state="live"]
+  .builder[data-status="working"]
+  .card
+  rect {
+  animation: spec-glow 1.6s ease-in-out infinite alternate;
+}
+:root[data-theme="spec"] .builder[data-status="working"] .ink {
+  stroke: #fff;
+}
+:root[data-theme="spec"] .builder[data-status="working"] .tip {
+  fill: var(--o);
+  stroke: none;
+  filter: drop-shadow(0 0 2px var(--o));
+}
+:root[data-theme="spec"] .builder[data-status="working"] .id {
+  fill: var(--o-ink);
+  font-weight: 600;
+}
+/* blocked: the dark key, so it is not told from working by hue alone */
+:root[data-theme="spec"] .builder[data-status="blocked"] .card rect {
+  fill: url(#t-sheen-4);
+  stroke: #0e0e0d;
+  stroke-width: 1;
+  filter: drop-shadow(0 2px 0 #0e0e0d)
+    drop-shadow(0.5px 3px 2.5px rgba(83, 80, 70, 0.3));
+}
+:root[data-theme="spec"] .builder[data-status="blocked"] .ink {
+  stroke: var(--r);
+}
+:root[data-theme="spec"] .builder[data-status="blocked"] .tip {
+  fill: var(--r);
+  stroke: #1d1d1c;
+  stroke-width: 1.4;
+}
+:root[data-theme="spec"] .builder[data-status="blocked"] .id {
+  fill: var(--r-ink);
+  font-weight: 600;
+}
+@keyframes spec-glow {
+  from {
+    filter: drop-shadow(0 2px 0 var(--o-edge))
+      drop-shadow(0 3px 3px color-mix(in oklab, var(--o) 30%, transparent));
+  }
+  to {
+    filter: drop-shadow(0 2px 0 var(--o-edge))
+      drop-shadow(0 5px 8px color-mix(in oklab, var(--o) 60%, transparent));
+  }
+}
+
+/* ---------- main: the slider track; landed commits are LEDs in it, the newest the thumb ---------- */
+:root[data-theme="spec"] .mainline {
+  stroke: #1c1c1b;
+  stroke-width: 8;
+  stroke-linecap: round;
+  filter: drop-shadow(0 1px 0 #fff);
+}
+:root[data-theme="spec"] .landed {
+  r: 3.2px;
+  fill: var(--g);
+  stroke: transparent; /* keeps the hover target the size it was */
+  stroke-width: 8;
+  filter: drop-shadow(0 0 2.5px var(--g));
+}
+:root[data-theme="spec"] .landed.last {
+  r: 4.5px;
+  fill: var(--g);
+  stroke: #fbfbfa;
+  stroke-width: 11;
+  paint-order: stroke;
+  filter: drop-shadow(0 0 0.5px rgba(83, 80, 70, 0.8))
+    drop-shadow(0 2px 0 #d2d2cd)
+    drop-shadow(0.5px 3px 3px rgba(83, 80, 70, 0.25));
+}
+
+/* ---------- full gate, planned: an empty socket with a short slider track in it ---------- */
+:root[data-theme="spec"] .planned rect:not(.port) {
+  fill: rgba(83, 80, 70, 0.03);
+  stroke: #a9a7a1;
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  rx: 12px;
+}
+:root[data-theme="spec"] .track {
+  stroke: #1c1c1b;
+  stroke-width: 6;
+  stroke-linecap: round;
+  filter: drop-shadow(0 1px 0 #fff);
+}
+
+/* ---------- stage chips: badges with a status stripe; the stage that is now is the orange key ---------- */
+:root[data-theme="spec"] .chips rect:not(.marker) {
+  fill: url(#t-tab-3);
+  stroke: rgba(83, 80, 70, 0.22);
+  stroke-width: 0.8;
+  stroke-dasharray: none;
+  rx: 8px;
+}
+:root[data-theme="spec"] .chips text {
+  font-size: 8.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  fill: var(--dim);
+}
+:root[data-theme="spec"] .chip[data-s="done"] rect {
+  fill: url(#t-tab-1);
+  stroke: rgba(83, 80, 70, 0.3);
+  filter: drop-shadow(0 1px 1px rgba(83, 80, 70, 0.14));
+}
+:root[data-theme="spec"] .chip[data-s="done"] text {
+  fill: var(--mid);
+}
+:root[data-theme="spec"] .chip[data-s="now"] rect {
+  fill: url(#t-sheen-3);
+  stroke: none;
+  filter: drop-shadow(0 2px 0 var(--o-edge))
+    drop-shadow(0 4px 5px color-mix(in oklab, var(--o) 47%, transparent));
+}
+:root[data-theme="spec"] .chip[data-s="now"] text {
+  fill: #fff;
+}
+:root[data-theme="spec"] .chip[data-s="fail"] rect {
+  fill: url(#t-tab-2);
+  stroke: #0e0e0d;
+  stroke-width: 1;
+  filter: drop-shadow(0 2px 0 #0e0e0d);
+}
+:root[data-theme="spec"] .chip[data-s="fail"] text {
+  fill: #f2f2ee;
+}
+:root[data-theme="spec"] .coming[data-status="blocked"] .id {
+  fill: var(--r-ink);
+}
+
+/* ---------- gate detail: the grey LCD with the item-list look ---------- */
+:root[data-theme="spec"] .gatewire + g > text {
+  fill: rgba(20, 20, 19, 0.62);
+}
+:root[data-theme="spec"] .gatewire + g > text .hi {
+  fill: #141413;
+}
+:root[data-theme="spec"] .gatewire + g > text .dim {
+  fill: var(--o-ink);
+  font-weight: 600;
+}
+:root[data-theme="spec"] .gatewire + g > text .green {
+  fill: oklch(0.42 0.14 150);
+}
+:root[data-theme="spec"] .gatewire + g > text .red {
+  fill: oklch(0.46 0.2 28);
+}
+:root[data-theme="spec"] .chips.filled rect {
+  fill: url(#t-tab-3);
+  stroke: rgba(20, 20, 19, 0.3);
+}
+:root[data-theme="spec"] .chips.filled text {
+  fill: var(--mid);
+}
+:root[data-theme="spec"] .chips.filled .arrow {
+  stroke: rgba(20, 20, 19, 0.45);
+}
+/* the dash that marks the selected item */
+:root[data-theme="spec"] .marker {
+  fill: rgba(20, 20, 19, 0.3);
+}
+:root[data-theme="spec"] .landing .marker {
+  fill: var(--o-ink);
+}
+
+/* ---------- ticket queue: LEDs ---------- */
+:root[data-theme="spec"] .q circle {
+  r: 5px;
+  fill: var(--g);
+  stroke: none;
+  filter: drop-shadow(0 0 2.5px var(--g));
+}
+:root[data-theme="spec"] .q text {
+  font-size: 8.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  fill: var(--mid);
+}
+:root[data-theme="spec"]
+  .q:is([data-status="queued"], [data-status="unknown"])
+  circle {
+  fill: var(--unlit);
+  stroke: rgba(0, 0, 0, 0.22);
+  stroke-width: 0.6;
+  filter: drop-shadow(0 0.5px 0 rgba(255, 255, 255, 0.9));
+}
+:root[data-theme="spec"] .q[data-status="working"] circle {
+  fill: var(--o);
+  filter: drop-shadow(0 0 3px var(--o));
+}
+:root[data-theme="spec"] .q[data-status="working"] text {
+  fill: var(--o-ink);
+}
+:root[data-theme="spec"] .q[data-status="idle"] circle {
+  fill: #fbfbfa;
+  stroke: #2c2c2b;
+  stroke-width: 1.6;
+  filter: none;
+}
+:root[data-theme="spec"] .q[data-status="idle"] text {
+  fill: var(--hi);
+}
+:root[data-theme="spec"] .q[data-status="blocked"] circle {
+  fill: var(--r);
+  stroke: #1d1d1c;
+  stroke-width: 3;
+  filter: none;
+}
+:root[data-theme="spec"] .q[data-status="blocked"] text {
+  fill: var(--r-ink);
+}
+
+/* ---------- packets: an orange key cap with its glow, lit orange inside the display ---------- */
+:root[data-theme="spec"] .courier {
+  --amber: var(--o-lit);
+}
+:root[data-theme="spec"] rect.pkt,
+:root[data-theme="spec"] .pkt > rect:not(.trail, .ring) {
+  rx: 4px;
+  stroke: var(--o-edge);
+  stroke-width: 1;
+}
+:root[data-theme="spec"] circle.pkt {
+  stroke: var(--o-edge);
+  stroke-width: 1;
+}
+:root[data-theme="spec"] :is(rect, circle).pkt,
+:root[data-theme="spec"] .courier,
+:root[data-theme="spec"] .pkt:is(.findings, .fixes) > rect {
+  filter: drop-shadow(0 0 2px var(--o))
+    drop-shadow(0 2px 7px color-mix(in oklab, var(--o) 55%, transparent));
+}
+/* a packet that reports a failure is the dark key with a red rim */
+:root[data-theme="spec"] rect.pkt.back,
+:root[data-theme="spec"] .pkt:is(.setup, .gatefail, .mainred) > rect {
+  fill: #1c1c1b;
+  stroke: var(--r);
+  stroke-width: 2.5;
+  filter: drop-shadow(0 0 2px var(--r))
+    drop-shadow(0 2px 6px color-mix(in oklab, var(--r) 50%, transparent));
+}
+:root[data-theme="spec"] .courier .ring {
+  stroke-width: 2;
+}
+:root[data-theme="spec"] .pkt text {
+  font-size: 8.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  fill: var(--r-ink);
+}
+:root[data-theme="spec"] .pkt:is(.findings, .fixes) text {
+  fill: var(--o-ink);
+}
+
+/* ---------- the HTML around the diagram ---------- */
+:root[data-theme="spec"] #play {
+  top: calc(50vh - var(--u) * 556);
+  right: calc(50vw - var(--u) * 606);
+  height: calc(var(--u) * 24);
+  padding: 0 calc(var(--u) * 13);
+  font-size: calc(var(--u) * 9.5);
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #1d1d1c;
+  background: linear-gradient(#ecece9, #efefec 30%, #fdfdfc);
+  border: 0;
+  border-radius: calc(var(--u) * 11);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    0 0 0 1px rgba(83, 80, 70, 0.07),
+    0 calc(var(--u) * 3) 0 #dcdcd8,
+    0 calc(var(--u) * 3.5) 1px rgba(83, 80, 70, 0.118),
+    0 calc(var(--u) * 4.5) 3px rgba(83, 80, 70, 0.063),
+    0.5px calc(var(--u) * 6) 9px -3px rgba(83, 80, 70, 0.082);
+}
+:root[data-theme="spec"] #play:hover {
+  color: var(--o-ink);
+}
+:root[data-theme="spec"] #play:active {
+  translate: 0 calc(var(--u) * 2);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    0 0 0 1px rgba(83, 80, 70, 0.07),
+    0 calc(var(--u) * 1) 0 #dcdcd8;
+}
+:root[data-theme="spec"] #play:focus-visible {
+  outline: 2px solid var(--o);
+  outline-offset: 3px;
+}
+:root[data-theme="spec"] #tip {
+  padding: 7px 11px;
+  border: 0;
+  border-radius: 8px;
+  background: #0b0b0a;
+  color: #f2f2ee;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  box-shadow:
+    0 0 0 3px #222221,
+    0 4px 0 0 #fff,
+    2px 6px 10px rgba(83, 80, 70, 0.25);
+}

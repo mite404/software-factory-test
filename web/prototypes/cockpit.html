@@ -1,0 +1,1681 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Software factory - cockpit prototype</title>
+    <link
+      href="https://fonts.googleapis.com/css2?family=B612+Mono:wght@400;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --a: #ff9d24; /* the one display amber */
+        --ad: #b9720f; /* same amber, unlit: not reached, empty */
+        --scr: #0c0906; /* display glass */
+        --plate: #1a1a1b; /* anodised module face */
+        --seam: #080808;
+        --ink: #bdbdb6; /* engraved legend */
+        --ink2: #8c8c86;
+        --glow: 0 0 6px rgba(255, 150, 30, 0.45);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html {
+        background: #c9cac6;
+      }
+      body {
+        margin: 0;
+        padding: 20px 0 26px;
+        font:
+          12px/16px "B612 Mono",
+          ui-monospace,
+          Menlo,
+          monospace;
+        text-transform: uppercase;
+        color: var(--ink);
+        -webkit-font-smoothing: antialiased;
+      }
+      h1,
+      h2,
+      p,
+      ol,
+      ul {
+        margin: 0;
+        padding: 0;
+        font: inherit;
+        list-style: none;
+      }
+      b,
+      em,
+      i,
+      small {
+        font-style: normal;
+        font-size: inherit;
+      }
+
+      /* chassis and modules */
+      .panel {
+        width: 1400px;
+        margin: 0 auto;
+        padding: 10px;
+        background: var(--seam);
+        border: 1px solid #000;
+        box-shadow:
+          inset 0 1px 0 #3a3a3c,
+          0 22px 30px -14px rgba(0, 0, 0, 0.5);
+        display: grid;
+        grid-template-columns: 404px 560px 404px;
+        gap: 6px;
+      }
+      .span {
+        grid-column: 1 / -1;
+      }
+      .col {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        min-width: 0;
+      }
+      .col > .mod {
+        flex: 1 1 auto;
+      }
+      .mod {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        padding: 26px 16px 24px;
+        background: var(--plate);
+        border: 1px solid;
+        border-color: #323234 #131314 #0c0c0d #29292b;
+      }
+
+      /* silver hex-socket bolts */
+      .b {
+        position: absolute;
+        width: 13px;
+        height: 13px;
+        border-radius: 50%;
+        background: #d9dadc;
+        box-shadow:
+          inset 0 0 0 1px #77797c,
+          inset 0 0 0 2px #b4b6b9,
+          0 0 0 2px #0d0d0e,
+          0 1px 0 2px #2c2c2e;
+      }
+      .b::after {
+        content: "";
+        position: absolute;
+        inset: 3.5px;
+        background: #3c3e42;
+        clip-path: polygon(25% 7%, 75% 7%, 100% 50%, 75% 93%, 25% 93%, 0 50%);
+      }
+      .b1 {
+        top: 6px;
+        left: 6px;
+      }
+      .b2 {
+        top: 6px;
+        right: 6px;
+      }
+      .b3 {
+        bottom: 5px;
+        left: 6px;
+      }
+      .b4 {
+        bottom: 5px;
+        right: 6px;
+      }
+      .b2::after,
+      .b3::after {
+        transform: rotate(24deg);
+      }
+
+      /* engraved legends */
+      .lg {
+        position: absolute;
+        top: 7px;
+        left: 28px;
+        right: 28px;
+        display: flex;
+        justify-content: space-between;
+        font-size: 10px;
+        line-height: 12px;
+        letter-spacing: 0.16em;
+        color: var(--ink);
+        text-shadow: 0 1px 0 #000;
+        white-space: nowrap;
+      }
+      .lg.bot {
+        top: auto;
+        bottom: 6px;
+      }
+      .lg .n {
+        color: var(--ink2);
+      }
+
+      /* recessed display window */
+      .win {
+        position: relative;
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        min-width: 0;
+        padding: 10px 12px;
+        background: var(--scr);
+        border: 5px solid;
+        border-color: #5e3f12 #202021 #39393b #0a0a0a;
+        box-shadow:
+          inset 0 0 0 1px #000,
+          inset 0 0 30px rgba(255, 140, 20, 0.07),
+          0 0 0 1px #050505;
+        color: var(--a);
+        text-shadow: var(--glow);
+        white-space: nowrap;
+      }
+      .win b {
+        font-weight: 700;
+      }
+      .dim {
+        color: var(--ad);
+      }
+      .rule {
+        border-top: 1px solid var(--a);
+        margin: 8px 0;
+      }
+      .rule.dot {
+        border-top: 2px dotted var(--ad);
+      }
+
+      /* four states in one amber: solid, hatch, outline, cross-hatch, dotted */
+      .s-done {
+        background: var(--a);
+      }
+      .s-now {
+        background: repeating-linear-gradient(
+          135deg,
+          var(--a) 0 2.5px,
+          transparent 2.5px 5px
+        );
+        box-shadow: inset 0 0 0 1px var(--a);
+      }
+      .s-idle {
+        box-shadow: inset 0 0 0 1.5px var(--a);
+      }
+      .s-blocked {
+        background:
+          repeating-linear-gradient(
+            45deg,
+            transparent 0 3px,
+            var(--a) 3px 4.2px,
+            transparent 4.2px 7px
+          ),
+          repeating-linear-gradient(
+            -45deg,
+            transparent 0 3px,
+            var(--a) 3px 4.2px,
+            transparent 4.2px 7px
+          );
+        box-shadow: inset 0 0 0 1.5px var(--a);
+      }
+      .s-queued {
+        border: 2px dotted var(--a);
+      }
+      .s-empty {
+        border-bottom: 2px dotted var(--ad);
+      }
+      .sw {
+        display: inline-block;
+        width: 22px;
+        height: 10px;
+        vertical-align: -1px;
+        margin-right: 7px;
+      }
+      .tag {
+        display: inline-block;
+        padding: 0 5px;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 16px;
+        box-shadow: inset 0 0 0 1.5px var(--a);
+      }
+      .tag.inv {
+        background: var(--a);
+        color: var(--scr);
+        text-shadow: none;
+        box-shadow: 0 0 8px rgba(255, 150, 30, 0.4);
+      }
+      .tag.dot {
+        box-shadow: none;
+        outline: 2px dotted var(--a);
+        outline-offset: -2px;
+      }
+      .tag.x {
+        box-shadow:
+          inset 0 0 0 1.5px var(--a),
+          inset 0 0 0 3.5px var(--scr),
+          inset 0 0 0 4.5px var(--a);
+        padding: 3px 10px;
+      }
+
+      /* push buttons and rocker lamps */
+      .keyset {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 3px;
+        font-size: 10px;
+        line-height: 11px;
+        letter-spacing: 0.1em;
+        color: var(--ink);
+      }
+      .key {
+        display: block;
+        width: 24px;
+        height: 24px;
+        padding: 0;
+        background: #0e0e0f;
+        border: 2px solid #a59a84;
+        box-shadow:
+          inset 0 0 0 2px #19191a,
+          0 0 0 2px #0c0c0d;
+      }
+      .key.play {
+        width: 30px;
+        height: 30px;
+        position: relative;
+        cursor: pointer;
+      }
+      .key.play::after {
+        content: "";
+        position: absolute;
+        left: 9px;
+        top: 6px;
+        border: 7px solid transparent;
+        border-left: 10px solid #d8cfbd;
+        border-right: 0;
+      }
+      .lampset {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 10px;
+        line-height: 13px;
+        letter-spacing: 0.12em;
+      }
+      .lampset b {
+        display: block;
+        font-size: 13px;
+        letter-spacing: 0.18em;
+        color: #e4e4de;
+      }
+      .lamp {
+        width: 40px;
+        height: 22px;
+        background: var(--a);
+        border: 2px solid #8a520a;
+        border-top-color: #ffd592;
+        box-shadow:
+          0 0 0 2px #0c0c0d,
+          0 0 14px rgba(255, 150, 30, 0.65);
+      }
+      .lamp.red {
+        background: #ff4326;
+        border-color: #8f1c0c;
+        border-top-color: #ffab9a;
+        box-shadow:
+          0 0 0 2px #0c0c0d,
+          0 0 14px rgba(255, 60, 30, 0.7);
+      }
+
+      /* header strip */
+      .hdr {
+        flex-direction: row;
+        align-items: center;
+        gap: 26px;
+        padding: 14px 30px;
+      }
+      .plateid {
+        padding-left: 22px;
+        border-left: 1px solid #4b4b4d;
+        font-size: 10px;
+        line-height: 13px;
+        letter-spacing: 0.16em;
+        color: var(--ink2);
+      }
+      .plateid h1 {
+        font-size: 13px;
+        line-height: 20px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        color: #e4e4de;
+        text-shadow: 0 1px 0 #000;
+      }
+      .hdr .win {
+        flex-direction: row;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        padding: 7px 12px;
+        font-size: 11px;
+      }
+      .hdr .sw {
+        width: 20px;
+        margin-right: 6px;
+      }
+
+      /* foreman */
+      .cells3 {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 1px;
+        padding: 1px;
+        background: var(--a);
+        margin-bottom: 8px;
+      }
+      .cells3 span {
+        background: var(--scr);
+        text-align: center;
+        line-height: 22px;
+        font-weight: 700;
+      }
+      .ho {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 11px;
+      }
+
+      /* builders: bezel keys beside a bar stack */
+      .bezel {
+        flex: 1;
+        display: flex;
+        gap: 10px;
+      }
+      .keys {
+        display: grid;
+        grid-template-rows: repeat(4, 1fr);
+        padding: 13px 0;
+      }
+      .rows4 {
+        display: grid;
+        grid-template-rows: repeat(4, 1fr);
+        padding: 8px 12px;
+      }
+      .brow {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-height: 45px;
+      }
+      .stripes {
+        display: grid;
+        gap: 6px;
+        width: 84px;
+        flex: none;
+      }
+      .stripes i {
+        height: 9px;
+      }
+      .bt {
+        display: grid;
+        gap: 3px;
+        font-size: 11px;
+        line-height: 16px;
+      }
+      .bt b {
+        font-size: 12px;
+      }
+      .bt .tag {
+        margin-right: 6px;
+        font-size: 10px;
+      }
+
+      /* submission slots: one inverse-video cell */
+      .slots {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 6px;
+        margin-bottom: 9px;
+      }
+      .slot {
+        padding: 5px 8px 6px;
+        border: 2px dotted var(--ad);
+        color: var(--ad);
+        font-size: 10px;
+        line-height: 13px;
+      }
+      .slot b {
+        display: block;
+        font-size: 16px;
+        line-height: 20px;
+      }
+      .slot.on {
+        border: 2px solid var(--a);
+        background: var(--a);
+        color: var(--scr);
+        text-shadow: none;
+        box-shadow: 0 0 12px rgba(255, 150, 30, 0.4);
+      }
+      .notes {
+        font-size: 11px;
+        line-height: 17px;
+      }
+
+      /* scope */
+      .oct {
+        position: relative;
+        width: 520px;
+        height: 410px;
+        margin: auto;
+        background: linear-gradient(
+          168deg,
+          #5e5e62 0,
+          #6a4a16 9%,
+          #0b0b0b 46%,
+          #2b2b2d 78%,
+          #47474a 100%
+        );
+        clip-path: polygon(
+          64px 0,
+          456px 0,
+          520px 64px,
+          520px 346px,
+          456px 410px,
+          64px 410px,
+          0 346px,
+          0 64px
+        );
+      }
+      .oct-in {
+        position: absolute;
+        inset: 6px;
+        background: var(--scr);
+        color: var(--a);
+        text-shadow: var(--glow);
+        clip-path: polygon(
+          60.5px 0,
+          447.5px 0,
+          508px 60.5px,
+          508px 337.5px,
+          447.5px 398px,
+          60.5px 398px,
+          0 337.5px,
+          0 60.5px
+        );
+      }
+      .oct-in::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        box-shadow: inset 0 0 44px rgba(255, 140, 20, 0.09);
+        pointer-events: none;
+      }
+      svg {
+        display: block;
+        overflow: visible;
+      }
+      svg text {
+        font-family: inherit;
+        fill: var(--a);
+      }
+      .ln {
+        fill: none;
+        stroke: var(--a);
+        stroke-width: 1.5;
+      }
+      .glow {
+        filter: drop-shadow(0 0 3px rgba(255, 150, 30, 0.55));
+      }
+      .mk text {
+        font-size: 12px;
+        font-weight: 700;
+        text-anchor: middle;
+      }
+      .mk.done rect {
+        fill: var(--a);
+      }
+      .mk.done text {
+        fill: var(--scr);
+      }
+      .mk.todo rect {
+        fill: var(--scr);
+        stroke: var(--a);
+        stroke-width: 2;
+        stroke-dasharray: 0.1 4;
+        stroke-linecap: round;
+      }
+      .lb {
+        font-size: 12px;
+      }
+      .lb.e {
+        text-anchor: end;
+      }
+      .lb.todo {
+        fill: var(--ad);
+      }
+      .strip {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 24px;
+        display: flex;
+        justify-content: center;
+      }
+      .strip span {
+        padding: 4px 9px;
+        margin-left: -2px;
+        border: 2px solid var(--a);
+        font-size: 13px;
+        font-weight: 700;
+        line-height: 16px;
+      }
+      .strip .inv {
+        background: var(--a);
+        color: var(--scr);
+        text-shadow: none;
+      }
+
+      /* twin gauges */
+      .gauges {
+        padding: 16px;
+        display: grid;
+        grid-template-columns: 1fr 152px 52px 152px 1fr;
+        align-items: center;
+      }
+      .gauges .eng {
+        font-size: 10px;
+        line-height: 14px;
+        letter-spacing: 0.16em;
+        text-shadow: 0 1px 0 #000;
+      }
+      .gauges .eng.r {
+        text-align: right;
+        padding-right: 14px;
+      }
+      .gauges .eng.l {
+        padding-left: 14px;
+      }
+      .gauges .eng span {
+        display: block;
+        color: var(--ink2);
+      }
+      .dial {
+        width: 152px;
+        height: 152px;
+        border-radius: 50%;
+        background: var(--scr);
+        border: 5px solid;
+        border-color: #5e3f12 #202021 #39393b #0a0a0a;
+        box-shadow:
+          inset 0 0 0 1px #000,
+          inset 0 0 26px rgba(255, 140, 20, 0.09),
+          0 0 0 1px #050505;
+        color: var(--a);
+      }
+      .dial text {
+        text-anchor: middle;
+        font-size: 10px;
+      }
+      .dial .big {
+        font-size: 28px;
+        font-weight: 700;
+      }
+      .dial .st {
+        text-anchor: start;
+      }
+      .hole {
+        justify-self: center;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: #050505;
+        box-shadow: 0 1px 0 #333;
+      }
+
+      /* integrator gate steps, ruled */
+      .steps {
+        display: grid;
+        gap: 1px;
+        padding: 1px;
+        background: var(--a);
+      }
+      .steps li {
+        display: grid;
+        grid-template-columns: 26px 1fr 30px;
+        gap: 1px;
+      }
+      .steps li > * {
+        background: var(--scr);
+        line-height: 20px;
+        padding: 0 8px;
+      }
+      .steps li > b {
+        padding: 0;
+        text-align: center;
+      }
+      .steps li > i {
+        padding: 0;
+        border: 4px solid var(--scr);
+      }
+      .steps li > i.s-done {
+        background: var(--a);
+      }
+      .steps li > i.s-now {
+        background: repeating-linear-gradient(
+          135deg,
+          var(--a) 0 2.5px,
+          var(--scr) 2.5px 5px
+        );
+        box-shadow: none;
+      }
+      .cap {
+        display: flex;
+        justify-content: space-between;
+        font-size: 11px;
+        margin-bottom: 6px;
+      }
+
+      /* cold review */
+      .cr {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+      }
+      .cr div {
+        display: grid;
+        gap: 3px;
+        font-size: 11px;
+      }
+      .cr .tag {
+        margin-right: 6px;
+      }
+
+      /* main: seven cells */
+      .cells7 {
+        display: grid;
+        grid-template-columns: repeat(3, 58px) repeat(4, 1fr);
+        gap: 5px;
+        margin: 8px 0 6px;
+      }
+      .cells7 li {
+        font-size: 10px;
+        line-height: 14px;
+        text-align: center;
+      }
+      .cells7 i {
+        display: block;
+        height: 22px;
+        margin-bottom: 3px;
+        line-height: 18px;
+        font-size: 12px;
+        font-weight: 700;
+        border: 2px dotted var(--ad);
+        color: var(--ad);
+      }
+      .cells7 .on i {
+        border: 2px solid var(--a);
+        background: var(--a);
+        color: var(--scr);
+        text-shadow: none;
+      }
+      .cells7 li:not(.on) {
+        color: var(--ad);
+      }
+
+      /* full gate */
+      .fg p {
+        font-size: 11px;
+        line-height: 18px;
+      }
+      .fg .tag {
+        margin-right: 6px;
+      }
+
+      /* return path: a blanking plate with an engraved arrow */
+      .ret {
+        flex-direction: row;
+        align-items: center;
+        gap: 14px;
+        padding: 10px 30px;
+        font-size: 10px;
+        line-height: 14px;
+        letter-spacing: 0.16em;
+        text-shadow: 0 1px 0 #000;
+        white-space: nowrap;
+      }
+      .ret .b {
+        top: 50%;
+        margin-top: -6.5px;
+      }
+      .ret .l {
+        flex: 1;
+        height: 1px;
+        background: #6b6b67;
+      }
+      .ret .l.s {
+        flex: 0 0 70px;
+      }
+      .ret .ah {
+        border: 5px solid transparent;
+        border-right: 9px solid #bdbdb6;
+        border-left: 0;
+        margin-right: -14px;
+      }
+      .ret .n {
+        color: var(--ink2);
+      }
+
+      /* stage tape */
+      .tapewin {
+        flex-direction: row;
+        justify-content: flex-start;
+        align-items: center;
+        padding: 10px 12px 9px;
+      }
+      .scale {
+        display: grid;
+        grid-template-columns: repeat(8, 144px);
+      }
+      .scale li {
+        position: relative;
+        display: grid;
+        justify-items: center;
+        grid-template-rows: 14px 12px 9px 12px 20px;
+      }
+      .scale li > b {
+        font-size: 11px;
+        line-height: 12px;
+      }
+      .scale .tk {
+        justify-self: stretch;
+        border-bottom: 1px solid var(--a);
+        background: repeating-linear-gradient(
+            90deg,
+            var(--a) 0 1px,
+            transparent 1px 18px
+          )
+          0 6px / 100% 6px no-repeat;
+      }
+      .scale li::after {
+        content: "";
+        position: absolute;
+        left: 72px;
+        top: 14px;
+        width: 1px;
+        height: 12px;
+        background: var(--a);
+      }
+      .scale .seg {
+        justify-self: stretch;
+        margin-top: 2px;
+        height: 7px;
+      }
+      .scale .seg.s-queued {
+        border: 0;
+        border-top: 2px dotted var(--ad);
+        margin-top: 4px;
+      }
+      .scale .pt {
+        width: 0;
+        height: 0;
+      }
+      .scale .now .pt {
+        margin-top: 3px;
+        border: 6px solid transparent;
+        border-top: 0;
+        border-bottom: 8px solid var(--a);
+      }
+      .scale .now::before {
+        content: "";
+        position: absolute;
+        left: 71px;
+        top: 12px;
+        width: 3px;
+        height: 24px;
+        background: var(--a);
+      }
+      .scale .nm {
+        align-self: end;
+        line-height: 18px;
+      }
+      .scale .now .nm {
+        padding: 0 8px;
+        background: var(--a);
+        color: var(--scr);
+        font-weight: 700;
+        text-shadow: none;
+        box-shadow: 0 0 8px rgba(255, 150, 30, 0.4);
+      }
+      .scale .todo {
+        color: var(--ad);
+      }
+      .legend {
+        flex: 1;
+        padding-left: 22px;
+        display: grid;
+        gap: 4px;
+        font-size: 11px;
+      }
+
+      /* bottom row */
+      .row3 {
+        display: grid;
+        grid-template-columns: 664px 404px 300px;
+        gap: 6px;
+      }
+
+      /* gate detail: ruled table grid */
+      .grid {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        padding: 1px;
+        background: var(--a);
+      }
+      .band {
+        display: flex;
+        gap: 1px;
+      }
+      .band > .n {
+        flex: 0 0 38px;
+        display: grid;
+        place-items: center;
+        background: var(--scr);
+        font-size: 20px;
+        font-weight: 700;
+      }
+      .band > .n.sm {
+        font-size: 11px;
+      }
+      .rows {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+      }
+      .rows.fit {
+        flex: none;
+      }
+      .gr {
+        display: flex;
+        gap: 1px;
+        min-height: 26px;
+      }
+      .gr > * {
+        display: flex;
+        align-items: center;
+        padding: 0 9px;
+        background: var(--scr);
+        font-size: 11px;
+      }
+      .gr > .g {
+        flex: 1;
+      }
+      .gr > .h {
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .gr > .inv {
+        background: var(--a);
+        color: var(--scr);
+        font-weight: 700;
+        text-shadow: none;
+      }
+      .gr > .t {
+        flex: 0 0 24px;
+        padding: 0;
+        background: var(--a);
+        border: 5px solid var(--scr);
+      }
+      .band > .diag {
+        flex: 1;
+        background: linear-gradient(
+          to top right,
+          var(--scr) calc(50% - 0.7px),
+          var(--a) calc(50% - 0.7px),
+          var(--a) calc(50% + 0.7px),
+          var(--scr) calc(50% + 0.7px)
+        );
+      }
+
+      /* all tickets: bar stack with row labels */
+      .tix {
+        display: grid;
+        gap: 0;
+      }
+      .tix li {
+        display: grid;
+        grid-template-columns: 18px 64px 1fr auto;
+        align-items: center;
+        gap: 8px;
+        height: 21px;
+        font-size: 11px;
+      }
+      .tix .bar {
+        height: 10px;
+      }
+      .tix .mt {
+        color: var(--ad);
+      }
+      .tix em {
+        font-size: 10px;
+        font-weight: 700;
+      }
+
+      /* coming */
+      .cm {
+        display: grid;
+        align-content: center;
+        gap: 12px;
+      }
+      .cm ol {
+        display: grid;
+        gap: 1px;
+        padding: 1px;
+        background: var(--a);
+      }
+      .cm li {
+        display: grid;
+        grid-template-columns: 22px 1fr;
+        gap: 1px;
+        font-size: 10px;
+      }
+      .cm li > * {
+        background: var(--scr);
+        line-height: 26px;
+        padding: 0 5px;
+      }
+      .cm li > b:first-child {
+        padding: 0;
+        text-align: center;
+      }
+      .cm li.hd {
+        font-size: 11px;
+      }
+      .cm li.hd > b:first-child {
+        background: var(--a);
+        color: var(--scr);
+        text-shadow: none;
+      }
+
+      /* footer, engraved on the chassis rail */
+      .rail {
+        display: flex;
+        justify-content: space-between;
+        padding: 5px 30px 1px;
+        font-size: 10px;
+        line-height: 14px;
+        letter-spacing: 0.16em;
+        color: #9a9a94;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="panel">
+      <!-- header strip -->
+      <header class="mod hdr span">
+        <i class="b b1"></i><i class="b b2"></i><i class="b b3"></i
+        ><i class="b b4"></i>
+        <div class="lampset">
+          <i class="lamp"></i>
+          <div><b>LIVE</b>STATE</div>
+        </div>
+        <div class="plateid">
+          SOFTWARE FACTORY - PROJECT
+          <h1>SAMPLE DATA, NOT A RUNNING FACTORY</h1>
+        </div>
+        <div class="win">
+          <span><i class="sw s-done"></i>ACCEPTED</span>
+          <span><i class="sw s-now"></i>WORKING</span>
+          <span><i class="sw s-idle"></i>IDLE</span>
+          <span><i class="sw s-blocked"></i>BLOCKED</span>
+          <span><i class="sw s-queued"></i>QUEUED</span>
+          <span class="dim"><i class="sw s-empty"></i>EMPTY</span>
+        </div>
+        <div class="keyset">
+          <button class="key play" type="button" aria-label="replay"></button>
+          <span>REPLAY</span>
+        </div>
+        <div class="lampset">
+          <i class="lamp red"></i>
+          <div><b>BLOCKED</b>1 - V1-TICKET7</div>
+        </div>
+      </header>
+
+      <!-- left column: foreman, builders, submission -->
+      <div class="col">
+        <section class="mod">
+          <i class="b b1"></i><i class="b b2"></i><i class="b b3"></i
+          ><i class="b b4"></i>
+          <h2 class="lg">
+            <span>FOREMAN - ORCHESTRATOR</span><span class="n">01</span>
+          </h2>
+          <div class="win">
+            <div class="cells3">
+              <span>DISCOVERY</span><span>STORIES</span><span>TICKETS</span>
+            </div>
+            <p>PICKS THE NEXT ELIGIBLE TICKET</p>
+            <div class="rule"></div>
+            <p class="ho">
+              <b class="tag inv">HAND-OFF</b>TICKET BRIEF, SCOPE, CHECK COMMAND
+            </p>
+          </div>
+        </section>
+
+        <section class="mod">
+          <i class="b b1"></i><i class="b b2"></i><i class="b b3"></i
+          ><i class="b b4"></i>
+          <h2 class="lg"><span>BUILDERS</span><span class="n">02</span></h2>
+          <div class="bezel">
+            <div class="keys">
+              <div class="keyset"><i class="key"></i>B1</div>
+              <div class="keyset"><i class="key"></i>B2</div>
+              <div class="keyset"><i class="key"></i>B3</div>
+              <div class="keyset"><i class="key"></i>B4</div>
+            </div>
+            <div class="win rows4">
+              <div class="brow">
+                <div class="stripes">
+                  <i class="s-now"></i><i class="s-now"></i
+                  ><i class="s-now"></i>
+                </div>
+                <div class="bt">
+                  <b>V1-TICKET2</b>
+                  <span><em class="tag inv">WORKING</em>ATTEMPT 2</span>
+                </div>
+              </div>
+              <div class="brow">
+                <div class="stripes">
+                  <i class="s-idle"></i><i class="s-idle"></i
+                  ><i class="s-idle"></i>
+                </div>
+                <div class="bt">
+                  <b>FOREMAN-WATCHDOG-TICKET1</b>
+                  <span><em class="tag">IDLE</em>REPORTED</span>
+                </div>
+              </div>
+              <div class="brow">
+                <div class="stripes">
+                  <i class="s-blocked"></i><i class="s-blocked"></i
+                  ><i class="s-blocked"></i>
+                </div>
+                <div class="bt">
+                  <b>V1-TICKET7</b>
+                  <span><em class="tag x">BLOCKED</em></span>
+                </div>
+              </div>
+              <div class="brow">
+                <div class="stripes">
+                  <i class="s-queued"></i><i class="s-queued"></i
+                  ><i class="s-queued"></i>
+                </div>
+                <div class="bt">
+                  <b>V1-TICKET8</b>
+                  <span><em class="tag dot">QUEUED</em></span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <p class="lg bot"><span>OWN THREAD + WORKTREE</span></p>
+        </section>
+
+        <section class="mod">
+          <i class="b b1"></i><i class="b b2"></i><i class="b b3"></i
+          ><i class="b b4"></i>
+          <h2 class="lg">
+            <span>SUBMISSION - REPORT.JSON</span><span class="n">03</span>
+          </h2>
+          <div class="win">
+            <div class="slots">
+              <div class="slot">SLOT 1<b>EMPTY</b></div>
+              <div class="slot on">SLOT 2<b>FILLED</b></div>
+              <div class="slot">SLOT 3<b>EMPTY</b></div>
+            </div>
+            <p><b>FOREMAN-WATCHDOG-TICKET1 - IDLE</b></p>
+            <div class="rule"></div>
+            <ul class="notes">
+              <li>COMMIT LOCALLY, THEN REPORT.JSON</li>
+              <li>CANDIDATE: REVISION + INSIGHT</li>
+              <li>OR BLOCKED: REASON</li>
+            </ul>
+          </div>
+        </section>
+      </div>
+
+      <!-- centre column: the scope (ACTIVE) and the twin gauges -->
+      <div class="col">
+        <section class="mod">
+          <i class="b b1"></i><i class="b b2"></i><i class="b b3"></i
+          ><i class="b b4"></i>
+          <h2 class="lg">
+            <span>ACTIVE - STAGE SCOPE</span
+            ><span class="n">8 STAGES, CLOCKWISE</span>
+          </h2>
+          <div class="oct">
+            <div class="oct-in">
+              <svg
+                viewBox="6 6 508 398"
+                width="508"
+                height="398"
+                role="img"
+                aria-label="Stage scope for the active ticket"
+              >
+                <defs>
+                  <pattern
+                    id="hx"
+                    width="5"
+                    height="5"
+                    patternUnits="userSpaceOnUse"
+                    patternTransform="rotate(45)"
+                  >
+                    <rect width="2.5" height="5" fill="#ff9d24" />
+                  </pattern>
+                </defs>
+                <g class="glow">
+                  <circle
+                    cx="260"
+                    cy="186"
+                    r="124"
+                    fill="none"
+                    stroke="#ff9d24"
+                    stroke-width="6"
+                    stroke-dasharray="1.2 9.6211"
+                  />
+                  <path class="ln" d="M194 300.3A132 132 0 1 1 378.9 128.7" />
+                  <path
+                    class="ln"
+                    d="M378.9 128.7A132 132 0 0 1 326 300.3"
+                    stroke-dasharray="0.1 5"
+                    stroke-linecap="round"
+                    stroke-width="2"
+                  />
+                  <circle
+                    class="ln"
+                    cx="260"
+                    cy="186"
+                    r="50"
+                    stroke-dasharray="0.1 4.5"
+                    stroke-linecap="round"
+                    stroke-width="1.8"
+                  />
+                  <path
+                    class="ln"
+                    d="M272.6 179.9L363.6 136.1"
+                    stroke-width="2"
+                  />
+                  <path d="M260 176l9 16h-18z" fill="#ff9d24" />
+
+                  <g class="mk done">
+                    <rect x="184" y="290.3" width="20" height="20" />
+                    <text x="194" y="304.6">1</text>
+                  </g>
+                  <g class="mk done">
+                    <rect x="123.9" y="214.9" width="20" height="20" />
+                    <text x="133.9" y="229.2">2</text>
+                  </g>
+                  <g class="mk done">
+                    <rect x="131.1" y="118.7" width="20" height="20" />
+                    <text x="141.1" y="133">3</text>
+                  </g>
+                  <g class="mk done">
+                    <rect x="201.8" y="53.1" width="20" height="20" />
+                    <text x="211.8" y="67.4">4</text>
+                  </g>
+                  <g class="mk done">
+                    <rect x="298.2" y="53.1" width="20" height="20" />
+                    <text x="308.2" y="67.4">5</text>
+                  </g>
+                  <g class="mk now">
+                    <rect
+                      x="363.9"
+                      y="113.7"
+                      width="30"
+                      height="30"
+                      fill="#0c0906"
+                    />
+                    <rect
+                      x="363.9"
+                      y="113.7"
+                      width="30"
+                      height="30"
+                      fill="url(#hx)"
+                      stroke="#ff9d24"
+                      stroke-width="1.5"
+                    />
+                    <rect
+                      x="370.9"
+                      y="120.7"
+                      width="16"
+                      height="16"
+                      fill="#0c0906"
+                    />
+                    <text x="378.9" y="133">6</text>
+                  </g>
+                  <g class="mk todo">
+                    <rect x="376.1" y="214.9" width="20" height="20" />
+                    <text x="386.1" y="229.2">7</text>
+                  </g>
+                  <g class="mk todo">
+                    <rect x="316" y="290.3" width="20" height="20" />
+                    <text x="326" y="304.6">8</text>
+                  </g>
+                  <rect
+                    x="402"
+                    y="117.7"
+                    width="98"
+                    height="22"
+                    fill="#ff9d24"
+                  />
+                </g>
+
+                <text class="lb e" x="176" y="304.6">WORKTREE</text>
+                <text class="lb e" x="116" y="229.2">SETUP</text>
+                <text class="lb e" x="123" y="133">BUILDER THREAD</text>
+                <text class="lb e" x="221.8" y="43">REPORT.JSON</text>
+                <text class="lb" x="298.2" y="43">GATE - 10 MIN CAP</text>
+                <text
+                  x="451"
+                  y="133.2"
+                  text-anchor="middle"
+                  font-size="12"
+                  font-weight="700"
+                  style="fill: #0c0906; text-shadow: none"
+                >
+                  COLD REVIEW
+                </text>
+                <text class="lb todo" x="404" y="229.2">FF-MERGE</text>
+                <text class="lb todo" x="344" y="304.6">MAIN</text>
+
+                <text x="260" y="258" text-anchor="middle" font-size="10">
+                  STAGE
+                </text>
+                <text
+                  x="260"
+                  y="277"
+                  text-anchor="middle"
+                  font-size="16"
+                  font-weight="700"
+                >
+                  6 / 8
+                </text>
+              </svg>
+              <div class="strip">
+                <span class="inv">ACTIVE</span><span>V1-TICKET2</span
+                ><span class="inv">WORKING</span><span>ATTEMPT 2</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="mod gauges">
+          <i class="b b1"></i><i class="b b2"></i><i class="b b3"></i
+          ><i class="b b4"></i>
+          <p class="eng r">INTEGRATOR<span>TALLY</span></p>
+          <div class="dial">
+            <svg viewBox="0 0 142 142" width="142" height="142" class="glow">
+              <path
+                class="ln"
+                d="M19.04 101A60 60 0 0 1 71 11"
+                stroke-width="5"
+              />
+              <path
+                class="ln"
+                d="M75 11.1A60 60 0 0 1 130.09 60.58"
+                stroke-width="3"
+                stroke-dasharray="0.1 5.5"
+                stroke-linecap="round"
+              />
+              <path
+                class="ln"
+                d="M130.6 65A60 60 0 0 1 122.96 101"
+                stroke-width="5"
+                stroke-dasharray="2 2.2"
+              />
+              <text class="big" x="71" y="62">3</text>
+              <text x="71" y="76">LANDED</text>
+              <path class="ln" d="M39 81.5h64v14h-64zM87 81.5v14" />
+              <text class="st" x="44" y="92.2">QUEUED</text>
+              <text x="95" y="92.2">2</text>
+              <path class="ln" d="M36 99.5h70v14h-70zM90 99.5v14" />
+              <text class="st" x="41" y="110.2">BLOCKED</text>
+              <text x="98" y="110.2">1</text>
+            </svg>
+          </div>
+          <i class="hole"></i>
+          <div class="dial">
+            <svg viewBox="0 0 142 142" width="142" height="142" class="glow">
+              <path
+                class="ln"
+                d="M19.04 101A60 60 0 0 1 46.6 16.19"
+                stroke-width="5"
+              />
+              <path class="ln" d="M46.6 16.19A60 60 0 0 1 122.96 101" />
+              <path
+                class="ln"
+                d="M27.7 96l-4.3 2.5M23.45 55.55l-4.76-1.55M50.66 25.32l-2.03-4.56M91.34 25.32l2.03-4.56M118.55 55.55l4.76-1.55M114.3 96l4.3 2.5"
+              />
+              <circle class="ln" cx="71" cy="31" r="7" />
+              <path class="ln" d="M71 26.5V31l3 2.6" />
+              <text x="71" y="52">OBSERVED</text>
+              <text class="big" x="71" y="79">2</text>
+              <text x="71" y="92">S AGO</text>
+              <path class="ln" d="M38 97.5h66v14h-66zM75.5 97.5v14" />
+              <text class="st" x="43.5" y="108.2">POLL</text>
+              <text x="90" y="108.2">5 S</text>
+            </svg>
+          </div>
+          <p class="eng l">CLOCK<span>LAST POLL</span></p>
+        </section>
+      </div>
+
+      <!-- right column: integrator gate, cold review, main, full gate -->
+      <div class="col">
+        <section class="mod">
+          <i class="b b1"></i><i class="b b2"></i><i class="b b3"></i
+          ><i class="b b4"></i>
+          <h2 class="lg">
+            <span>INTEGRATOR - ONE TICKET AT A TIME</span
+            ><span class="n">04</span>
+          </h2>
+          <div class="win">
+            <p class="cap"><b>GATE STEPS</b><span>V1-TICKET2</span></p>
+            <ol class="steps">
+              <li>
+                <b>1</b><span>REVISION = HEAD</span><i class="s-done"></i>
+              </li>
+              <li><b>2</b><span>CLEAN TREE</span><i class="s-done"></i></li>
+              <li><b>3</b><span>SCOPE</span><i class="s-done"></i></li>
+              <li><b>4</b><span>VERIFY</span><i class="s-done"></i></li>
+              <li><b>5</b><span>TO COLD REVIEW</span><i class="s-now"></i></li>
+            </ol>
+          </div>
+        </section>
+
+        <section class="mod">
+          <i class="b b1"></i><i class="b b2"></i><i class="b b3"></i
+          ><i class="b b4"></i>
+          <h2 class="lg"><span>COLD REVIEW</span><span class="n">05</span></h2>
+          <div class="win">
+            <div class="cr">
+              <svg viewBox="0 0 50 50" width="50" height="50" class="glow">
+                <circle class="ln" cx="25" cy="25" r="22" />
+                <circle
+                  class="ln"
+                  cx="25"
+                  cy="25"
+                  r="11"
+                  stroke-dasharray="0.1 3.6"
+                  stroke-linecap="round"
+                />
+                <path
+                  d="M25 25L25 3A22 22 0 0 1 44.05 14z"
+                  fill="url(#hx)"
+                  stroke="#ff9d24"
+                  stroke-width="1.5"
+                />
+              </svg>
+              <div>
+                <p><b class="tag inv">RUNNING</b><b>V1-TICKET2</b></p>
+                <p>OPPOSITE MODEL FAMILY</p>
+                <p>SMALL 1ST TRIES SKIP</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="mod">
+          <i class="b b1"></i><i class="b b2"></i><i class="b b3"></i
+          ><i class="b b4"></i>
+          <h2 class="lg">
+            <span>MAIN - TARGET BRANCH</span><span class="n">06</span>
+          </h2>
+          <div class="win">
+            <p class="cap" style="margin: 0">
+              <span><b class="tag inv">HEAD</b> <b>B649C8A</b></span
+              ><span>3 OF 7 - NEWEST FIRST</span>
+            </p>
+            <ol class="cells7">
+              <li class="on"><i>1</i>B649C8A</li>
+              <li class="on"><i>2</i>AF0AE26</li>
+              <li class="on"><i>3</i>CD75E02</li>
+              <li><i>4</i>-</li>
+              <li><i>5</i>-</li>
+              <li><i>6</i>-</li>
+              <li><i>7</i>-</li>
+            </ol>
+          </div>
+        </section>
+
+        <section class="mod">
+          <i class="b b1"></i><i class="b b2"></i><i class="b b3"></i
+          ><i class="b b4"></i>
+          <h2 class="lg"><span>FULL GATE</span><span class="n">07</span></h2>
+          <div class="win fg">
+            <p><b class="tag dot">SCHEDULED</b>PLANNED - REPLAY ONLY</p>
+            <div class="rule dot"></div>
+            <p><i class="sw s-blocked"></i>RED - MAIN-RED TICKET FILED</p>
+            <p><i class="sw s-done"></i>GREEN - REVISION VERIFIED</p>
+          </div>
+        </section>
+      </div>
+
+      <!-- return path -->
+      <div class="mod ret span">
+        <i class="b b1"></i><i class="b b2"></i>
+        <i class="ah"></i><i class="l s"></i>
+        <span class="n">RETURN PATH</span>
+        <span>BACK TO THE BUILDER THAT WROTE IT</span>
+        <i class="l"></i>
+        <span>REPORTS ALSO REACH THE FOREMAN</span>
+        <i class="l"></i>
+        <span class="n">FROM GATE, COLD REVIEW, FULL GATE</span>
+      </div>
+
+      <!-- stage tape -->
+      <section class="mod span">
+        <i class="b b1"></i><i class="b b2"></i><i class="b b3"></i
+        ><i class="b b4"></i>
+        <h2 class="lg">
+          <span>STAGE TAPE - V1-TICKET2</span
+          ><span class="n">POINTER = NOW</span>
+        </h2>
+        <div class="win tapewin">
+          <ol class="scale">
+            <li>
+              <b>1</b><i class="tk"></i><i class="seg s-done"></i
+              ><i class="pt"></i><span class="nm">WORKTREE</span>
+            </li>
+            <li>
+              <b>2</b><i class="tk"></i><i class="seg s-done"></i
+              ><i class="pt"></i><span class="nm">SETUP</span>
+            </li>
+            <li>
+              <b>3</b><i class="tk"></i><i class="seg s-done"></i
+              ><i class="pt"></i><span class="nm">BUILDER THREAD</span>
+            </li>
+            <li>
+              <b>4</b><i class="tk"></i><i class="seg s-done"></i
+              ><i class="pt"></i><span class="nm">REPORT.JSON</span>
+            </li>
+            <li>
+              <b>5</b><i class="tk"></i><i class="seg s-done"></i
+              ><i class="pt"></i><span class="nm">GATE - 10 MIN CAP</span>
+            </li>
+            <li class="now">
+              <b>6</b><i class="tk"></i><i class="seg s-now"></i
+              ><i class="pt"></i><span class="nm">COLD REVIEW</span>
+            </li>
+            <li class="todo">
+              <b>7</b><i class="tk"></i><i class="seg s-queued"></i
+              ><i class="pt"></i><span class="nm">FF-MERGE</span>
+            </li>
+            <li class="todo">
+              <b>8</b><i class="tk"></i><i class="seg s-queued"></i
+              ><i class="pt"></i><span class="nm">MAIN</span>
+            </li>
+          </ol>
+          <ul class="legend">
+            <li><i class="sw s-done"></i>DONE</li>
+            <li><i class="sw s-now"></i>NOW</li>
+            <li class="dim"><i class="sw s-queued"></i>NOT REACHED</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- bottom row: gate detail, all tickets, coming -->
+      <div class="row3 span">
+        <section class="mod">
+          <i class="b b1"></i><i class="b b2"></i><i class="b b3"></i
+          ><i class="b b4"></i>
+          <h2 class="lg">
+            <span>GATE DETAIL</span><span class="n">3 PARTS, THEN OUTCOME</span>
+          </h2>
+          <div class="win">
+            <div class="grid">
+              <div class="band">
+                <b class="n">1</b>
+                <div class="rows">
+                  <div class="gr">
+                    <span class="h">CANDIDATE</span
+                    ><span class="g">FROM REPORT.JSON</span>
+                  </div>
+                  <div class="gr">
+                    <span>REVISION = HEAD, NOT THE BASE</span
+                    ><span>TREE CLEAN</span
+                    ><span class="g">EVERY PATH IN SCOPE</span>
+                  </div>
+                </div>
+              </div>
+              <div class="band">
+                <b class="n">2</b>
+                <div class="rows">
+                  <div class="gr">
+                    <span class="h">VERIFY</span
+                    ><span>PROJECT CHECK COMMAND</span><span>10 MIN CAP</span
+                    ><span class="g dim">ILLUSTRATIVE TICKS, NOT LIVE</span>
+                  </div>
+                  <div class="gr">
+                    <span class="g">TEST</span><i class="t"></i
+                    ><span class="g">LINT</span><i class="t"></i
+                    ><span class="g">TYPECHECK</span><i class="t"></i
+                    ><span class="g">FORMAT</span><i class="t"></i
+                    ><span class="g">FALLOW</span><i class="t"></i
+                    ><span class="g">DIFF-CHECK</span><i class="t"></i>
+                  </div>
+                </div>
+              </div>
+              <div class="band">
+                <b class="n">3</b>
+                <div class="rows fit">
+                  <div class="gr">
+                    <span class="h g">UNCHANGED</span>
+                  </div>
+                  <div class="gr">
+                    <span>HEAD STILL THE CANDIDATE</span
+                    ><span class="g">TREE STILL CLEAN</span>
+                  </div>
+                </div>
+                <i class="diag"></i>
+              </div>
+              <div class="band">
+                <b class="n sm">OUT</b>
+                <div class="rows">
+                  <div class="gr">
+                    <span class="inv">PASS</span
+                    ><span class="g">TO COLD REVIEW</span>
+                  </div>
+                  <div class="gr">
+                    <span><b class="tag x">FAIL</b></span
+                    ><span>TO THE SAME BUILDER WITH THE LOG</span
+                    ><span><b>2ND FAIL</b></span
+                    ><span class="g">ESCALATED</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="mod">
+          <i class="b b1"></i><i class="b b2"></i><i class="b b3"></i
+          ><i class="b b4"></i>
+          <h2 class="lg">
+            <span>ALL TICKETS</span><span class="n">8 OF 10 USED</span>
+          </h2>
+          <div class="win">
+            <ol class="tix">
+              <li>
+                <b>01</b><i class="bar s-done"></i><span>FEATURE-06</span
+                ><em>ACCEPTED</em>
+              </li>
+              <li>
+                <b>02</b><i class="bar s-done"></i><span>V1-TICKET1</span
+                ><em>ACCEPTED</em>
+              </li>
+              <li>
+                <b>03</b><i class="bar s-done"></i
+                ><span>BACKUP-ADOPTION-TICKET1</span><em>ACCEPTED</em>
+              </li>
+              <li>
+                <b>04</b><i class="bar s-now"></i><span>V1-TICKET2</span
+                ><em class="tag inv">WORKING</em>
+              </li>
+              <li>
+                <b>05</b><i class="bar s-idle"></i
+                ><span>FOREMAN-WATCHDOG-TICKET1</span><em>IDLE</em>
+              </li>
+              <li>
+                <b>06</b><i class="bar s-blocked"></i><span>V1-TICKET7</span
+                ><em>BLOCKED</em>
+              </li>
+              <li>
+                <b>07</b><i class="bar s-queued"></i><span>V1-TICKET8</span
+                ><em>QUEUED</em>
+              </li>
+              <li>
+                <b>08</b><i class="bar s-queued"></i><span>V1-TICKET9</span
+                ><em>QUEUED</em>
+              </li>
+              <li class="mt">
+                <b>09</b><i class="bar s-empty"></i><span>-</span><em>EMPTY</em>
+              </li>
+              <li class="mt">
+                <b>10</b><i class="bar s-empty"></i><span>-</span><em>EMPTY</em>
+              </li>
+            </ol>
+          </div>
+        </section>
+
+        <section class="mod">
+          <i class="b b1"></i><i class="b b2"></i><i class="b b3"></i
+          ><i class="b b4"></i>
+          <h2 class="lg"><span>COMING</span><span class="n">IN ORDER</span></h2>
+          <div class="win cm">
+            <ol>
+              <li class="hd"><b>1</b><b>FOREMAN-WATCHDOG-TICKET1</b></li>
+              <li><b>A</b><span>RECORD DURABLE STOP INCIDENTS</span></li>
+              <li><b>B</b><span>NOTIFY THE OWNER ONCE</span></li>
+              <li><b>C</b><span>WAKE THE FOREMAN</span></li>
+            </ol>
+            <ol>
+              <li class="hd"><b>2</b><b>V1-TICKET7</b></li>
+              <li><b>A</b><span>VALIDATE THE BACKUP</span></li>
+              <li><b>B</b><span>RESTORE BEFORE DISPATCH</span></li>
+            </ol>
+          </div>
+        </section>
+      </div>
+
+      <!-- footer -->
+      <footer class="rail span">
+        <span>READ-ONLY - ONE POLL EVERY 5 S</span>
+        <span>STATIC LAYOUT STUDY - NOTHING IS WIRED</span>
+      </footer>
+    </main>
+  </body>
+</html>

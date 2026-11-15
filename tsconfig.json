@@ -6,7 +6,11 @@
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "types": ["bun"]
+    "types": ["bun", "vite/client"],
+    "jsx": "react-jsx",
+    "paths": {
+      "@/*": ["./web/spec/*"]
+    }
   },
   "include": ["src", "factory", "web"]
 }

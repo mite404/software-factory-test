@@ -27,6 +27,24 @@ type Cell = {
   id: string;
   label: string;
   href: string | null;
+  stage: number; // pipeline stages finished, 0 to 7
+};
+
+// One ticket with everything the SPEC-01 device (web/spec) prints about it.
+export type Ticket = Cell & {
+  title: string;
+  steps: string[]; // the state of each of the 7 stages, as on a COMING row
+  plan: string[]; // the ticket's own authored steps, uncut
+  revision: string; // short hash, "" until the ticket lands
+  review: "pending" | "recorded" | "none"; // the cold review record on its current revision
+  attempt: number | null;
+};
+
+// One change between two polls, worded for a notification.
+type News = {
+  tone: "success" | "danger" | "info";
+  title: string;
+  text: string;
 };
 
 // Everything the page paints, fully resolved so main.ts only copies values into the SVG.
@@ -36,6 +54,9 @@ export type View = {
   target: string; // merge target branch, cut to fit its pill
   observed: string;
   tally: string;
+  counts: { landed: number; queued: number; blocked: number }; // the tally, as numbers
+  tickets: Ticket[]; // every ticket in feed order, for search, paging and the landed card
+  news: News[]; // what changed since the previous poll; empty on the first one
   head: string;
   next: string;
   reviewing: boolean; // a fresh pending review, including the first and repeated polls
@@ -43,7 +64,13 @@ export type View = {
   waiting: string;
   slots: number; // lit submission slots: idle builders whose work is not accepted yet
   builders: Cell[]; // 4 rows: tickets that had not landed one poll ago
-  main: { on: boolean; last: boolean; label: string; href: string | null }[]; // 7 dots, newest first, beside the integrator
+  main: {
+    on: boolean;
+    last: boolean;
+    id: string;
+    label: string;
+    href: string | null;
+  }[]; // 7 dots, newest first, beside the integrator
   queue: (Cell & { tag: string })[]; // 10 tickets in order, windowed around the active one
   // 3 rows: the next tickets that have not landed, with the stage each one has reached
   coming: {
@@ -76,6 +103,7 @@ const REACHED: Partial<Record<Cell["status"], number>> = {
   working: 3,
   idle: 4,
   blocked: 3,
+  accepted: STEPS,
 };
 
 function pad<T>(items: T[], length: number): (T | undefined)[] {
@@ -107,12 +135,14 @@ function describe(task: Task): string {
 }
 
 function cell(task: Task | undefined): Cell {
-  if (!task) return { status: "empty", id: "", label: "", href: null };
+  if (!task)
+    return { status: "empty", id: "", label: "", href: null, stage: 0 };
   return {
     status: task.status,
     id: task.id,
     label: describe(task),
     href: task.thread ? `https://ampcode.com/threads/${task.thread}` : null,
+    stage: stagesOf(task).filter((step) => step === "done").length,
   };
 }
 
@@ -124,6 +154,24 @@ function steps(status: Cell["status"], reviewing = false): string[] {
   return Array.from({ length: STEPS }, (_, i) =>
     i < done ? "done" : i === done ? current : "",
   );
+}
+
+function stagesOf(task: Task): string[] {
+  return steps(task.status, task.evidence?.review?.pending === true);
+}
+
+function ticket(task: Task): Ticket {
+  const review = task.evidence?.review;
+  return {
+    ...cell(task),
+    title: label(task),
+    steps: stagesOf(task),
+    plan: task.steps,
+    revision: task.revision?.slice(0, 7) ?? "",
+    review: review?.pending ? "pending" : review ? "recorded" : "none",
+    // Older feeds carry the attempt only on a pending review record.
+    attempt: task.attempt ?? review?.attempt ?? null,
+  };
 }
 
 // Lay step labels out left to right from the chip column; steps that do not fit are dropped.
@@ -157,7 +205,7 @@ function ticketRow(
     id: task.id,
     title: cut(label(task), 32),
     status: task.status,
-    steps: steps(task.status, task.evidence?.review?.pending === true),
+    steps: stagesOf(task),
     chips: row ? chips(task.steps) : [],
   };
 }
@@ -168,15 +216,62 @@ function observed(feed: Feed, now: number): string {
   return `observed ${Math.max(0, seconds)} s ago`;
 }
 
-function tally(feed: Feed): string {
+function counts(feed: Feed): View["counts"] {
   const count = (status: Task["status"]) =>
     feed.tasks.filter((task) => task.status === status).length;
-  const blocked = count("blocked");
+  return {
+    landed: count("accepted"),
+    queued: count("queued"),
+    blocked: count("blocked"),
+  };
+}
+
+function tally({ landed, queued, blocked }: View["counts"]): string {
   return [
-    `${count("accepted")} landed`,
-    `${count("queued")} queued`,
+    `${landed} landed`,
+    `${queued} queued`,
     ...(blocked ? [`${blocked} blocked`] : []),
   ].join(" · ");
+}
+
+// One notice per ticket that changed. A failed review is also a block, so it is said once.
+function news(
+  tickets: Ticket[],
+  changed: {
+    landed?: string;
+    rejected?: string;
+    blocked?: string;
+    started?: string;
+  },
+): News[] {
+  const say = (
+    id: string | undefined,
+    tone: News["tone"],
+    what: string,
+    text = "",
+  ) => (id ? [{ tone, title: `${id} ${what}`, text }] : []);
+  const landed = tickets.find((t) => t.id === changed.landed);
+  return [
+    ...say(
+      changed.landed,
+      "success",
+      "landed",
+      `${landed?.revision} · cold review ${landed?.review === "none" ? "not recorded" : "recorded"}`,
+    ),
+    ...say(
+      changed.rejected,
+      "danger",
+      "failed cold review",
+      "back to its builder",
+    ),
+    ...say(
+      changed.rejected ? undefined : changed.blocked,
+      "danger",
+      "blocked",
+      "the feed gives no reason",
+    ),
+    ...say(changed.started, "info", "started", "handed to a builder"),
+  ];
 }
 
 // The feed says "blocked" for a few seconds while a cold review is being dispatched. A pending
@@ -239,12 +334,26 @@ export function derive(prev: Feed | null, raw: Feed, now: number): View {
   );
   const landing = became("accepted");
   const label = nextLabel(pending[0], tasks.length);
+  // A blocked ticket that resumes was handed back by the foreman, same as a first brief.
+  const started = tasks.find(
+    (t) =>
+      t.status === "working" &&
+      ["queued", "blocked"].includes(before.get(t.id) ?? ""),
+  )?.id;
+  const blocked = rejected ?? became("blocked");
+  const tickets = tasks.map(ticket);
+  const count = counts(next);
   return {
     state: !next.fresh ? "stale" : next.enabled ? "live" : "paused",
     project: next.project.toUpperCase(),
     target: cut(next.target, 24),
     observed: observed(next, now),
-    tally: tally(next),
+    tally: tally(count),
+    counts: count,
+    tickets,
+    news: prev
+      ? news(tickets, { landed: landing, rejected, blocked, started })
+      : [],
     head: main[0]?.revision?.slice(0, 7) ?? "nothing landed yet",
     next: label,
     reviewing: next.fresh && pending[0]?.evidence?.review?.pending === true,
@@ -265,6 +374,7 @@ export function derive(prev: Feed | null, raw: Feed, now: number): View {
     main: pad(main, MAIN_DOTS).map((task, i) => ({
       on: !!task,
       last: i === 0 && !!task,
+      id: task?.id ?? "",
       label: task ? describe(task) : "",
       href: cell(task).href,
     })),
@@ -279,17 +389,10 @@ export function derive(prev: Feed | null, raw: Feed, now: number): View {
             : c.status,
       })),
     coming: pad(pending, COMING_ROWS).map(ticketRow),
-    startRow: rowOf(
-      // A blocked ticket that resumes was handed back by the foreman, same as a first brief.
-      tasks.find(
-        (t) =>
-          t.status === "working" &&
-          ["queued", "blocked"].includes(before.get(t.id) ?? ""),
-      )?.id,
-    ),
+    startRow: rowOf(started),
     landed: !!landing,
     reviewed: !!tasks.find((t) => t.id === landing)?.evidence?.review,
     outRow: rowOf(landing),
-    backRow: rowOf(rejected ?? became("blocked")),
+    backRow: rowOf(blocked),
   };
 }

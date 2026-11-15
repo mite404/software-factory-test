@@ -1,0 +1,1156 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Software factory - fono prototype</title>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Spline+Sans+Mono:wght@300;400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --paper: #f3f3f0;
+        --ink: #151515;
+        --mid: #4f4f4a;
+        --faint: #6e6e67;
+        --rule: #c4c4bd;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html {
+        background: var(--paper);
+      }
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font: 400 13px/1.4 "Spline Sans Mono", ui-monospace, Menlo, monospace;
+        -webkit-font-smoothing: antialiased;
+      }
+      h1,
+      h2,
+      h3,
+      p,
+      ol,
+      ul,
+      dl,
+      dd {
+        margin: 0;
+        padding: 0;
+      }
+      ol,
+      ul {
+        list-style: none;
+      }
+      .page {
+        width: 1240px;
+        margin: 0 auto;
+        padding: 36px 0 30px;
+      }
+      .lab {
+        font-size: 10px;
+        font-weight: 500;
+        line-height: 1.3;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .sub {
+        font-size: 11px;
+        line-height: 1.3;
+        color: var(--faint);
+      }
+      svg {
+        display: block;
+        overflow: visible;
+      }
+      .ln {
+        fill: none;
+        stroke: var(--ink);
+        stroke-width: 1;
+      }
+      .ink {
+        fill: var(--ink);
+        stroke: var(--ink);
+        stroke-width: 1;
+      }
+      .cut {
+        fill: none;
+        stroke: var(--paper);
+        stroke-width: 1;
+      }
+      .hat {
+        fill: url(#hatch);
+        stroke: var(--ink);
+        stroke-width: 1;
+      }
+      .dsh {
+        fill: none;
+        stroke: var(--ink);
+        stroke-width: 1;
+        stroke-dasharray: 4 3;
+      }
+      .hole {
+        fill: var(--paper);
+        stroke: var(--ink);
+        stroke-width: 1.5;
+      }
+      svg text {
+        fill: var(--faint);
+        font-size: 10px;
+      }
+
+      /* title row */
+      .top {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+      }
+      h1 {
+        font-size: 64px;
+        font-weight: 300;
+        line-height: 1;
+        letter-spacing: -0.04em;
+        word-spacing: -0.22em;
+      }
+      .meta {
+        display: flex;
+        align-items: center;
+        gap: 22px;
+        padding-bottom: 6px;
+      }
+      .meta-lines {
+        display: grid;
+        gap: 7px;
+        justify-items: end;
+        font-size: 12px;
+      }
+      .meta-lines p {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .live {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 20px;
+        padding: 0 9px 0 7px;
+        border-radius: 10px;
+        background: var(--ink);
+        color: var(--paper);
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 0.1em;
+      }
+      .live i {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--paper);
+      }
+      .obs {
+        color: var(--mid);
+      }
+      .replay {
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+        height: 44px;
+        padding: 0 20px 0 17px;
+        border: 1px solid var(--ink);
+        border-radius: 22px;
+        background: none;
+        color: var(--ink);
+        font: inherit;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .replay:focus-visible {
+        outline: 2px solid var(--ink);
+        outline-offset: 3px;
+      }
+
+      /* hero: the active ticket */
+      .hero {
+        display: flex;
+        align-items: center;
+        height: 112px;
+        margin-top: 24px;
+        padding: 0 16px 0 30px;
+        border: 1px solid var(--ink);
+        border-radius: 56px;
+      }
+      .nudge {
+        flex: none;
+        display: grid;
+        place-items: center;
+        width: 36px;
+        height: 36px;
+        border: 1px solid var(--ink);
+        border-radius: 50%;
+      }
+      .hero h2 {
+        margin: 0 22px;
+        font-size: 60px;
+        font-weight: 300;
+        line-height: 1;
+        letter-spacing: -0.03em;
+        white-space: nowrap;
+      }
+      .say {
+        margin-left: 40px;
+      }
+      .say p {
+        margin-top: 5px;
+        font-size: 17px;
+        line-height: 1.25;
+      }
+      .reading {
+        margin-left: auto;
+        margin-right: 18px;
+        text-align: right;
+      }
+      .reading .sub {
+        display: block;
+        margin-top: 3px;
+      }
+      .ring text {
+        fill: var(--ink);
+        font-size: 19px;
+        font-weight: 300;
+      }
+
+      /* stage track under the hero */
+      .stagehead {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin: 14px 56px 0;
+      }
+      .stagehead .sub {
+        margin-left: 8px;
+      }
+      .legend {
+        display: flex;
+        gap: 18px;
+        font-size: 11px;
+        color: var(--mid);
+      }
+      .legend span {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+      }
+      .dot {
+        flex: none;
+        width: 13px;
+        height: 13px;
+        border-radius: 50%;
+        background: var(--ink);
+      }
+      .dot.now {
+        border: 1.5px solid var(--ink);
+        background: radial-gradient(circle, var(--ink) 0 2.5px, var(--paper) 3px);
+      }
+      .dot.todo {
+        border: 1px dashed var(--ink);
+        background: var(--paper);
+      }
+      .track {
+        display: grid;
+        grid-template-columns: repeat(7, 1fr) max-content;
+        margin: 12px 56px 0;
+      }
+      .track li {
+        position: relative;
+        padding-top: 22px;
+        font-size: 12px;
+        white-space: nowrap;
+      }
+      .track li::before {
+        content: "";
+        position: absolute;
+        left: 13px;
+        right: 0;
+        top: 6px;
+        border-top: 1.5px solid var(--ink);
+      }
+      .track li.now::before,
+      .track li.todo::before {
+        top: 6px;
+        border-top: 1px dashed var(--mid);
+      }
+      .track li:last-child::before {
+        display: none;
+      }
+      .track .dot {
+        position: absolute;
+        left: 0;
+        top: 0;
+      }
+      .track li.now {
+        font-weight: 600;
+      }
+      .track li.todo {
+        color: var(--faint);
+      }
+
+      /* outlined cards */
+      .row {
+        display: grid;
+        gap: 16px;
+      }
+      .r3 {
+        grid-template-columns: repeat(3, 1fr);
+        margin-top: 26px;
+      }
+      .r4 {
+        grid-template-columns: repeat(4, 1fr);
+        margin-top: 16px;
+      }
+      .card {
+        display: grid;
+        grid-template-columns: var(--l, 96px) 1fr;
+        column-gap: 20px;
+        padding: 18px 20px 20px 22px;
+        border: 1px solid var(--ink);
+        border-radius: 30px;
+      }
+      .left {
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .left .sub {
+        margin-top: 2px;
+      }
+      .pairs {
+        display: flex;
+        flex-direction: column;
+        gap: 9px;
+      }
+      .pairs dt {
+        display: flex;
+        justify-content: space-between;
+        font-size: 10px;
+        font-weight: 500;
+        line-height: 1.3;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .pairs dt em {
+        font-style: normal;
+        font-weight: 400;
+        color: var(--faint);
+      }
+      .pairs dt em.hot {
+        font-weight: 600;
+        color: var(--ink);
+      }
+      .pairs dd {
+        margin-top: 1px;
+        font-size: 12.5px;
+        line-height: 1.35;
+      }
+      .pairs dd.md {
+        font-size: 14px;
+      }
+      .pairs dd.big {
+        font-size: 30px;
+        font-weight: 300;
+        line-height: 1.1;
+        letter-spacing: -0.02em;
+      }
+      .gsteps {
+        position: relative;
+        font-size: 11px;
+        line-height: 19px;
+      }
+      .gsteps::before {
+        content: "";
+        position: absolute;
+        left: 3px;
+        top: 9px;
+        bottom: 9px;
+        border-left: 1px solid var(--ink);
+      }
+      .gsteps li {
+        position: relative;
+        padding-left: 16px;
+        white-space: nowrap;
+      }
+      .gsteps li::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 6px;
+        width: 7px;
+        height: 7px;
+        border: 1px solid var(--ink);
+        border-radius: 50%;
+        background: var(--paper);
+      }
+      .gsteps li:last-child::before {
+        background: var(--ink);
+      }
+
+      /* return path */
+      .return {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 14px 30px 0;
+        font-size: 12px;
+      }
+
+      /* gate detail */
+      .gate {
+        margin-top: 26px;
+      }
+      .cap {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--rule);
+      }
+      .cap .right {
+        margin-left: auto;
+      }
+      .gcols {
+        display: grid;
+        grid-template-columns: 330px 560px 1fr;
+      }
+      .gcols > div {
+        padding: 12px 24px 12px 24px;
+        border-left: 1px solid var(--rule);
+      }
+      .gcols > div:first-child {
+        padding-left: 0;
+        border-left: 0;
+      }
+      .gcols h3 {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        font-size: 10px;
+        font-weight: 500;
+        line-height: 16px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .gcols h3 b {
+        font-weight: 500;
+        color: var(--faint);
+      }
+      .gcols h3 em {
+        font-size: 11px;
+        font-style: normal;
+        font-weight: 400;
+        letter-spacing: 0;
+        text-transform: none;
+        color: var(--faint);
+      }
+      .gcols li {
+        font-size: 12.5px;
+        line-height: 20px;
+      }
+      .gcols ul {
+        margin-top: 6px;
+      }
+      .pills {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 9px;
+      }
+      .pills span {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 24px;
+        padding: 0 10px 0 9px;
+        border: 1px solid var(--ink);
+        border-radius: 12px;
+        font-size: 11px;
+      }
+      .pills span::before {
+        content: "";
+        width: 7px;
+        height: 4px;
+        margin-top: -3px;
+        border-left: 1px solid var(--ink);
+        border-bottom: 1px solid var(--ink);
+        transform: rotate(-45deg);
+      }
+      .note {
+        margin-top: 7px;
+        font-size: 11px;
+        color: var(--faint);
+      }
+      .outs {
+        display: flex;
+        gap: 44px;
+        padding: 9px 0 0;
+        border-top: 1px solid var(--rule);
+        font-size: 12.5px;
+      }
+      .outs .lab {
+        margin-right: 10px;
+      }
+
+      /* all tickets */
+      .tickets {
+        margin-top: 26px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+        font-size: 12.5px;
+      }
+      th {
+        padding: 9px 0 7px;
+        text-align: left;
+        font-size: 10px;
+        font-weight: 400;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--faint);
+      }
+      td {
+        height: 33px;
+        padding: 3px 12px 3px 0;
+        border-top: 1px solid var(--rule);
+        vertical-align: middle;
+      }
+      tbody tr:last-child td {
+        border-bottom: 1px solid var(--rule);
+      }
+      td.id {
+        font-size: 13px;
+      }
+      td.pos,
+      td.dim {
+        color: var(--faint);
+      }
+      td.st,
+      th.st {
+        padding-right: 0;
+        text-align: right;
+      }
+      tr.on td {
+        font-weight: 600;
+      }
+      .steps span {
+        display: inline-block;
+        margin-right: 14px;
+        white-space: nowrap;
+        font-size: 12px;
+        line-height: 18px;
+      }
+      .steps span:last-child {
+        margin-right: 0;
+      }
+      .steps b {
+        margin-right: 7px;
+        font-weight: 400;
+        color: var(--faint);
+      }
+      .tog {
+        display: inline-flex;
+        align-items: center;
+        justify-content: space-between;
+        width: 112px;
+        height: 26px;
+        padding: 0 2px 0 11px;
+        border: 1px solid var(--ink);
+        border-radius: 13px;
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        vertical-align: middle;
+      }
+      .tog i {
+        flex: none;
+        width: 20px;
+        height: 20px;
+        border: 1px solid var(--ink);
+        border-radius: 50%;
+        background: var(--paper);
+      }
+      .tog.acc {
+        background: var(--ink);
+        color: var(--paper);
+      }
+      .tog.wrk {
+        border-width: 1.5px;
+        padding-right: 1.5px;
+        font-weight: 600;
+      }
+      .tog.wrk i {
+        border-width: 1.5px;
+        background: radial-gradient(circle, var(--ink) 0 4px, var(--paper) 4.5px);
+      }
+      .tog.idl,
+      .tog.blk,
+      .tog.que {
+        flex-direction: row-reverse;
+        padding: 0 11px 0 2px;
+      }
+      .tog.blk {
+        padding-right: 6px;
+        background: repeating-linear-gradient(135deg, var(--ink) 0 1px, transparent 1px 5px);
+      }
+      .tog.blk b {
+        padding: 2px 5px;
+        border-radius: 8px;
+        background: var(--paper);
+        font-weight: 600;
+      }
+      .tog.blk i {
+        background: var(--ink);
+      }
+      .tog.que {
+        border-style: dashed;
+        color: var(--mid);
+      }
+      .tog.que i {
+        border-style: dashed;
+      }
+      .tog.emp {
+        justify-content: center;
+        padding: 0;
+        border: 1px dotted var(--faint);
+        color: var(--faint);
+        font-weight: 400;
+      }
+      .tog b {
+        font-weight: inherit;
+      }
+
+      .foot {
+        display: flex;
+        gap: 28px;
+        margin-top: 18px;
+        font-size: 12px;
+        color: var(--mid);
+      }
+    </style>
+  </head>
+  <body>
+    <svg width="0" height="0" style="position: absolute" aria-hidden="true">
+      <defs>
+        <pattern id="hatch" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+          <line x1="0.5" y1="0" x2="0.5" y2="5" stroke="#151515" stroke-width="1" />
+        </pattern>
+      </defs>
+    </svg>
+
+    <div class="page">
+      <header class="top">
+        <h1>Software factory</h1>
+        <div class="meta">
+          <div class="meta-lines">
+            <p><span class="live"><i></i>LIVE</span><span>sample data, not a running factory</span></p>
+            <p class="obs">
+              <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+                <circle class="ln" cx="7" cy="7" r="6" />
+                <path class="ln" d="M7 3.5V7l2.4 1.6" />
+              </svg>
+              <span>observed 2 s ago</span>
+            </p>
+          </div>
+          <button class="replay" type="button">
+            <svg width="10" height="12" viewBox="0 0 10 12" aria-hidden="true">
+              <path class="ln" d="M1 1l8 5-8 5z" />
+            </svg>
+            replay
+          </button>
+        </div>
+      </header>
+
+      <!-- hero: the active ticket and its stage -->
+      <section class="hero" aria-label="Active ticket">
+        <span class="nudge" aria-hidden="true">
+          <svg width="12" height="12" viewBox="0 0 12 12"><path class="ln" d="M1 6h10" /></svg>
+        </span>
+        <h2>v1-ticket2</h2>
+        <span class="nudge" aria-hidden="true">
+          <svg width="12" height="12" viewBox="0 0 12 12"><path class="ln" d="M1 6h10M6 1v10" /></svg>
+        </span>
+        <div class="say">
+          <span class="lab">Active</span> <span class="sub">builder 1, position 4 of 10</span>
+          <p>working - attempt 2,<br />cold review running</p>
+        </div>
+        <div class="reading">
+          <span class="lab">Stages done</span>
+          <span class="sub">5 of 8, now at cold review</span>
+        </div>
+        <svg class="ring" width="84" height="84" viewBox="0 0 84 84" role="img" aria-label="5 of 8 stages done">
+          <circle cx="42" cy="42" r="36" fill="none" stroke="#c4c4bd" stroke-width="3" />
+          <circle
+            cx="42"
+            cy="42"
+            r="36"
+            fill="none"
+            stroke="#151515"
+            stroke-width="3"
+            pathLength="8"
+            stroke-dasharray="5 3"
+            transform="rotate(-90 42 42)"
+          />
+          <circle class="hole" cx="16.5" cy="67.5" r="5.5" />
+          <circle cx="16.5" cy="67.5" r="2" fill="#151515" />
+          <text x="42" y="48.5" text-anchor="middle">5/8</text>
+        </svg>
+      </section>
+
+      <div class="stagehead">
+        <p><span class="lab">Stages</span><span class="sub">eight, in order</span></p>
+        <p class="legend">
+          <span><i class="dot"></i>done</span>
+          <span><i class="dot now"></i>now</span>
+          <span><i class="dot todo"></i>not reached</span>
+        </p>
+      </div>
+      <ol class="track">
+        <li class="done"><i class="dot"></i>worktree</li>
+        <li class="done"><i class="dot"></i>setup</li>
+        <li class="done"><i class="dot"></i>builder thread</li>
+        <li class="done"><i class="dot"></i>report.json</li>
+        <li class="done"><i class="dot"></i>gate - 10 min cap</li>
+        <li class="now"><i class="dot now"></i>cold review</li>
+        <li class="todo"><i class="dot todo"></i>ff-merge</li>
+        <li class="todo"><i class="dot todo"></i>main</li>
+      </ol>
+
+      <!-- pipeline, first row -->
+      <div class="row r3">
+        <section class="card">
+          <div class="left">
+            <div>
+              <h3 class="lab">Foreman</h3>
+              <p class="sub">orchestrator</p>
+            </div>
+            <svg width="92" height="110" viewBox="0 0 92 110" aria-hidden="true">
+              <rect class="ln" x="4" y="1" width="64" height="16" rx="8" />
+              <rect class="ln" x="12" y="26" width="48" height="16" rx="8" />
+              <rect class="ln" x="20" y="51" width="32" height="16" rx="8" />
+              <path class="ln" d="M36 17v9M36 42v9M36 67v12" />
+              <rect class="ln" x="16" y="79" width="40" height="30" rx="7" />
+              <path class="ln" d="M24 88h24M24 94h18M24 100h12" />
+              <path class="ln" d="M56 94h30M81 89l5 5-5 5" />
+            </svg>
+          </div>
+          <dl class="pairs">
+            <div>
+              <dt>Plans</dt>
+              <dd>discovery, stories, tickets</dd>
+            </div>
+            <div>
+              <dt>Then</dt>
+              <dd>picks the next eligible ticket</dd>
+            </div>
+            <div>
+              <dt>Hand-off</dt>
+              <dd>ticket brief, scope, check command</dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="card">
+          <div class="left">
+            <div>
+              <h3 class="lab">Builders</h3>
+              <p class="sub">own thread + worktree</p>
+            </div>
+            <svg width="92" height="108" viewBox="0 0 92 108" aria-hidden="true">
+              <rect class="ln" x="1" y="1" width="18" height="88" rx="9" />
+              <rect class="ink" x="5.5" y="5.5" width="9" height="79" rx="4.500" />
+              <rect class="ln" x="25" y="1" width="18" height="88" rx="9" />
+              <rect class="hat" x="49" y="1" width="18" height="88" rx="9" />
+              <rect class="dsh" x="73" y="1" width="18" height="88" rx="9" />
+              <text x="10" y="105" text-anchor="middle">1</text>
+              <text x="34" y="105" text-anchor="middle">2</text>
+              <text x="58" y="105" text-anchor="middle">3</text>
+              <text x="82" y="105" text-anchor="middle">4</text>
+            </svg>
+          </div>
+          <dl class="pairs" style="gap: 7px">
+            <div>
+              <dt>Builder 1 <em class="hot">working</em></dt>
+              <dd class="md">v1-ticket2</dd>
+            </div>
+            <div>
+              <dt>Builder 2 <em>idle</em></dt>
+              <dd class="md">foreman-watchdog-ticket1</dd>
+            </div>
+            <div>
+              <dt>Builder 3 <em>blocked</em></dt>
+              <dd class="md">v1-ticket7</dd>
+            </div>
+            <div>
+              <dt>Builder 4 <em>queued</em></dt>
+              <dd class="md">v1-ticket8</dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="card">
+          <div class="left">
+            <div>
+              <h3 class="lab">Submission</h3>
+              <p class="sub">report.json</p>
+            </div>
+            <svg width="92" height="112" viewBox="0 0 92 112" aria-hidden="true">
+              <rect class="ln" x="1" y="1" width="46" height="110" rx="23" />
+              <circle class="ink" cx="24" cy="24" r="13" />
+              <circle class="ln" cx="24" cy="56" r="13" />
+              <circle class="ln" cx="24" cy="88" r="13" />
+              <path class="ln" d="M37 24h10" />
+              <text x="53" y="27.500">1 of 3</text>
+            </svg>
+          </div>
+          <dl class="pairs">
+            <div>
+              <dt>Slot 1, filled</dt>
+              <dd>foreman-watchdog-ticket1 - idle</dd>
+            </div>
+            <div>
+              <dt>Builder does</dt>
+              <dd>commit locally, then report.json</dd>
+            </div>
+            <div>
+              <dt>Report says</dt>
+              <dd>candidate: revision + insight</dd>
+              <dd>or blocked: reason</dd>
+            </div>
+          </dl>
+        </section>
+      </div>
+
+      <!-- pipeline, second row -->
+      <div class="row r4">
+        <section class="card" style="--l: 138px; column-gap: 16px">
+          <div class="left">
+            <div>
+              <h3 class="lab">Integrator</h3>
+              <p class="sub">one ticket at a time</p>
+            </div>
+            <div>
+              <p class="lab" style="margin-bottom: 4px">Gate</p>
+              <ol class="gsteps">
+                <li>revision = HEAD</li>
+                <li>clean tree</li>
+                <li>scope</li>
+                <li>verify</li>
+                <li>to cold review</li>
+              </ol>
+            </div>
+          </div>
+          <dl class="pairs" style="gap: 6px">
+            <div>
+              <dt>Landed</dt>
+              <dd class="big">3</dd>
+            </div>
+            <div>
+              <dt>Queued</dt>
+              <dd class="big">2</dd>
+            </div>
+            <div>
+              <dt>Blocked</dt>
+              <dd class="big">1</dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="card" style="--l: 78px; column-gap: 16px">
+          <div class="left">
+            <div>
+              <h3 class="lab">Cold review</h3>
+              <p class="sub">running now</p>
+            </div>
+            <svg width="76" height="100" viewBox="0 0 76 100" aria-hidden="true">
+              <circle class="ln" cx="38" cy="54" r="24" />
+              <path class="hat" d="M38 30a24 24 0 0 1 0 48z" />
+              <path class="ln" d="M38 21a33 33 0 1 1-33 33" />
+              <circle class="hole" cx="5" cy="54" r="5" />
+              <circle cx="5" cy="54" r="1.800" fill="#151515" />
+            </svg>
+          </div>
+          <dl class="pairs">
+            <div>
+              <dt>Reviewing</dt>
+              <dd class="big" style="font-size: 22px; line-height: 1.25">v1-ticket2</dd>
+            </div>
+            <div>
+              <dt>Reviewer</dt>
+              <dd>opposite model family</dd>
+            </div>
+            <div>
+              <dt>Rule</dt>
+              <dd>small 1st tries skip</dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="card" style="--l: 92px; column-gap: 14px">
+          <div class="left">
+            <div>
+              <h3 class="lab">Main</h3>
+              <p class="sub">target branch</p>
+            </div>
+            <svg width="68" height="114" viewBox="0 0 68 114" aria-hidden="true">
+              <rect class="ink" x="1" y="1" width="66" height="42" />
+              <rect class="ln" x="1" y="1" width="66" height="98" />
+              <path class="cut" d="M2 15h64M2 29h64M23 2v41M45 2v41" />
+              <path class="ln" d="M1 43h66M1 57h66M1 71h66M1 85h66M23 43v56M45 43v56" />
+              <text x="34" y="112" text-anchor="middle">3 of 7</text>
+            </svg>
+          </div>
+          <dl class="pairs">
+            <div>
+              <dt>Head, newest</dt>
+              <dd class="big">b649c8a</dd>
+            </div>
+            <div>
+              <dt>Landed before</dt>
+              <dd class="md">af0ae26</dd>
+              <dd class="md">cd75e02</dd>
+            </div>
+            <div>
+              <dt>Order</dt>
+              <dd>newest first</dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="card" style="--l: 78px; column-gap: 16px">
+          <div class="left">
+            <div>
+              <h3 class="lab">Full gate</h3>
+              <p class="sub">scheduled</p>
+            </div>
+            <svg width="72" height="100" viewBox="0 0 72 100" aria-hidden="true">
+              <rect class="dsh" x="1" y="1" width="62" height="98" rx="18" />
+              <path class="ln" d="M32 14v24M32 38L18 58M32 38l14 20M18 58v8M46 58v8" />
+              <circle class="hat" cx="18" cy="74" r="8" />
+              <circle class="ink" cx="46" cy="74" r="8" />
+            </svg>
+          </div>
+          <dl class="pairs">
+            <div>
+              <dt>State</dt>
+              <dd>planned - replay only</dd>
+            </div>
+            <div>
+              <dt>Red</dt>
+              <dd>main-red ticket filed</dd>
+            </div>
+            <div>
+              <dt>Green</dt>
+              <dd>revision verified</dd>
+            </div>
+          </dl>
+        </section>
+      </div>
+
+      <p class="return">
+        <svg width="34" height="12" viewBox="0 0 34 12" aria-hidden="true">
+          <path class="ln" d="M33 1v5H1M6 1L1 6l5 5" />
+        </svg>
+        <span class="lab">Return path</span>
+        <span>back to the builder that wrote it</span>
+        <span class="sub">reports also reach the foreman (placeholder - replay only)</span>
+      </p>
+
+      <!-- gate detail -->
+      <section class="gate">
+        <div class="cap">
+          <h3 class="lab">Gate detail</h3>
+          <span class="sub">three parts, in order</span>
+        </div>
+        <div class="gcols">
+          <div>
+            <h3><b>1</b>candidate <em>from report.json</em></h3>
+            <ul>
+              <li>revision = HEAD, not the base</li>
+              <li>tree clean</li>
+              <li>every path in scope</li>
+            </ul>
+          </div>
+          <div>
+            <h3><b>2</b>verify <em>project check command, 10 min cap</em></h3>
+            <p class="pills">
+              <span>test</span><span>lint</span><span>typecheck</span><span>format</span><span>fallow</span
+              ><span>diff-check</span>
+            </p>
+            <p class="note">illustrative ticks, not live</p>
+          </div>
+          <div>
+            <h3><b>3</b>unchanged</h3>
+            <ul>
+              <li>HEAD still the candidate</li>
+              <li>tree still clean</li>
+            </ul>
+          </div>
+        </div>
+        <p class="outs">
+          <span><span class="lab">Pass</span>to cold review</span>
+          <span><span class="lab">Fail</span>to the same builder with the log</span>
+          <span><span class="lab">2nd fail</span>escalated</span>
+        </p>
+      </section>
+
+      <!-- all tickets -->
+      <section class="tickets">
+        <div class="cap">
+          <h3 class="lab">All tickets</h3>
+          <span class="sub">8 of 10 positions used</span>
+          <span class="right"><span class="lab">Coming</span> <span class="sub">in order, with their steps</span></span>
+        </div>
+        <table>
+          <colgroup>
+            <col style="width: 34px" />
+            <col style="width: 208px" />
+            <col style="width: 82px" />
+            <col style="width: 84px" />
+            <col style="width: 272px" />
+            <col />
+            <col style="width: 78px" />
+            <col style="width: 112px" />
+          </colgroup>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Ticket</th>
+              <th>Order</th>
+              <th>Builder</th>
+              <th>Title or detail</th>
+              <th>Steps</th>
+              <th>Revision</th>
+              <th class="st">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="pos">01</td>
+              <td class="id">feature-06</td>
+              <td class="dim">on main</td>
+              <td class="dim">-</td>
+              <td>landed, no cold review</td>
+              <td></td>
+              <td>cd75e02</td>
+              <td class="st"><span class="tog acc"><b>accepted</b><i></i></span></td>
+            </tr>
+            <tr>
+              <td class="pos">02</td>
+              <td class="id">v1-ticket1</td>
+              <td class="dim">on main</td>
+              <td class="dim">-</td>
+              <td>landed, cold review attempt 1</td>
+              <td></td>
+              <td>af0ae26</td>
+              <td class="st"><span class="tog acc"><b>accepted</b><i></i></span></td>
+            </tr>
+            <tr>
+              <td class="pos">03</td>
+              <td class="id">backup-adoption-ticket1</td>
+              <td class="dim">on main</td>
+              <td class="dim">-</td>
+              <td>landed, attempt 6, newest on main</td>
+              <td></td>
+              <td>b649c8a</td>
+              <td class="st"><span class="tog acc"><b>accepted</b><i></i></span></td>
+            </tr>
+            <tr class="on">
+              <td class="pos">04</td>
+              <td class="id">v1-ticket2</td>
+              <td><span class="lab" style="font-weight: 600">Active</span></td>
+              <td>builder 1</td>
+              <td>attempt 2, cold review running</td>
+              <td></td>
+              <td class="dim">-</td>
+              <td class="st"><span class="tog wrk"><b>working</b><i></i></span></td>
+            </tr>
+            <tr>
+              <td class="pos">05</td>
+              <td class="id">foreman-watchdog-ticket1</td>
+              <td><span class="lab">Coming 1</span></td>
+              <td>builder 2</td>
+              <td>reported, waits for the integrator</td>
+              <td class="steps">
+                <span><b>1</b>Record durable stop incidents</span><span><b>2</b>Notify the owner once</span
+                ><span><b>3</b>Wake the foreman</span>
+              </td>
+              <td class="dim">-</td>
+              <td class="st"><span class="tog idl"><b>idle</b><i></i></span></td>
+            </tr>
+            <tr>
+              <td class="pos">06</td>
+              <td class="id">v1-ticket7</td>
+              <td><span class="lab">Coming 2</span></td>
+              <td>builder 3</td>
+              <td>Validated replacement restore</td>
+              <td class="steps">
+                <span><b>1</b>Validate the backup</span><span><b>2</b>Restore before dispatch</span>
+              </td>
+              <td class="dim">-</td>
+              <td class="st"><span class="tog blk"><b>blocked</b><i></i></span></td>
+            </tr>
+            <tr>
+              <td class="pos">07</td>
+              <td class="id">v1-ticket8</td>
+              <td class="dim">-</td>
+              <td>builder 4</td>
+              <td>Exclusive orchestrator ownership</td>
+              <td></td>
+              <td class="dim">-</td>
+              <td class="st"><span class="tog que"><b>queued</b><i></i></span></td>
+            </tr>
+            <tr>
+              <td class="pos">08</td>
+              <td class="id">v1-ticket9</td>
+              <td class="dim">-</td>
+              <td class="dim">-</td>
+              <td>Exact cross-orb candidate transfer</td>
+              <td></td>
+              <td class="dim">-</td>
+              <td class="st"><span class="tog que"><b>queued</b><i></i></span></td>
+            </tr>
+            <tr>
+              <td class="pos">09</td>
+              <td class="dim">open position</td>
+              <td></td>
+              <td></td>
+              <td></td>
+              <td></td>
+              <td></td>
+              <td class="st"><span class="tog emp"><b>empty</b></span></td>
+            </tr>
+            <tr>
+              <td class="pos">10</td>
+              <td class="dim">open position</td>
+              <td></td>
+              <td></td>
+              <td></td>
+              <td></td>
+              <td></td>
+              <td class="st"><span class="tog emp"><b>empty</b></span></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <footer class="foot">
+        <span>read-only</span>
+        <span>one poll every 5 s</span>
+      </footer>
+    </div>
+  </body>
+</html>

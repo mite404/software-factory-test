@@ -260,3 +260,26 @@ test("the recorded replay draws one reviewed landing, one rejection and one bloc
   expect(views[4]!.reviewing).toBe(true);
   expect(views[9]!.tally).toBe("3 landed · 0 queued · 1 blocked");
 });
+
+test("the kit device gets every ticket, the tally as numbers, and one notice per change", () => {
+  const before = feed(["accepted", "idle", "queued", "working"]);
+  const after = feed(["accepted", "accepted", "working", "blocked"]);
+  const view = derive(before, after, NOW);
+  expect(view.counts).toEqual({ landed: 2, queued: 0, blocked: 1 });
+  expect(view.tickets.map((ticket) => ticket.stage)).toEqual([7, 7, 3, 3]);
+  expect(view.tickets[1]).toMatchObject({
+    id: "T2",
+    title: "ticket 2",
+    revision: "2222222",
+    review: "none",
+    steps: Array(7).fill("done"),
+  });
+  expect(view.news.map((item) => `${item.tone}: ${item.title}`)).toEqual([
+    "success: T2 landed",
+    "danger: T4 blocked",
+    "info: T3 started",
+  ]);
+  expect(view.main[0]!.id).toBe("T2");
+  // The first poll has nothing to compare with, so it announces nothing.
+  expect(derive(null, after, NOW).news).toEqual([]);
+});

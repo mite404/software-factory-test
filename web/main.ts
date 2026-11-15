@@ -8,7 +8,10 @@ const BRIEF_MS = 1200;
 const REVIEW_MS = 4800;
 const GATE_MS = 5000;
 const REPORT_MS = 7000;
-const DEMO = new URLSearchParams(location.search).has("demo");
+const PARAMS = new URLSearchParams(location.search);
+const DEMO = PARAMS.has("demo");
+// ?theme=<name> picks a skin from web/themes; any other value leaves the default.
+document.documentElement.dataset.theme = PARAMS.get("theme") ?? "";
 
 function one(selector: string, root: ParentNode = document): Element {
   const element = root.querySelector(selector);
@@ -34,6 +37,15 @@ for (const row of coming) {
   own.classList.add("own");
   row.append(chips, own);
 }
+
+// ?theme=spec&kit swaps everything below the ACTIVE rule for the SPEC-01 device in web/spec.
+const paintKit =
+  PARAMS.get("theme") === "spec" && PARAMS.has("kit")
+    ? (await import("./spec/tickets")).mount(
+        stage,
+        all("#steps .chip:not(.target) text").map((text) => text.textContent!),
+      )
+    : null;
 
 const DEMO_STEPS = [
   ["add steps to queue entry", "pass steps through feed", "render step chips"],
@@ -185,13 +197,14 @@ function render(view: View) {
   slots.forEach((slot, i) => slot.toggleAttribute("data-on", i < view.slots));
   paintBuilders(view);
   paintTickets(view);
+  paintKit?.(view);
   if (view.reviewFinished)
     cycle(stage, `review-${view.reviewFinished}`, RETURN_MS + 240);
   else animate(view);
 }
 
 let previous: Feed | null = null;
-let tick = 0;
+let tick = Number(PARAMS.get("tick")) || 0; // ?demo&tick=7 starts the sample feed at a later poll
 
 async function poll() {
   try {
