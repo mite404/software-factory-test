@@ -497,6 +497,37 @@ Edge cases this run exposed:
 - The planned-intake candidate was based on main before PR #24 and conflicted with it in
   `factory/plugin.ts`. A Foreman-authored fix during a run costs a conflict at integration.
 
+## Trial 16 passed: provider limit resume through two rejections and an escalation
+
+2026-11-15. `F003-provider-limit-resume` ran through the native factory on the dogfood clone and
+was accepted at attempt three (candidate `9abbca0`, PR #31). One Sol 6.1 worker on the runner
+`factory-dogfood` kept the ticket throughout; each attempt had a fresh cold reviewer.
+
+- Attempt one (`192f73f`) was rejected with one critical finding and four warnings. A limit first
+  observed after its reset time was scheduled for the next day, which turned the motivating case
+  into a 24-hour wait.
+- Attempt two (`e74d42d`) was rejected with one critical finding, a warning and a nit. A new
+  incident opened whenever the read clock had passed the last continuation, so one unchanged error
+  could send repeated continuations. The reviewer traced this in the code and did not run a test.
+- The second rejection escalated. The Foreman diagnosed one shared cause, decisions derived from
+  the local observation clock, and resumed the same worker with the exact incident and a decision
+  to identify a limit by the provider's message and parsed reset time.
+- Attempt three passed with no findings. The integration head passed 200 tests, and 153 factory
+  tests with no global Git identity.
+
+Not proven: no real provider limit has occurred since the change. Every case ran on fixtures.
+
+Edge cases this run exposed:
+
+- The attempt one reviewer thread errored five seconds after its brief was sent and recovered
+  about 28 minutes later without action. The stop notice named the reason `worker-error` although
+  the reviewer had errored, and nothing recorded which thread it was. F011 owns the recorded
+  thread and role.
+- A gate rejection sends the worker only a log path; the attempt one log was 114,035 bytes. F008
+  owns the excerpt.
+- Both rejections shared a cause that only a reader of both verdicts could see. F015 owns the
+  weekly pass that looks across tickets.
+
 [trial-artifact]: https://ampcode.com/artifacts/factory-workflow-trials-36c5101e-8f2e-4e6c-ab3f-0a4425873f7e
 [source-workflow]: https://ampcode.com/threads/T-01a1ce51-ec2c-73cf-9b63-a2eb9f40442b
 [rename-worker]: https://ampcode.com/threads/T-01a1d208-909b-7726-8b37-40e40e5ba5c2
