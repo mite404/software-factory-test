@@ -438,57 +438,7 @@
   justify-self: end;
 }
 
-/* ALL TICKETS: one LED per ticket in order, then the tally on three small LCDs. */
-#kit [data-queue] {
-  display: grid;
-  grid-template-columns: repeat(10, 1fr);
-  justify-items: center;
-  margin: 0;
-  padding: 4px 0 0;
-  list-style: none;
-}
-
-#kit [data-queue] > li {
-  display: grid;
-  justify-items: center;
-  align-content: start;
-  gap: 2px;
-  height: 40px;
-}
-
-#kit [data-queue] > [data-status="empty"] {
-  visibility: hidden;
-}
-
-#kit [data-queue] [data-kit="led"]:not(#_):not(#_) {
-  width: 9px;
-  height: 9px;
-  box-shadow:
-    inset 0 0.5px 1px rgb(0 0 0 / 0.25),
-    0 0.5px 0 rgb(255 255 255 / 0.9);
-}
-
-#kit [data-queue] > [data-status="accepted"] [data-kit="led"]:not(#_):not(#_) {
-  background: var(--done);
-  box-shadow: 0 0 4px 1px color-mix(in oklch, var(--done) 50%, transparent);
-}
-
-#kit
-  [data-queue]
-  > :is([data-status="working"], [data-status="idle"])
-  [data-kit="led"]:not(#_):not(#_) {
-  background: var(--key-lamp);
-  box-shadow: 0 0 4px 1px color-mix(in oklch, var(--key-lamp) 50%, transparent);
-}
-
-/* Blocked is red and square, so it does not rest on hue alone next to the orange. */
-#kit [data-queue] > [data-status="blocked"] [data-kit="led"]:not(#_):not(#_) {
-  border-radius: 1px;
-  background: var(--fail);
-  box-shadow: 0 0 4px 1px color-mix(in oklch, var(--fail) 50%, transparent);
-}
-
-#kit [data-queue] small,
+/* ALL TICKETS: the tally on three small LCDs. */
 #kit [data-area="queue"] > small {
   font: 500 8.5px/1 var(--mono, monospace);
   letter-spacing: 0.1em;
