@@ -8,7 +8,7 @@
 - Risk: elevated; setup failure and restart must not duplicate workers or consume repair attempts.
 - Depends on: accepted native dispatch, SQLite persistence, and conditional cold review.
 - Planned at: `7a3b1c6c705c0c54bc08b5f7734fd3ffb78de608`, 2026-11-13.
-- Local path: `docs/feats/worktree-setup/worktree-setup-ticket1.md`
+- Local path: `docs/feats/done/worktree-setup-ticket1.md`
 - Backlog: F14. Local-only ticket; native attempt three accepted after full gates and cold review.
 - Accepted candidate: `2558ccc9d7a9a6d2a7c7d034c597d7e9faeae594`, 115 tests passed.
 - Worker: https://ampcode.com/threads/T-01a1d464-359e-72b7-89b4-f6c177b8fbb4

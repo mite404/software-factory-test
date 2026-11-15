@@ -70,8 +70,10 @@ review feedback, or an answer to a question. Find its current stage and continue
    local gate on the branch head, and open a pull request. Merge with a merge commit only when
    every check on the pull request's exact head has succeeded. Never push to `main` directly.
    Then update the ticket, the dispatch order, and the workflow lessons through a second pull
-   request. State the actual branch and distinguish worker commits, integration, pushes, merges,
-   and deployment.
+   request. Once every box under the ticket's "Done when" is ticked, move its file to
+   `docs/feats/done/` with `git mv` and fix the links to it. A ticket with an open box, such as a
+   pending live proof, stays where it is. State the actual branch and distinguish worker
+   commits, integration, pushes, merges, and deployment.
 9. Start the next unit in [docs/v1-execution.md](../docs/v1-execution.md), the dispatch order,
    after that merge. Continue without asking for reversible work already authorized. Stop for
    missing information or permission that tools cannot resolve, and ask for the one concrete

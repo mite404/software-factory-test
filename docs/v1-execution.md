@@ -18,17 +18,17 @@ prerequisites, not permission to dispatch every draft against today's base.
 | Unit                                                                                          | Outcome                                         | Prerequisites                                                            | Requirements                           |
 | --------------------------------------------------------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------ | -------------------------------------- |
 | [foreman-watchdog-ticket1](feats/foreman-watchdog/foreman-watchdog-ticket1.md)                | Durable Foreman wake-up and incident identity   | v1-ticket2                                                               | F03, owner-approved supervision        |
-| [foreman-watchdog-ticket2](feats/foreman-watchdog/foreman-watchdog-ticket2.md)                | Progress-based nudges and alert intent          | foreman-watchdog-ticket1                                                 | F03, owner-approved supervision        |
+| [foreman-watchdog-ticket2](feats/done/foreman-watchdog-ticket2.md)                            | Progress-based nudges and alert intent          | foreman-watchdog-ticket1                                                 | F03, owner-approved supervision        |
 | [foreman-watchdog-ticket3](feats/foreman-watchdog/foreman-watchdog-ticket3.md)                | Outside-orb wake-up and alert delivery          | foreman-watchdog-ticket2                                                 | F03, owner-approved supervision        |
-| [F001-backup-commit-identity](feats/backup-identity/F001-backup-commit-identity.md)           | Backup works under orb commit signing           | backup-adoption-ticket1                                                  | F05, R13, operator durability priority |
-| [F002-worker-runner-executor](feats/worker-executor/F002-worker-runner-executor.md)           | Workers survive a Foreman CLI restart           | v1-ticket2                                                               | F03, R8, operator autonomy priority    |
-| [planned-intake-ticket1](feats/planned-intake/planned-intake-ticket1.md)                      | Planned backlog without accidental dispatch     | v1-ticket2, foreman-watchdog-ticket1                                     | F02, F07, owner-approved planning      |
+| [F001-backup-commit-identity](feats/done/F001-backup-commit-identity.md)                      | Backup works under orb commit signing           | backup-adoption-ticket1                                                  | F05, R13, operator durability priority |
+| [F002-worker-runner-executor](feats/done/F002-worker-runner-executor.md)                      | Workers survive a Foreman CLI restart           | v1-ticket2                                                               | F03, R8, operator autonomy priority    |
+| [planned-intake-ticket1](feats/done/planned-intake-ticket1.md)                                | Planned backlog without accidental dispatch     | v1-ticket2, foreman-watchdog-ticket1                                     | F02, F07, owner-approved planning      |
 | [F003-provider-limit-resume](feats/durability/F003-provider-limit-resume.md)                  | Same threads resume after a provider limit      | foreman-watchdog-ticket3, F002-worker-runner-executor                    | F03, R8, operator autonomy priority    |
 | [F004-keyed-creation-delivery](feats/durability/F004-keyed-creation-delivery.md)              | Unclear creation and delivery recover by lookup | F002-worker-runner-executor                                              | F03, R8, operator autonomy priority    |
 | [F005-foreman-handoff](feats/durability/F005-foreman-handoff.md)                              | Guarded same-orb Foreman takeover               | foreman-watchdog-ticket3                                                 | F06, operator durability priority      |
 | [F006-limit-fallback-setting](feats/durability/F006-limit-fallback-setting.md)                | Wait or fall back on a provider limit           | F003-provider-limit-resume                                               | F03, operator autonomy priority        |
 | [F007-run-transition-table](feats/durability/F007-run-transition-table.md)                    | One declared, tested run lifecycle table        | F003 to F006                                                             | F03, F07, operator durability priority |
-| [F008-gate-failure-feedback](feats/worker-feedback/F008-gate-failure-feedback.md)             | A failed gate returns its output to the worker  | F003-provider-limit-resume                                               | F03, operator leverage priority        |
+| [F008-gate-failure-feedback](feats/done/F008-gate-failure-feedback.md)                        | A failed gate returns its output to the worker  | F003-provider-limit-resume                                               | F03, operator leverage priority        |
 | [F009-attempt-cap-parking](feats/repair-escalation/F009-attempt-cap-parking.md)               | Twice-escalated ticket parks; queue continues   | F007-run-transition-table                                                | F03, operator autonomy priority        |
 | [F010-brief-fact-check](feats/worker-feedback/F010-brief-fact-check.md)                       | No worker starts on an incomplete brief         | F007-run-transition-table                                                | F02, F03                               |
 | [F011-step-actor-labels](feats/lifecycle-view/F011-step-actor-labels.md)                      | Each step and exit names who performs it        | F007, F016-kit-page-default                                              | F07                                    |
@@ -129,10 +129,11 @@ Canonical backup adoption passed fresh cold review at attempt six. Backup, priva
 integration are merged through [PR #3](https://github.com/mite404/software-factory-test/pull/3).
 The combined local gate passed 140 tests and all required checks; post-merge main CI passed.
 
-Definition [v1-ticket2](feats/v1/v1-ticket2.md) passed native gates and fresh cold review at attempt
-four on candidate `901ae38e20fc3517170b43c8b9bea78f6920add1`. It was transferred from the previous
-coordinator orb as a checksum-verified Git bundle, merged onto parent main by the Foreman, and
-passed the combined gate with 150 tests. foreman-watchdog-ticket1 was then accepted natively at
+Definition [v1-ticket2](feats/done/v1-ticket2.md) passed native gates and fresh cold review at
+attempt four on candidate `901ae38e20fc3517170b43c8b9bea78f6920add1`. It was transferred from the
+previous coordinator orb as a checksum-verified Git bundle, merged onto parent main by the
+Foreman, and passed the combined gate with 150 tests. foreman-watchdog-ticket1 was then accepted
+natively at
 attempt two and merged through PR #8; see workflow trial 11. foreman-watchdog-ticket2 was accepted
 at attempt one and merged through PR #12; see workflow trial 12. foreman-watchdog-ticket3 was
 accepted at attempt four and merged through PR #18; see workflow trial 13. Its live proof is still
