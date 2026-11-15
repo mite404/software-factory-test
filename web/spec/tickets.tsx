@@ -62,8 +62,7 @@ const NONE: Ticket = {
   attempt: null,
 };
 const COLUMNS: Column<Ticket>[] = [
-  { key: "id", label: "Ticket", width: "150px", render: (row) => row.id },
-  { key: "title", label: "Title", width: "100px", render: (row) => row.title },
+  { key: "id", label: "Ticket", width: "250px", render: (row) => row.id },
   {
     key: "plan",
     label: "Plan",
