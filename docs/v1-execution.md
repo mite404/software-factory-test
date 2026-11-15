@@ -27,6 +27,7 @@ prerequisites, not permission to dispatch every draft against today's base.
 | [F004-keyed-creation-delivery](feats/durability/F004-keyed-creation-delivery.md)        | Unclear creation and delivery recover by lookup | F002-worker-runner-executor                                              | F03, R8, operator autonomy priority    |
 | [F005-foreman-handoff](feats/durability/F005-foreman-handoff.md)                        | Guarded same-orb Foreman takeover               | foreman-watchdog-ticket3                                                 | F06, operator durability priority      |
 | [F006-limit-fallback-setting](feats/durability/F006-limit-fallback-setting.md)          | Wait or fall back on a provider limit           | F003-provider-limit-resume                                               | F03, operator autonomy priority        |
+| [F007-run-transition-table](feats/durability/F007-run-transition-table.md)              | One declared, tested run lifecycle table        | F003 to F006                                                             | F03, F07, operator durability priority |
 | [v1-ticket4](feats/v1/v1-ticket4.md)                                                    | Durable private evidence records                | v1-ticket2                                                               | F02, F07, R6-R7                        |
 | [v1-ticket11](feats/v1/v1-ticket11.md)                                                  | Required and advisory verification tools        | v1-ticket2                                                               | F12, AC28, AC35-AC36                   |
 | [v1-ticket12](feats/v1/v1-ticket12.md)                                                  | Permission-bound native hooks                   | v1-ticket11                                                              | F12, AC27, AC29                        |
@@ -130,7 +131,7 @@ accepted at attempt one and merged through PR #23. Its live proof first failed a
 after PR #24; see workflow trial 15. planned-intake-ticket1 was accepted at attempt two on the
 runner and merged through PR #25. The planned inventory has not been imported yet.
 
-Next are the four durability units, in table order, which the operator approved after a provider
+Next are the five durability units, in table order, which the operator approved after a provider
 limit stopped the factory for two hours. F003-provider-limit-resume is first. The factory runs one
 ticket at a time from merged main. v1-ticket10 keeps the recovery of outages that still happen,
 and v1-ticket8 keeps exclusive ownership across orbs. Keep preserved backup
