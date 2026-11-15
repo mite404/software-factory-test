@@ -1,0 +1,1554 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Software factory - pilot prototype</title>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Michroma&family=Quantico:wght@400;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --black: #040507;
+        --card: #080a0f;
+        --card-line: #1a2740;
+        --navy: #0a1630;
+        --navy-2: #11254a;
+        --navy-line: #24406f;
+        --teal: #3f6c75;
+        --teal-dk: #10262e;
+        --teal-hi: #a9cdcd;
+        --rust: #74320f;
+        --rust-line: #a54b1a;
+        --orange: #f57b29;
+        --red: #e5391c;
+        --pale: #dcf1ee;
+        --dim: #7f98a6;
+        --warm: #cfa58e;
+      }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        background: var(--black);
+        color: var(--pale);
+        font: 400 12px/1.35 Quantico, Eurostile, "Bank Gothic", sans-serif;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      ul,
+      ol {
+        list-style: none;
+      }
+      .mx {
+        font-family: Michroma, Quantico, sans-serif;
+        font-weight: 400;
+        letter-spacing: 0.04em;
+      }
+      .screen {
+        width: 1400px;
+        margin: 20px auto;
+        display: grid;
+        grid-template-columns: 84px 1fr;
+        gap: 16px;
+      }
+
+      /* ---- left rail: header state ---- */
+      .rail {
+        background: var(--teal);
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        padding: 14px 0 18px;
+        gap: 12px;
+      }
+      .rbox {
+        width: 58px;
+        height: 40px;
+        display: grid;
+        place-items: center;
+        background: var(--teal-hi);
+        color: #04181c;
+        font: 700 14px/1 Quantico, sans-serif;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        border: 0;
+      }
+      .rbox + .rbox {
+        margin-top: 3px;
+      }
+      .rbox svg {
+        display: block;
+      }
+      .pair {
+        display: flex;
+        flex-direction: column;
+      }
+      .replay {
+        grid-auto-flow: row;
+        gap: 4px;
+        height: 54px;
+        font-size: 11px;
+        background: #04181c;
+        color: var(--teal-hi);
+        outline: 1px solid var(--teal-hi);
+        outline-offset: -4px;
+        cursor: pointer;
+      }
+      .vtxt {
+        writing-mode: vertical-rl;
+        transform: rotate(180deg);
+        align-self: center;
+        font-size: 11px;
+        color: #e9f7f5;
+        white-space: nowrap;
+      }
+      .vgroup {
+        display: flex;
+        gap: 8px;
+        align-self: center;
+        align-items: flex-end;
+      }
+      .rail .push {
+        margin-top: auto;
+      }
+
+      /* ---- header strip: factory path ---- */
+      .path {
+        background: var(--teal-dk);
+        height: 46px;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 0 16px 0 10px;
+      }
+      .path .sq {
+        width: 26px;
+        height: 26px;
+        background: var(--pale);
+        flex: none;
+      }
+      .path h1 {
+        font-size: 15px;
+        color: #9fc3c6;
+      }
+      .path .proj {
+        font-weight: 700;
+        font-size: 14px;
+      }
+      .path .unit {
+        margin-left: auto;
+        color: var(--dim);
+        font-size: 11px;
+      }
+      .stations,
+      .return {
+        display: grid;
+        grid-template-columns: repeat(8, 1fr);
+      }
+      .stations {
+        border-bottom: 1px solid var(--card-line);
+      }
+      .stations li {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        height: 36px;
+        padding-left: 10px;
+        font-weight: 700;
+        font-size: 12px;
+        white-space: nowrap;
+      }
+      .stations li .arr {
+        margin-left: auto;
+        padding-right: 6px;
+        color: #4d6a86;
+        font-weight: 400;
+        letter-spacing: 0;
+      }
+      .tag {
+        display: inline-grid;
+        place-items: center;
+        width: 20px;
+        height: 18px;
+        flex: none;
+        background: var(--navy-2);
+        border: 1px solid var(--navy-line);
+        font-weight: 700;
+        font-size: 11px;
+        letter-spacing: 0;
+        color: var(--pale);
+      }
+      .stations li.now {
+        color: var(--orange);
+        box-shadow: inset 0 -3px 0 var(--orange);
+      }
+      .stations li.now .tag {
+        background: var(--orange);
+        border-color: var(--orange);
+        color: #1b0a02;
+      }
+      .return {
+        font-size: 11px;
+        color: var(--warm);
+        height: 24px;
+      }
+      .return span {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding-left: 10px;
+        white-space: nowrap;
+      }
+      .return .arr {
+        color: var(--orange);
+        letter-spacing: 0;
+      }
+      .return .fm {
+        grid-column: 1 / 3;
+        border-bottom: 1px dashed var(--rust-line);
+        border-left: 1px dashed var(--rust-line);
+      }
+      .return .bk {
+        grid-column: 3 / 9;
+        border-bottom: 2px solid var(--rust-line);
+        border-left: 2px solid var(--rust-line);
+        border-right: 2px solid var(--rust-line);
+      }
+      .return .bk em {
+        font-style: normal;
+        color: var(--dim);
+        margin-left: auto;
+        padding-right: 10px;
+      }
+
+      .deck {
+        display: grid;
+        grid-template-columns: 840px 1fr;
+        gap: 20px;
+        margin-top: 16px;
+        align-items: stretch;
+      }
+
+      /* ---- shared card vocabulary ---- */
+      .hl {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        white-space: nowrap;
+        height: 18px;
+      }
+      .hl .k {
+        color: var(--dim);
+        font-size: 11px;
+      }
+      .hl .v {
+        font-weight: 700;
+        font-size: 14px;
+        letter-spacing: 0.05em;
+      }
+      .hl .sub {
+        margin-left: auto;
+        color: var(--dim);
+        font-size: 11px;
+      }
+      .strip {
+        display: flex;
+        align-items: flex-start;
+        gap: 5px;
+        height: 8px;
+        margin: 4px 0 7px;
+      }
+      .strip::before {
+        content: "";
+        width: 16px;
+        height: 3px;
+        margin-top: 5px;
+        background: var(--orange);
+        flex: none;
+      }
+      .strip .bar {
+        flex: 1;
+        height: 3px;
+        background: #a8c4c6;
+      }
+      .segs {
+        flex: 1;
+        height: 4px;
+        display: grid;
+        grid-template-columns: repeat(8, 1fr);
+        gap: 2px;
+      }
+      .segs i {
+        background: #1c2f52;
+      }
+      .segs .d {
+        background: var(--pale);
+      }
+      .segs .n {
+        background: var(--orange);
+      }
+      .segs .x {
+        background: var(--red);
+      }
+      .blk {
+        display: grid;
+        grid-template-rows: 1fr 1fr;
+        width: 44px;
+        flex: none;
+      }
+      .blk b {
+        display: grid;
+        place-items: center;
+        font-size: 13px;
+        letter-spacing: 0.04em;
+      }
+      .blk .no {
+        background: var(--rust);
+        color: #f8e1d1;
+      }
+      /* four status treatments, plus idle in the reference's rust */
+      .ac {
+        background: var(--pale);
+        color: #06131a;
+      }
+      .wk {
+        background: var(--orange);
+        color: #1b0a02;
+      }
+      .id {
+        background: var(--rust);
+        color: #f8e1d1;
+        box-shadow: inset 0 0 0 1px var(--rust-line);
+      }
+      .bl {
+        background: var(--red);
+        color: #190401;
+      }
+      .qu {
+        background: var(--navy-2);
+        color: #9db5d3;
+        box-shadow: inset 0 0 0 1px var(--navy-line);
+      }
+      .chip {
+        display: inline-grid;
+        place-items: center;
+        height: 18px;
+        padding: 0 7px;
+        font-weight: 700;
+        font-size: 11px;
+        white-space: nowrap;
+      }
+      .tiny {
+        display: block;
+        font-size: 10px;
+        color: var(--dim);
+        white-space: nowrap;
+      }
+      .mark {
+        width: 12px;
+        height: 12px;
+        background: var(--orange);
+        flex: none;
+        align-self: flex-end;
+      }
+      .rank {
+        flex: none;
+        width: 112px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 10px;
+        background: var(--navy-2);
+        border: 1px solid var(--navy-line);
+      }
+      .rank span {
+        font-size: 10px;
+        color: #9db5d3;
+      }
+      .rank b {
+        font-size: 14px;
+      }
+      .read {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        font-size: 11px;
+        line-height: 14px;
+        color: #a9bfca;
+        white-space: nowrap;
+      }
+      .read b {
+        display: inline-block;
+        width: 16px;
+        color: var(--orange);
+      }
+
+      /* ---- the stack: all tickets ---- */
+      .stackhead {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        height: 22px;
+        margin-bottom: 10px;
+        padding-left: 72px;
+        white-space: nowrap;
+      }
+      .stackhead h2 {
+        font-size: 14px;
+        font-weight: 700;
+      }
+      .stackhead .cnt {
+        color: var(--dim);
+        font-size: 11px;
+      }
+      .legend {
+        margin-left: auto;
+        display: flex;
+        gap: 12px;
+        font-size: 10px;
+        color: var(--dim);
+      }
+      .legend li {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+      }
+      .legend .chip {
+        height: 16px;
+        padding: 0 4px;
+        font-size: 10px;
+      }
+      .rows {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .below {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .below::before {
+        content: "";
+        position: absolute;
+        left: 10px;
+        top: -8px;
+        bottom: 0;
+        width: 31px;
+        background: linear-gradient(
+          90deg,
+          var(--rust-line) 0 1px,
+          transparent 1px 15px,
+          var(--rust-line) 15px 16px,
+          transparent 16px 30px,
+          var(--rust-line) 30px 31px
+        );
+        opacity: 0.7;
+      }
+      .row {
+        display: grid;
+        grid-template-columns: 72px 1fr;
+      }
+      .gut {
+        position: relative;
+        align-self: center;
+        justify-self: start;
+        margin-left: 2px;
+        padding: 4px 6px 4px 0;
+        background: var(--black);
+        color: var(--orange);
+        font-weight: 700;
+        font-size: 11px;
+        line-height: 1.2;
+      }
+      .gut b {
+        display: block;
+        font-size: 16px;
+        color: var(--pale);
+      }
+      .card {
+        display: grid;
+        grid-template-columns: 352px 1fr;
+        background: var(--card);
+        border: 1px solid var(--card-line);
+        border-left: 3px solid #2a3c5c;
+      }
+      .card.t-wk,
+      .card.t-id {
+        border-left-color: var(--rust-line);
+      }
+      .card.t-bl {
+        border-left-color: var(--red);
+      }
+      .half {
+        padding: 9px 14px 10px;
+        min-width: 0;
+      }
+      .half.stat {
+        padding-left: 0;
+      }
+      .body {
+        display: flex;
+        gap: 12px;
+        height: 42px;
+      }
+      .stat .body {
+        background: var(--navy);
+        padding: 0 0 0 12px;
+        align-items: stretch;
+      }
+      .word {
+        width: 82px;
+        flex: none;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 2px;
+      }
+      .word b {
+        font-size: 13px;
+      }
+      .code {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 1px;
+      }
+      .code .big {
+        font-size: 18px;
+        line-height: 24px;
+      }
+      .t-qu .hl .v,
+      .t-qu .code .big,
+      .t-bl .code .big,
+      .t-id .code .big {
+        color: #9db5d3;
+      }
+      .t-bl .word b {
+        color: #ff6a4a;
+      }
+      .t-wk .word b {
+        color: var(--orange);
+      }
+      .empty {
+        height: 34px;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding-left: 14px;
+        border: 1px dashed #24344f;
+        color: #6d8696;
+        font-size: 11px;
+      }
+      .empty b {
+        display: grid;
+        place-items: center;
+        width: 44px;
+        height: 20px;
+        background: #0d1626;
+        color: #7f98a6;
+        font-size: 12px;
+      }
+
+      /* ---- the selected card: ACTIVE ---- */
+      .hero {
+        position: relative;
+        z-index: 2;
+        margin: -8px -10px -8px 0;
+        padding: 14px 20px 18px 30px;
+        background: linear-gradient(180deg, #3b1b0d 0, #2b140a 46%, #261109 100%);
+        border: 1px solid var(--orange);
+        box-shadow:
+          0 26px 46px rgba(0, 0, 0, 0.8),
+          0 -10px 30px rgba(0, 0, 0, 0.6);
+      }
+      .hero::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 12px;
+        background: var(--rust);
+      }
+      .hero .k,
+      .hero .tiny,
+      .hero .sub {
+        color: var(--warm);
+      }
+      .hhead {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        height: 30px;
+        white-space: nowrap;
+      }
+      .hhead .act {
+        display: grid;
+        place-items: center;
+        height: 22px;
+        padding: 0 9px;
+        background: var(--orange);
+        color: #1b0a02;
+        font-weight: 700;
+        font-size: 12px;
+      }
+      .hhead .k {
+        font-size: 12px;
+      }
+      .hhead h2 {
+        font-size: 22px;
+        line-height: 30px;
+      }
+      .hhead .state {
+        margin-left: auto;
+        font-weight: 700;
+        font-size: 14px;
+        color: var(--orange);
+      }
+      .hero > .strip {
+        margin: 6px 0 12px;
+      }
+      .hero .strip .bar {
+        background: #e6d6cb;
+      }
+      .hmain {
+        display: grid;
+        grid-template-columns: 322px 1fr;
+        gap: 0 20px;
+      }
+      .hid {
+        display: flex;
+        gap: 14px;
+        height: 76px;
+      }
+      .hid .blk {
+        width: 62px;
+      }
+      .hid .blk b {
+        font-size: 17px;
+      }
+      .hid .word {
+        width: 86px;
+      }
+      .hid .word b {
+        font-size: 14px;
+        color: var(--orange);
+      }
+      .hid .code .big {
+        font-size: 28px;
+        line-height: 36px;
+      }
+      .hstat .body {
+        height: 46px;
+        background: rgba(8, 4, 2, 0.55);
+        padding-left: 12px;
+        align-items: stretch;
+      }
+      .hstat .read {
+        color: #e3c9ba;
+      }
+      .hstat .rank {
+        width: 138px;
+        background: var(--navy);
+      }
+      .stagehead {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        margin: 14px 0 6px;
+        font-size: 11px;
+        white-space: nowrap;
+      }
+      .stagehead b {
+        font-size: 12px;
+      }
+      .stagehead ul {
+        margin-left: auto;
+        display: flex;
+        gap: 14px;
+        color: var(--warm);
+      }
+      .stagehead li {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .sw {
+        width: 14px;
+        height: 10px;
+      }
+      .sw.d {
+        background: var(--pale);
+      }
+      .sw.n {
+        background: var(--orange);
+      }
+      .sw.u {
+        border: 1px dashed #9a6f58;
+      }
+      .stages {
+        display: flex;
+        gap: 3px;
+      }
+      .stages li {
+        position: relative;
+        flex: 1 1 auto;
+        height: 38px;
+        padding: 0 9px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        font-weight: 700;
+        font-size: 11px;
+        line-height: 14px;
+        white-space: nowrap;
+      }
+      .stages li span {
+        font-weight: 400;
+        font-size: 10px;
+      }
+      .stages .d {
+        background: var(--pale);
+        color: #06131a;
+      }
+      .stages .n {
+        background: var(--orange);
+        color: #1b0a02;
+        box-shadow: 0 0 0 2px #2b140a, 0 0 0 3px var(--orange);
+        margin: 0 4px;
+      }
+      .stages .u {
+        border: 1px dashed #9a6f58;
+        color: var(--warm);
+      }
+      .stages .gate::after {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: 100%;
+        width: 2px;
+        height: 13px;
+        background: var(--pale);
+      }
+      .gatebox {
+        margin-top: 12px;
+        background: rgba(6, 3, 2, 0.62);
+        border: 1px solid #8a5234;
+      }
+      .gatebox .cap {
+        display: flex;
+        gap: 10px;
+        align-items: baseline;
+        padding: 7px 14px 0;
+        font-size: 11px;
+        color: var(--warm);
+      }
+      .gatebox .cap b {
+        color: var(--pale);
+        font-size: 12px;
+      }
+      .parts {
+        display: grid;
+        grid-template-columns: 254px 1fr 204px;
+      }
+      .part {
+        padding: 8px 14px 10px;
+      }
+      .part + .part {
+        border-left: 1px solid #5d3520;
+      }
+      .part h3 {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        font-weight: 700;
+      }
+      .part h3 i {
+        display: grid;
+        place-items: center;
+        width: 18px;
+        height: 18px;
+        background: var(--rust);
+        color: #f8e1d1;
+        font-style: normal;
+        font-size: 11px;
+        letter-spacing: 0;
+      }
+      .part .from {
+        font-size: 10px;
+        color: var(--warm);
+        margin: 3px 0 7px;
+        height: 14px;
+        white-space: nowrap;
+      }
+      .part ul.lines {
+        font-size: 11px;
+        line-height: 17px;
+        color: #ecd9cd;
+        white-space: nowrap;
+      }
+      .checks {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 4px;
+      }
+      .checks li {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        height: 22px;
+        padding-left: 5px;
+        background: rgba(220, 241, 238, 0.09);
+        font-size: 11px;
+        white-space: nowrap;
+      }
+      .checks svg {
+        width: 12px;
+        height: 12px;
+        background: var(--pale);
+        flex: none;
+      }
+      .note {
+        margin-top: 6px;
+        font-size: 10px;
+        color: var(--warm);
+      }
+      .outs {
+        display: grid;
+        grid-template-columns: 254px 1fr;
+        border-top: 1px solid #5d3520;
+        font-size: 11px;
+        color: #ecd9cd;
+      }
+      .outs li {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        height: 32px;
+        padding: 0 14px;
+        white-space: nowrap;
+      }
+      .outs li + li {
+        border-left: 1px solid #5d3520;
+      }
+      .outs .arr {
+        color: var(--orange);
+        letter-spacing: 0;
+      }
+
+      /* ---- right column: stations that are not tickets ---- */
+      .side {
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .stn {
+        background: var(--navy);
+        border: 1px solid #1a2f55;
+        padding: 14px 14px 18px;
+      }
+      .stn .hl + .strip {
+        margin-bottom: 12px;
+      }
+      .stn .hl.second {
+        margin-top: 18px;
+      }
+      .txt {
+        font-size: 11px;
+        line-height: 18px;
+        color: #a9bfca;
+      }
+      .txt .arr,
+      .stn .arr {
+        color: var(--orange);
+        letter-spacing: 0;
+      }
+      .cells {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 4px;
+        margin-bottom: 9px;
+      }
+      .cells li {
+        display: grid;
+        place-items: center;
+        height: 30px;
+        background: var(--navy-2);
+        border: 1px solid var(--navy-line);
+        font-weight: 700;
+        font-size: 11px;
+      }
+      .brow {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        height: 28px;
+        white-space: nowrap;
+      }
+      .brow + .brow {
+        margin-top: 4px;
+      }
+      .brow .bn {
+        display: grid;
+        place-items: center;
+        width: 30px;
+        height: 24px;
+        background: var(--rust);
+        color: #f8e1d1;
+        font-weight: 700;
+        font-size: 11px;
+      }
+      .brow .tk {
+        font-weight: 700;
+        font-size: 12px;
+      }
+      .brow .chip {
+        margin-left: auto;
+        width: 74px;
+        padding: 0;
+      }
+      .sub2 {
+        display: grid;
+        grid-template-columns: 150px 1fr;
+        gap: 14px;
+      }
+      .slots {
+        display: flex;
+        gap: 5px;
+      }
+      .slots i {
+        display: grid;
+        place-items: center;
+        width: 40px;
+        height: 38px;
+        border: 1px dashed var(--navy-line);
+        font-style: normal;
+        font-size: 11px;
+        font-weight: 700;
+        color: #6f89a8;
+      }
+      .slots i.f {
+        border: 0;
+      }
+      .slotlabel {
+        margin-top: 12px;
+        font-size: 11px;
+        white-space: nowrap;
+      }
+      .slotlabel b {
+        color: var(--pale);
+      }
+      .tally {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 4px;
+        margin-bottom: 11px;
+      }
+      .tally li {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        height: 40px;
+        padding: 0 10px;
+        font-weight: 700;
+        font-size: 11px;
+      }
+      .tally b {
+        font-size: 17px;
+      }
+      .gsteps {
+        display: flex;
+        gap: 3px;
+      }
+      .gsteps li {
+        flex: 1 1 auto;
+        display: grid;
+        place-items: center;
+        height: 28px;
+        padding: 0 5px;
+        background: var(--navy-2);
+        border: 1px solid var(--navy-line);
+        font-size: 10px;
+        letter-spacing: 0.03em;
+        white-space: nowrap;
+      }
+      .gsteps li.last {
+        background: none;
+        border-color: var(--orange);
+        color: var(--orange);
+      }
+      .cold {
+        border-color: var(--orange);
+      }
+      .cold .hl .sub {
+        color: var(--orange);
+        font-weight: 700;
+      }
+      .crow {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 9px;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+      .pos {
+        display: grid;
+        grid-template-columns: repeat(7, 1fr);
+        gap: 4px;
+        margin-bottom: 10px;
+      }
+      .pos li {
+        display: grid;
+        place-items: center;
+        height: 30px;
+        border: 1px dashed var(--navy-line);
+        color: #6f89a8;
+        font-weight: 700;
+        font-size: 11px;
+      }
+      .pos li.lit {
+        border: 0;
+        background: var(--pale);
+        color: #06131a;
+      }
+      .landed li {
+        display: grid;
+        grid-template-columns: 18px 76px 1fr auto;
+        align-items: center;
+        height: 22px;
+        font-size: 11px;
+        white-space: nowrap;
+      }
+      .landed li b:first-child {
+        color: var(--dim);
+      }
+      .landed .rev {
+        font-weight: 700;
+      }
+      .landed .tk {
+        color: #a9bfca;
+      }
+      .landed em {
+        font-style: normal;
+        color: var(--dim);
+        font-size: 10px;
+      }
+      .planned {
+        border-style: dashed;
+        border-color: var(--navy-line);
+      }
+      .outc li {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        height: 26px;
+        font-size: 11px;
+        color: #a9bfca;
+        white-space: nowrap;
+      }
+      .outc .chip {
+        width: 56px;
+        padding: 0;
+      }
+      .outc li + li {
+        margin-top: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="screen">
+      <aside class="rail" aria-label="Feed state">
+        <div class="rbox">live</div>
+        <div class="pair">
+          <div class="rbox">
+            <svg width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="#04181c" stroke-width="2" aria-hidden="true">
+              <circle cx="11" cy="11" r="9" />
+              <path d="M11 5v6l4 3" />
+            </svg>
+          </div>
+          <div class="rbox">2 s</div>
+        </div>
+        <div class="vtxt">observed 2 s ago</div>
+        <button class="rbox replay" type="button">
+          <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M1 0l9 5-9 5z" fill="#a9cdcd" /></svg>
+          replay
+        </button>
+        <div class="pair push">
+          <div class="rbox">ro</div>
+          <div class="rbox">5 s</div>
+        </div>
+        <div class="vgroup">
+          <div class="vtxt">read-only</div>
+          <div class="vtxt">one poll every 5 s</div>
+        </div>
+      </aside>
+
+      <main>
+        <header>
+          <div class="path">
+            <span class="sq"></span>
+            <h1 class="mx">Factory path &gt;&gt;&gt;</h1>
+            <span class="proj">sample data, not a running factory</span>
+            <span class="unit">software factory - pipeline view</span>
+          </div>
+          <ol class="stations">
+            <li><span class="tag">A</span>foreman<span class="arr">&gt;&gt;&gt;</span></li>
+            <li><span class="tag">B</span>hand-off<span class="arr">&gt;&gt;&gt;</span></li>
+            <li><span class="tag">C</span>builders<span class="arr">&gt;&gt;&gt;</span></li>
+            <li><span class="tag">D</span>submission<span class="arr">&gt;&gt;&gt;</span></li>
+            <li><span class="tag">E</span>integrator<span class="arr">&gt;&gt;&gt;</span></li>
+            <li class="now"><span class="tag">F</span>cold review<span class="arr">&gt;&gt;&gt;</span></li>
+            <li><span class="tag">G</span>main<span class="arr">&gt;&gt;&gt;</span></li>
+            <li><span class="tag">H</span>full gate</li>
+          </ol>
+          <div class="return">
+            <span class="fm"><span class="arr">&lt;&lt;&lt;</span>reports also reach the foreman</span>
+            <span class="bk">
+              <span class="arr">&lt;&lt;&lt;</span>return path - back to the builder that wrote it
+              <em>placeholder - replay only</em>
+            </span>
+          </div>
+        </header>
+
+        <div class="deck">
+          <section class="stack" aria-label="All tickets">
+            <div class="stackhead">
+              <h2>all tickets</h2>
+              <span class="cnt">10 positions - 8 used</span>
+              <ul class="legend">
+                <li><span class="chip ac">AC</span>accepted</li>
+                <li><span class="chip wk">WK</span>working</li>
+                <li><span class="chip id">ID</span>idle</li>
+                <li><span class="chip bl">BL</span>blocked</li>
+                <li><span class="chip qu">QU</span>queued</li>
+              </ul>
+            </div>
+
+            <div class="rows">
+              <div class="row">
+                <span></span>
+                <article class="card t-ac">
+                  <div class="half">
+                    <div class="hl"><span class="k">landed</span><span class="v">feature-06</span></div>
+                    <div class="strip">
+                      <span class="segs"><i class="d"></i><i class="d"></i><i class="d"></i><i class="d"></i><i class="d"></i><i class="d"></i><i class="d"></i><i class="d"></i></span>
+                    </div>
+                    <div class="body">
+                      <div class="blk"><b class="no">01</b><b class="ac">AC</b></div>
+                      <div class="word"><span class="tiny">status</span><b>accepted</b></div>
+                      <div class="code"><span class="tiny">revision</span><span class="big mx">cd75e02</span></div>
+                    </div>
+                  </div>
+                  <div class="half stat">
+                    <div class="hl"><span class="k">on main</span><span class="v">oldest of 3</span></div>
+                    <div class="strip"><span class="bar"></span></div>
+                    <div class="body">
+                      <ul class="read">
+                        <li>landed first</li>
+                        <li>no cold review</li>
+                      </ul>
+                      <i class="mark"></i>
+                      <div class="rank"><span>stage</span><b class="mx">8/8</b></div>
+                    </div>
+                  </div>
+                </article>
+              </div>
+
+              <div class="row">
+                <span></span>
+                <article class="card t-ac">
+                  <div class="half">
+                    <div class="hl"><span class="k">landed</span><span class="v">v1-ticket1</span></div>
+                    <div class="strip">
+                      <span class="segs"><i class="d"></i><i class="d"></i><i class="d"></i><i class="d"></i><i class="d"></i><i class="d"></i><i class="d"></i><i class="d"></i></span>
+                    </div>
+                    <div class="body">
+                      <div class="blk"><b class="no">02</b><b class="ac">AC</b></div>
+                      <div class="word"><span class="tiny">status</span><b>accepted</b></div>
+                      <div class="code"><span class="tiny">revision</span><span class="big mx">af0ae26</span></div>
+                    </div>
+                  </div>
+                  <div class="half stat">
+                    <div class="hl"><span class="k">on main</span><span class="v">2nd newest</span></div>
+                    <div class="strip"><span class="bar"></span></div>
+                    <div class="body">
+                      <ul class="read">
+                        <li>landed second</li>
+                        <li>cold review attempt 1</li>
+                      </ul>
+                      <i class="mark"></i>
+                      <div class="rank"><span>stage</span><b class="mx">8/8</b></div>
+                    </div>
+                  </div>
+                </article>
+              </div>
+
+              <div class="row">
+                <span></span>
+                <article class="card t-ac">
+                  <div class="half">
+                    <div class="hl"><span class="k">landed</span><span class="v">backup-adoption-ticket1</span></div>
+                    <div class="strip">
+                      <span class="segs"><i class="d"></i><i class="d"></i><i class="d"></i><i class="d"></i><i class="d"></i><i class="d"></i><i class="d"></i><i class="d"></i></span>
+                    </div>
+                    <div class="body">
+                      <div class="blk"><b class="no">03</b><b class="ac">AC</b></div>
+                      <div class="word"><span class="tiny">status</span><b>accepted</b></div>
+                      <div class="code"><span class="tiny">revision</span><span class="big mx">b649c8a</span></div>
+                    </div>
+                  </div>
+                  <div class="half stat">
+                    <div class="hl"><span class="k">on main</span><span class="v">newest - head</span></div>
+                    <div class="strip"><span class="bar"></span></div>
+                    <div class="body">
+                      <ul class="read">
+                        <li>newest on main</li>
+                        <li>attempt 6</li>
+                      </ul>
+                      <i class="mark"></i>
+                      <div class="rank"><span>stage</span><b class="mx">8/8</b></div>
+                    </div>
+                  </div>
+                </article>
+              </div>
+
+              <section class="hero" aria-label="Active ticket">
+                <div class="hhead">
+                  <span class="act">active</span>
+                  <span class="k">builder 1</span>
+                  <h2 class="mx">v1-ticket2</h2>
+                  <span class="state">working - attempt 2</span>
+                </div>
+                <div class="strip"><span class="bar"></span></div>
+                <div class="hmain">
+                  <div class="hid">
+                    <div class="blk"><b class="no">04</b><b class="wk">WK</b></div>
+                    <div class="word"><span class="tiny">status</span><b>working</b></div>
+                    <div class="code">
+                      <span class="tiny">attempt</span>
+                      <span class="big mx">ATT 02</span>
+                      <span class="tiny">position 4 of 10</span>
+                    </div>
+                  </div>
+                  <div class="hstat">
+                    <div class="hl"><span class="k">now</span><span class="v">cold review running</span></div>
+                    <div class="strip"><span class="bar"></span></div>
+                    <div class="body">
+                      <ul class="read">
+                        <li>builder 1 - own thread + worktree</li>
+                        <li>reviewer - opposite model family</li>
+                      </ul>
+                      <i class="mark"></i>
+                      <div class="rank"><span>stages done</span><b class="mx">5/8</b></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="stagehead">
+                  <b>eight stages</b>
+                  <span class="k">in order</span>
+                  <ul>
+                    <li><i class="sw d"></i>pale = done</li>
+                    <li><i class="sw n"></i>orange = now</li>
+                    <li><i class="sw u"></i>dim = not reached</li>
+                  </ul>
+                </div>
+                <ol class="stages">
+                  <li class="d"><span>1 done</span>worktree</li>
+                  <li class="d"><span>2 done</span>setup</li>
+                  <li class="d"><span>3 done</span>builder thread</li>
+                  <li class="d"><span>4 done</span>report.json</li>
+                  <li class="d gate"><span>5 done</span>gate - 10 min cap</li>
+                  <li class="n"><span>6 now</span>cold review</li>
+                  <li class="u"><span>7</span>ff-merge</li>
+                  <li class="u"><span>8</span>main</li>
+                </ol>
+
+                <div class="gatebox">
+                  <p class="cap"><b>gate detail</b>three parts, in order</p>
+                  <div class="parts">
+                    <div class="part">
+                      <h3><i>1</i>candidate</h3>
+                      <p class="from">from report.json</p>
+                      <ul class="lines">
+                        <li>revision = HEAD, not the base</li>
+                        <li>tree clean</li>
+                        <li>every path in scope</li>
+                      </ul>
+                    </div>
+                    <div class="part">
+                      <h3><i>2</i>verify</h3>
+                      <p class="from">project check command - 10 min cap</p>
+                      <ul class="checks">
+                        <li><svg viewBox="0 0 12 12" fill="none" stroke="#06131a" stroke-width="2" aria-hidden="true"><path d="M2.5 6.2l2.4 2.4 4.6-5" /></svg>test</li>
+                        <li><svg viewBox="0 0 12 12" fill="none" stroke="#06131a" stroke-width="2" aria-hidden="true"><path d="M2.5 6.2l2.4 2.4 4.6-5" /></svg>lint</li>
+                        <li><svg viewBox="0 0 12 12" fill="none" stroke="#06131a" stroke-width="2" aria-hidden="true"><path d="M2.5 6.2l2.4 2.4 4.6-5" /></svg>typecheck</li>
+                        <li><svg viewBox="0 0 12 12" fill="none" stroke="#06131a" stroke-width="2" aria-hidden="true"><path d="M2.5 6.2l2.4 2.4 4.6-5" /></svg>format</li>
+                        <li><svg viewBox="0 0 12 12" fill="none" stroke="#06131a" stroke-width="2" aria-hidden="true"><path d="M2.5 6.2l2.4 2.4 4.6-5" /></svg>fallow</li>
+                        <li><svg viewBox="0 0 12 12" fill="none" stroke="#06131a" stroke-width="2" aria-hidden="true"><path d="M2.5 6.2l2.4 2.4 4.6-5" /></svg>diff-check</li>
+                      </ul>
+                      <p class="note">illustrative ticks, not live</p>
+                    </div>
+                    <div class="part">
+                      <h3><i>3</i>unchanged</h3>
+                      <p class="from">checked again after verify</p>
+                      <ul class="lines">
+                        <li>HEAD still the candidate</li>
+                        <li>tree still clean</li>
+                      </ul>
+                    </div>
+                  </div>
+                  <ul class="outs">
+                    <li><span class="chip ac">pass</span><span class="arr">&gt;&gt;&gt;</span>cold review</li>
+                    <li>
+                      <span class="chip bl">fail</span><span class="arr">&gt;&gt;&gt;</span>same builder with the log
+                      <span class="chip bl">2nd fail</span><span class="arr">&gt;&gt;&gt;</span>escalated
+                    </li>
+                  </ul>
+                </div>
+              </section>
+
+              <div class="below">
+                <div class="row">
+                  <span class="gut">coming<b class="mx">01</b></span>
+                  <article class="card t-id">
+                    <div class="half">
+                      <div class="hl"><span class="k">builder 2</span><span class="v">foreman-watchdog-ticket1</span></div>
+                      <div class="strip">
+                        <span class="segs"><i class="d"></i><i class="d"></i><i class="d"></i><i class="d"></i><i></i><i></i><i></i><i></i></span>
+                      </div>
+                      <div class="body">
+                        <div class="blk"><b class="no">05</b><b class="id">ID</b></div>
+                        <div class="word"><span class="tiny">status</span><b>idle</b></div>
+                        <div class="code"><span class="tiny">attempt</span><span class="big mx">ATT --</span></div>
+                      </div>
+                    </div>
+                    <div class="half stat">
+                      <div class="hl"><span class="k">steps</span><span class="v">reported, waits for the integrator</span></div>
+                      <div class="strip"><span class="bar"></span></div>
+                      <div class="body">
+                        <ol class="read">
+                          <li><b>1</b>Record durable stop incidents</li>
+                          <li><b>2</b>Notify the owner once</li>
+                          <li><b>3</b>Wake the foreman</li>
+                        </ol>
+                        <i class="mark"></i>
+                        <div class="rank"><span>stage</span><b class="mx">4/8</b></div>
+                      </div>
+                    </div>
+                  </article>
+                </div>
+
+                <div class="row">
+                  <span class="gut">coming<b class="mx">02</b></span>
+                  <article class="card t-bl">
+                    <div class="half">
+                      <div class="hl"><span class="k">builder 3</span><span class="v">v1-ticket7</span></div>
+                      <div class="strip">
+                        <span class="segs"><i class="d"></i><i class="d"></i><i class="x"></i><i></i><i></i><i></i><i></i><i></i></span>
+                      </div>
+                      <div class="body">
+                        <div class="blk"><b class="no">06</b><b class="bl">BL</b></div>
+                        <div class="word"><span class="tiny">status</span><b>blocked</b></div>
+                        <div class="code"><span class="tiny">attempt</span><span class="big mx">ATT --</span></div>
+                      </div>
+                    </div>
+                    <div class="half stat">
+                      <div class="hl"><span class="k">steps</span><span class="v">Validated replacement restore</span></div>
+                      <div class="strip"><span class="bar"></span></div>
+                      <div class="body">
+                        <ol class="read">
+                          <li><b>1</b>Validate the backup</li>
+                          <li><b>2</b>Restore before dispatch</li>
+                        </ol>
+                        <i class="mark"></i>
+                        <div class="rank"><span>stage</span><b class="mx">2/8</b></div>
+                      </div>
+                    </div>
+                  </article>
+                </div>
+
+                <div class="row">
+                  <span></span>
+                  <article class="card t-qu">
+                    <div class="half">
+                      <div class="hl"><span class="k">builder 4</span><span class="v">v1-ticket8</span></div>
+                      <div class="strip">
+                        <span class="segs"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+                      </div>
+                      <div class="body">
+                        <div class="blk"><b class="no">07</b><b class="qu">QU</b></div>
+                        <div class="word"><span class="tiny">status</span><b>queued</b></div>
+                        <div class="code"><span class="tiny">attempt</span><span class="big mx">ATT --</span></div>
+                      </div>
+                    </div>
+                    <div class="half stat">
+                      <div class="hl"><span class="k">title</span><span class="v">Exclusive orchestrator ownership</span></div>
+                      <div class="strip"><span class="bar"></span></div>
+                      <div class="body">
+                        <ul class="read">
+                          <li>queued with builder 4</li>
+                          <li>not started</li>
+                        </ul>
+                        <i class="mark"></i>
+                        <div class="rank"><span>stage</span><b class="mx">0/8</b></div>
+                      </div>
+                    </div>
+                  </article>
+                </div>
+
+                <div class="row">
+                  <span></span>
+                  <article class="card t-qu">
+                    <div class="half">
+                      <div class="hl"><span class="k">no builder</span><span class="v">v1-ticket9</span></div>
+                      <div class="strip">
+                        <span class="segs"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+                      </div>
+                      <div class="body">
+                        <div class="blk"><b class="no">08</b><b class="qu">QU</b></div>
+                        <div class="word"><span class="tiny">status</span><b>queued</b></div>
+                        <div class="code"><span class="tiny">attempt</span><span class="big mx">ATT --</span></div>
+                      </div>
+                    </div>
+                    <div class="half stat">
+                      <div class="hl"><span class="k">title</span><span class="v">Exact cross-orb candidate transfer</span></div>
+                      <div class="strip"><span class="bar"></span></div>
+                      <div class="body">
+                        <ul class="read">
+                          <li>queued</li>
+                          <li>no builder yet</li>
+                        </ul>
+                        <i class="mark"></i>
+                        <div class="rank"><span>stage</span><b class="mx">0/8</b></div>
+                      </div>
+                    </div>
+                  </article>
+                </div>
+
+                <div class="row">
+                  <span></span>
+                  <div class="empty"><b>09</b>empty position</div>
+                </div>
+                <div class="row">
+                  <span></span>
+                  <div class="empty"><b>10</b>empty position</div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <aside class="side" aria-label="Stations">
+            <section class="stn">
+              <div class="hl"><span class="tag">A</span><span class="v">foreman</span><span class="sub">orchestrator</span></div>
+              <div class="strip"><span class="bar"></span></div>
+              <ul class="cells">
+                <li>discovery</li>
+                <li>stories</li>
+                <li>tickets</li>
+              </ul>
+              <p class="txt"><span class="arr">&gt;&gt;&gt;</span> picks the next eligible ticket</p>
+              <div class="hl second"><span class="tag">B</span><span class="v">hand-off</span><span class="sub">to a builder</span></div>
+              <div class="strip"><span class="bar"></span></div>
+              <p class="txt">ticket brief, scope, check command</p>
+            </section>
+
+            <section class="stn">
+              <div class="hl"><span class="tag">C</span><span class="v">builders</span><span class="sub">own thread + worktree</span></div>
+              <div class="strip"><span class="bar"></span></div>
+              <div class="brow"><span class="bn">B1</span><span class="tk">v1-ticket2</span><span class="chip wk">working</span></div>
+              <div class="brow"><span class="bn">B2</span><span class="tk">foreman-watchdog-ticket1</span><span class="chip id">idle</span></div>
+              <div class="brow"><span class="bn">B3</span><span class="tk">v1-ticket7</span><span class="chip bl">blocked</span></div>
+              <div class="brow"><span class="bn">B4</span><span class="tk">v1-ticket8</span><span class="chip qu">queued</span></div>
+            </section>
+
+            <section class="stn">
+              <div class="hl"><span class="tag">D</span><span class="v">submission</span><span class="sub">report.json</span></div>
+              <div class="strip"><span class="bar"></span></div>
+              <div class="sub2">
+                <div>
+                  <div class="slots"><i class="f id">1</i><i>2</i><i>3</i></div>
+                  <p class="tiny" style="margin-top: 6px">3 slots - 1 filled</p>
+                </div>
+                <ul class="txt">
+                  <li>commit locally, then report.json</li>
+                  <li>candidate: revision + insight</li>
+                  <li>or blocked: reason</li>
+                </ul>
+              </div>
+              <p class="slotlabel"><span class="tiny" style="display: inline">slot 1</span> <b>foreman-watchdog-ticket1 - idle</b></p>
+            </section>
+
+            <section class="stn">
+              <div class="hl"><span class="tag">E</span><span class="v">integrator</span><span class="sub">one ticket at a time</span></div>
+              <div class="strip"><span class="bar"></span></div>
+              <ul class="tally">
+                <li class="ac"><b class="mx">3</b>landed</li>
+                <li class="qu"><b class="mx">2</b>queued</li>
+                <li class="bl"><b class="mx">1</b>blocked</li>
+              </ul>
+              <p class="tiny" style="margin-bottom: 5px">gate steps</p>
+              <ol class="gsteps">
+                <li>revision = HEAD</li>
+                <li>clean tree</li>
+                <li>scope</li>
+                <li>verify</li>
+                <li class="last">to cold review</li>
+              </ol>
+            </section>
+
+            <section class="stn cold">
+              <div class="hl"><span class="tag">F</span><span class="v">cold review</span><span class="sub">running now</span></div>
+              <div class="strip"><span class="bar"></span></div>
+              <p class="crow"><span class="chip wk">running</span>v1-ticket2 - attempt 2</p>
+              <ul class="txt">
+                <li>opposite model family</li>
+                <li>small 1st tries skip</li>
+              </ul>
+            </section>
+
+            <section class="stn">
+              <div class="hl"><span class="tag">G</span><span class="v">main</span><span class="sub">target branch - head b649c8a</span></div>
+              <div class="strip"><span class="bar"></span></div>
+              <ol class="pos">
+                <li class="lit">1</li>
+                <li class="lit">2</li>
+                <li class="lit">3</li>
+                <li>4</li>
+                <li>5</li>
+                <li>6</li>
+                <li>7</li>
+              </ol>
+              <ol class="landed">
+                <li><b>1</b><span class="rev">b649c8a</span><span class="tk">backup-adoption-ticket1</span><em>newest first</em></li>
+                <li><b>2</b><span class="rev">af0ae26</span><span class="tk">v1-ticket1</span></li>
+                <li><b>3</b><span class="rev">cd75e02</span><span class="tk">feature-06</span></li>
+              </ol>
+            </section>
+
+            <section class="stn planned">
+              <div class="hl"><span class="tag">H</span><span class="v">full gate</span><span class="sub">scheduled</span></div>
+              <div class="strip"><span class="bar"></span></div>
+              <p class="txt" style="margin-bottom: 6px">planned - replay only</p>
+              <ul class="outc">
+                <li><span class="chip bl">red</span>main-red ticket filed</li>
+                <li><span class="chip ac">green</span>revision verified</li>
+              </ul>
+            </section>
+          </aside>
+        </div>
+      </main>
+    </div>
+  </body>
+</html>
