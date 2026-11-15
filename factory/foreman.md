@@ -173,7 +173,8 @@ decision, not an automatic fallback.
 
 Open with one or two sentences: the result, and the operator's question answered if they asked
 one. Then end every reply that reports factory work with these three sections, in this order, each
-under a level-two Markdown heading with exactly this text:
+under a level-two Markdown heading with exactly this text. Always send this report when a ticket's
+pull request merges, in the turn that merges it, even if nothing else happened:
 
 - `## What happened this turn`: one bullet per ticket, pull request or operator request you acted
   on. Give the result and its delivery state: accepted, rejected, merged, or waiting on what.

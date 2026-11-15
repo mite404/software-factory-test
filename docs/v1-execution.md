@@ -38,6 +38,7 @@ prerequisites, not permission to dispatch every draft against today's base.
 | [F015-weekly-failure-audit](feats/failure-audit/F015-weekly-failure-audit.md)           | Weekly bucketed failures and a Fable audit      | F002-worker-runner-executor                                              | F04, operator quality priority         |
 | [F016-kit-page-default](feats/lifecycle-view/F016-kit-page-default.md)                  | The kit page is the only dashboard              | None                                                                     | F07, operator observability priority   |
 | [F017-remove-public-status](feats/lifecycle-view/F017-remove-public-status.md)          | Feed carries the stage only                     | F012, F014-lifecycle-stages                                              | F07                                    |
+| [F018-landed-card-links](feats/lifecycle-view/F018-landed-card-links.md)                | Landed card opens its thread and pull request   | F016-kit-page-default                                                    | F07, operator observability priority   |
 | [v1-ticket4](feats/v1/v1-ticket4.md)                                                    | Durable private evidence records                | v1-ticket2                                                               | F02, F07, R6-R7                        |
 | [v1-ticket11](feats/v1/v1-ticket11.md)                                                  | Required and advisory verification tools        | v1-ticket2                                                               | F12, AC28, AC35-AC36                   |
 | [v1-ticket12](feats/v1/v1-ticket12.md)                                                  | Permission-bound native hooks                   | v1-ticket11                                                              | F12, AC27, AC29                        |
@@ -152,7 +153,8 @@ F012, and then F013, which follows F008. The Foreman places F008 right after F00
 independent and the operator ranked it highest; F009 to F012 follow F007. F014 and F015 were
 approved the same day: F014 runs after F009 and before F012, and F015 follows F013. Also that day
 the operator chose the kit page as the only dashboard: F016 runs right after F008 and before
-F013, and F017 follows F012. v1-ticket10
+F013, and F017 follows F012. F018, which the operator asked for the same day, runs right after
+F016. v1-ticket10
 keeps the recovery of outages that still happen, and v1-ticket8 keeps exclusive ownership across
 orbs. Keep preserved backup owners until required evidence preservation is confirmed. Native
 acceptance does not authorize retirement.
@@ -198,3 +200,4 @@ delete a placeholder and do not make one look live.
 | Reports reaching the Foreman in the diagram | The replay button only        | v1-ticket23             |
 | Full gate box in the diagram                | The replay button only        | scheduled-gates-ticket1 |
 | Second line of a ticket tooltip             | The ticket's first step label | v1-ticket23             |
+| Pull request arrow on a landed card         | Not shown                     | F014, drawn by F018     |
