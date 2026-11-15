@@ -114,12 +114,12 @@ Run the shared preflight in `docs/v1-execution.md`. Baseline gates have not run 
 
 ## Done when
 
-- [ ] A gate that fails once and then passes does not reject, and records `gate-flaked`.
-- [ ] A gate that fails twice rejects once, with both logs kept.
-- [ ] A precondition failure, a cap timeout and a changed candidate are never rerun.
-- [ ] No failing gate result can lead to acceptance.
-- [ ] The suite's per-test timeout is 20 seconds.
-- [ ] Full gates, guard and fresh cold review pass on the exact candidate.
+- [x] A gate that fails once and then passes does not reject, and records `gate-flaked`.
+- [x] A gate that fails twice rejects once, with both logs kept.
+- [x] A precondition failure, a cap timeout and a changed candidate are never rerun.
+- [x] No failing gate result can lead to acceptance.
+- [x] The suite's per-test timeout is 20 seconds.
+- [x] Full gates, guard and fresh cold review pass on the exact candidate.
 
 ## Notes
 

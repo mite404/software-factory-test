@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
@@ -1915,6 +1915,108 @@ test("reload pins future definitions while active checks, scope and instructions
   expect(messages[1]).not.toContain("Changed future instructions");
   expect(messages[1]).toContain("Allowed paths: docs/. Check: false.");
 });
+
+test.each([
+  { outcome: "pass", command: "exit 0", runs: 1, passed: true },
+  { outcome: "flake", command: 'test "$n" -gt 1', runs: 2, passed: true },
+  { outcome: "fail", command: "exit 7", runs: 2, passed: false },
+  { outcome: "dirty", command: "touch dirty; exit 7", runs: 1, passed: false },
+  {
+    outcome: "moved",
+    command:
+      "git -c commit.gpgsign=false commit --allow-empty -qm moved; exit 7",
+    runs: 1,
+    passed: false,
+  },
+  { outcome: "cap", command: "sleep 60", runs: 1, passed: false },
+  {
+    outcome: "rerun mutates",
+    command: 'test "$n" -eq 1 && exit 7; touch dirty; exit 0',
+    runs: 2,
+    passed: false,
+  },
+])(
+  "candidate gate rerun preserves verdict and evidence: $outcome",
+  async ({ outcome, command, runs, passed }) => {
+    const f = await preparationFixture(() => "");
+    const path = join(f.root, ".factory.json");
+    const config = await Bun.file(path).json();
+    const counter = join(f.root, ".git/gate-runs");
+    config.review = true;
+    config.verify = `n=$(cat '${counter}' 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > '${counter}'; echo "run $n"; echo "error $n" >&2; ${command}`;
+    await writeFile(path, JSON.stringify(config));
+    f.git("add", ".");
+    f.git("commit", "-qm", "gate fixture");
+    const messages: string[] = [];
+    f.host.send = async (_thread, message) => {
+      messages.push(message);
+    };
+    const engine = f.factory();
+    await engine.tick("start", "T-owner");
+    await mkdir(join(f.worktree, "src"));
+    await writeFile(join(f.worktree, "src/value"), "candidate");
+    f.git("-C", f.worktree, "add", ".");
+    f.git("-C", f.worktree, "commit", "-qm", "candidate");
+    const revision = f.git("-C", f.worktree, "rev-parse", "HEAD");
+    await writeFile(
+      join(engine.directory, "A.report.json"),
+      JSON.stringify({ attempt: 1, kind: "candidate", revision }),
+    );
+    f.host.state = async () => "idle";
+    const schedule = globalThis.setTimeout;
+    const timer = spyOn(globalThis, "setTimeout").mockImplementation(
+      new Proxy(schedule, {
+        apply(target, receiver, args) {
+          if (outcome === "cap" && args[1] === 600_000) args[1] = 300;
+          return Reflect.apply(target, receiver, args);
+        },
+      }),
+    );
+    let run;
+    try {
+      run = (await engine.tick("reconcile")).runs.A;
+    } finally {
+      timer.mockRestore();
+    }
+    expect(run).toMatchObject(
+      passed
+        ? { kind: "running", attempt: 1, review: { revision } }
+        : { kind: "running", attempt: 2 },
+    );
+    expect(await readFile(counter, "utf8")).toBe(`${runs}\n`);
+    const log = join(engine.directory, "A-1.log");
+    const rerunLog = join(engine.directory, "A-1.rerun.log");
+    expect(await readFile(log, "utf8")).toContain("run 1\nerror 1\n");
+    expect(await Bun.file(rerunLog).exists()).toBe(runs === 2);
+    if (passed)
+      expect(messages.at(-1)).toContain(outcome === "flake" ? rerunLog : log);
+    if (runs === 2)
+      expect(await readFile(rerunLog, "utf8")).toBe("run 2\nerror 2\n");
+    if (outcome === "fail") {
+      expect(messages.at(-1)).toContain("Gate failed twice");
+      expect(messages.at(-1)).toContain("run 2\n");
+      expect(messages.at(-1)).toContain("error 2\n");
+      expect(messages.at(-1)).toContain(rerunLog);
+    }
+    const db = new Database(join(engine.directory, "state.sqlite"), {
+      readonly: true,
+    });
+    try {
+      expect(
+        db.query("SELECT detail FROM events WHERE action='gate-flaked'").all(),
+      ).toEqual(
+        outcome === "flake"
+          ? [{ detail: JSON.stringify({ log, rerunLog }) }]
+          : [],
+      );
+      expect(
+        db.query("SELECT action FROM events WHERE action='rejected'").all(),
+      ).toEqual(passed ? [] : [{ action: "rejected" }]);
+    } finally {
+      db.close();
+    }
+  },
+);
 
 test.each([
   ["no output", "", "", 19, "", ""],

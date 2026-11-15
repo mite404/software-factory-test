@@ -49,6 +49,11 @@ review feedback, or an answer to a question. Find its current stage and continue
    verdict file, and run `reconcile` again; a pass accepts the revision and findings reject it.
    Reproduce the original failure after a fix. Keep full logs local and report only the result and
    decisive evidence.
+   A nonzero gate exit gets one rerun before rejection, provided HEAD and the clean tree still
+   match. Precondition failures, the ten-minute cap, execution errors, or a changed candidate skip
+   the rerun. A rerun pass records `gate-flaked` with both log paths and keeps the same attempt.
+   Two failures reject once and return the second run's output plus both logs to the worker. Never
+   classify flakes from output text or accept a failing gate result.
 7. On rejection, return the failure to the same worker. Keep its thread, worktree, and evidence.
    Every two verification or review rejections require a Foreman escalation checkpoint, not a
    terminal attempt limit. Inspect the failed reproductions and record the next repair decision
