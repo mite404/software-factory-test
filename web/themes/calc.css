@@ -1,0 +1,509 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@200;400;500;600&display=swap");
+
+/*
+ * calc skin: the macOS desktop Calculator. Every colour below is sampled from the reference.
+ * #stage is the window: display tone on top, then two full-width rows in the function-key tone,
+ * split by 1px gaps. Stations are flat square digit keys; orange is the operator key and means
+ * "now"; white-with-orange is the pressed operator. The only depth is the window's drop shadow.
+ * Tones: display #51504c, function key #5d5b57, digit key #787672, gap #3d3b3a,
+ * operator #fe960f, lights #fe4a40 #fbb423 #27c23b, ink #fff, softer ink #d8d6d2 #bab8b7 #8b8887.
+ */
+:root[data-theme="calc"] {
+  --bg: #51504c;
+  --hi: #ffffff;
+  --mid: #d8d6d2;
+  --dim: #bab8b7;
+  --line: #bab8b7;
+  --edge: #3d3b3a;
+  --port: #d8d6d2;
+  --amber: #fe960f;
+  --red: #fe4a40;
+  --green: #27c23b;
+  --ice: #ffffff;
+  --pkt: #fe960f;
+  --tick: #27c23b;
+  --calc-fn: #5d5b57;
+  --calc-key: #787672;
+  --calc-w: min(92vw, 92vh * 1280 / 1152);
+  --calc-u: calc(var(--calc-w) / 1280);
+}
+
+/* desktop and window */
+:root[data-theme="calc"] body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  background: #ffffff;
+  font-family:
+    -apple-system, "SF Pro Display", "Inter", "Helvetica Neue", Helvetica,
+    Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+:root[data-theme="calc"] #stage {
+  width: var(--calc-w);
+  height: auto;
+  aspect-ratio: 1280 / 1152;
+  font-size: 14px;
+  font-weight: 400;
+  border-radius: 0.9375% / 1.0417%;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.4),
+    0 calc(var(--calc-u) * 14) calc(var(--calc-u) * 32) rgba(0, 0, 0, 0.45);
+  /* three traffic lights, then the display with two function-key rows under it */
+  background-color: var(--bg);
+  background-image:
+    radial-gradient(closest-side, #fe4a40 92%, #fe4a4000),
+    radial-gradient(closest-side, #fbb423 92%, #fbb42300),
+    radial-gradient(closest-side, #27c23b 92%, #27c23b00),
+    linear-gradient(
+      #51504c 0 56.9%,
+      #3d3b3a 56.9% 56.99%,
+      #5d5b57 56.99% 79.82%,
+      #3d3b3a 79.82% 79.91%,
+      #5d5b57 79.91%
+    );
+  background-size:
+    0.9375% 1.0417%,
+    0.9375% 1.0417%,
+    0.9375% 1.0417%,
+    100% 100%;
+  background-position:
+    0.7098% 0.4386%,
+    2.2871% 0.4386%,
+    3.8644% 0.4386%,
+    0 0;
+  background-repeat: no-repeat;
+}
+/* keys are square; only the window, the lamps and the dials are round */
+:root[data-theme="calc"] #stage rect:not(.ring) {
+  rx: 0;
+}
+
+/* type: regular white system sans on the keys, thin and large on the display */
+:root[data-theme="calc"] .hi {
+  font-weight: 500;
+}
+:root[data-theme="calc"] .small {
+  font-size: 11px;
+}
+:root[data-theme="calc"] .caps {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+:root[data-theme="calc"] .state,
+:root[data-theme="calc"] .caps .green {
+  font-weight: 600;
+}
+:root[data-theme="calc"] #observed {
+  font-size: 34px;
+  font-weight: 200;
+  fill: var(--hi);
+}
+:root[data-theme="calc"] #next {
+  font-size: 32px;
+  font-weight: 200;
+  letter-spacing: 0;
+  text-transform: lowercase;
+  fill: var(--hi);
+}
+:root[data-theme="calc"] #tally {
+  fill: var(--hi);
+}
+/* the legend's two words, drawn as this skin draws done and now */
+:root[data-theme="calc"] text.end.small .green {
+  font-weight: 500;
+}
+:root[data-theme="calc"] text.end.small .amber {
+  font-weight: 600;
+}
+:root[data-theme="calc"] .clock circle {
+  stroke: var(--hi);
+  stroke-width: 1.5;
+}
+:root[data-theme="calc"] .clock line {
+  stroke-width: 1.5;
+  stroke-linecap: butt;
+}
+
+/* wires: solid white-ish lines at the weight of the type's stems, square ends */
+:root[data-theme="calc"] .wire {
+  stroke-width: 1.5;
+}
+:root[data-theme="calc"] .wire .head {
+  stroke: var(--hi);
+  stroke-width: 1.5;
+  stroke-linecap: butt;
+  stroke-linejoin: miter;
+}
+:root[data-theme="calc"] .lane-up {
+  stroke: #8b8887;
+  stroke-width: 1;
+  stroke-dasharray: none;
+}
+:root[data-theme="calc"] .rule {
+  stroke: var(--edge);
+  stroke-width: 1;
+}
+:root[data-theme="calc"] .arrow {
+  stroke: var(--line);
+  stroke-width: 1;
+  stroke-dasharray: none;
+}
+:root[data-theme="calc"] .coming[data-status="idle"] ~ .gatewire {
+  stroke: var(--amber);
+}
+:root[data-theme="calc"] .mainline {
+  stroke: var(--hi);
+  stroke-width: 1.5;
+}
+
+/* stations are digit keys with a 1px gap for an edge */
+:root[data-theme="calc"] .box > rect:first-child {
+  fill: var(--calc-key);
+  stroke: var(--edge);
+  stroke-width: 1;
+}
+/* the gate detail box is a small display set into its function-key row */
+:root[data-theme="calc"] .gatewire + g .box > rect:first-child {
+  fill: var(--bg);
+}
+/* the planned gate is a function key */
+:root[data-theme="calc"] .planned rect:not(.port) {
+  fill: var(--calc-fn);
+  stroke: var(--edge);
+  stroke-width: 1;
+  stroke-dasharray: none;
+}
+:root[data-theme="calc"] .port,
+:root[data-theme="calc"] .planned .port {
+  stroke: var(--edge);
+  stroke-width: 1;
+}
+:root[data-theme="calc"] .track {
+  stroke: var(--line);
+  stroke-width: 1.5;
+}
+:root[data-theme="calc"] g[transform="translate(0 -22)"] .box text {
+  fill: var(--hi);
+}
+:root[data-theme="calc"] .review circle {
+  fill: var(--calc-fn);
+  stroke: var(--edge);
+  stroke-width: 1;
+}
+:root[data-theme="calc"] .review .sweep {
+  fill: none;
+  stroke: var(--amber);
+  stroke-width: 2.5;
+}
+
+/* builders: the antenna tip is a lamp, the card is a key */
+:root[data-theme="calc"] .builder .bot rect {
+  fill: var(--calc-key);
+  stroke: var(--edge);
+  stroke-width: 1;
+}
+:root[data-theme="calc"] .builder .card rect {
+  fill: var(--calc-fn);
+  stroke: var(--edge);
+  stroke-width: 1;
+}
+:root[data-theme="calc"] .builder .bot path {
+  stroke: var(--dim);
+  stroke-width: 1.5;
+  stroke-linecap: butt;
+}
+:root[data-theme="calc"] .builder .ink {
+  stroke: var(--dim);
+  stroke-width: 1.5;
+  stroke-linecap: butt;
+}
+:root[data-theme="calc"] .builder .eye {
+  fill: var(--hi);
+}
+:root[data-theme="calc"] .builder .tip {
+  fill: var(--dim);
+  r: 2.6px;
+}
+:root[data-theme="calc"] .builder .id {
+  font-size: 10px;
+  fill: var(--dim);
+}
+:root[data-theme="calc"] .builder[data-status="unknown"] .card rect {
+  fill: var(--bg);
+  stroke: var(--dim);
+  stroke-dasharray: none;
+}
+/* idle: the pressed operator, white with orange */
+:root[data-theme="calc"] .builder[data-status="idle"] .card rect {
+  fill: var(--hi);
+}
+:root[data-theme="calc"] .builder[data-status="idle"] .ink {
+  stroke: var(--amber);
+}
+:root[data-theme="calc"] .builder[data-status="idle"] :is(.id, .tip) {
+  fill: var(--hi);
+}
+:root[data-theme="calc"] .builder[data-status="accepted"] .card rect {
+  fill: var(--calc-key);
+  stroke: var(--edge);
+}
+:root[data-theme="calc"] .builder[data-status="accepted"] .ink {
+  stroke: var(--hi);
+}
+:root[data-theme="calc"] .builder[data-status="accepted"] :is(.id, .tip) {
+  fill: var(--green);
+}
+:root[data-theme="calc"] .builder[data-status="working"] .card rect {
+  fill: var(--amber);
+  stroke: var(--edge);
+  filter: none;
+}
+:root[data-theme="calc"]
+  [data-state="live"]
+  .builder[data-status="working"]
+  .card
+  rect {
+  animation: none;
+}
+:root[data-theme="calc"] .builder[data-status="working"] .ink {
+  stroke: var(--hi);
+}
+:root[data-theme="calc"] .builder[data-status="working"] :is(.id, .tip) {
+  fill: var(--amber);
+}
+:root[data-theme="calc"] .builder[data-status="working"] .id {
+  font-weight: 600;
+}
+:root[data-theme="calc"] .builder[data-status="blocked"] .card rect {
+  fill: var(--red);
+  stroke: var(--edge);
+}
+:root[data-theme="calc"] .builder[data-status="blocked"] .ink {
+  stroke: var(--hi);
+}
+:root[data-theme="calc"] .builder[data-status="blocked"] :is(.id, .tip) {
+  fill: var(--red);
+}
+:root[data-theme="calc"] .builder[data-status="blocked"] .id {
+  font-weight: 600;
+}
+
+/* submission slots: function-key wells; a waiting report is the pressed operator */
+:root[data-theme="calc"] .slot circle {
+  fill: var(--calc-fn);
+  stroke: var(--edge);
+  stroke-width: 1;
+}
+:root[data-theme="calc"] .slot rect {
+  fill: var(--amber);
+}
+:root[data-theme="calc"] .slot[data-on] circle {
+  fill: var(--hi);
+  stroke: var(--edge);
+  stroke-width: 1;
+}
+
+/* integrator press, drawn in the gap tone on its key */
+:root[data-theme="calc"] .plate :is(.stem, .platen),
+:root[data-theme="calc"] .base {
+  fill: var(--edge);
+}
+:root[data-theme="calc"] .plate .face {
+  fill: var(--hi);
+}
+:root[data-theme="calc"] .sparks {
+  stroke-linecap: butt;
+}
+
+/* main: landed commits are green lamps */
+:root[data-theme="calc"] .landed {
+  fill: var(--green);
+  stroke: var(--edge);
+  stroke-width: 1;
+}
+:root[data-theme="calc"] .landed.last {
+  stroke: var(--hi);
+  stroke-width: 3;
+  paint-order: stroke;
+}
+
+/* chips are small keys: not reached is display tone, done a digit key, now orange, fail red */
+:root[data-theme="calc"] .chips rect:not(.marker) {
+  fill: var(--bg);
+  stroke: var(--edge);
+  stroke-width: 1;
+  stroke-dasharray: none;
+}
+:root[data-theme="calc"] .chips text {
+  font-size: 11px;
+  fill: var(--dim);
+}
+:root[data-theme="calc"] .chips.filled rect {
+  fill: var(--calc-key);
+  stroke: var(--edge);
+}
+:root[data-theme="calc"] .chips.filled text {
+  fill: var(--hi);
+  font-weight: 500;
+}
+:root[data-theme="calc"] .chip[data-s="done"] rect {
+  fill: var(--calc-key);
+  stroke: var(--edge);
+}
+:root[data-theme="calc"] .chip[data-s="done"] text {
+  fill: var(--hi);
+  font-weight: 500;
+}
+:root[data-theme="calc"] .chip[data-s="now"] rect {
+  fill: var(--amber);
+  stroke: var(--edge);
+}
+:root[data-theme="calc"] .chip[data-s="now"] text {
+  fill: var(--hi);
+  font-weight: 600;
+}
+:root[data-theme="calc"] .chip[data-s="fail"] rect {
+  fill: var(--red);
+  stroke: var(--edge);
+}
+:root[data-theme="calc"] .chip[data-s="fail"] text {
+  fill: var(--hi);
+  font-weight: 600;
+}
+:root[data-theme="calc"] .marker {
+  fill: var(--mid);
+}
+:root[data-theme="calc"] .landing .marker {
+  fill: var(--amber);
+}
+
+/* ticket ids carry the ticket state */
+:root[data-theme="calc"] .coming .id {
+  font-size: 15px;
+}
+:root[data-theme="calc"] .coming[data-status="working"] .id {
+  fill: var(--amber);
+  font-weight: 600;
+}
+:root[data-theme="calc"] .coming[data-status="accepted"] .id {
+  fill: var(--green);
+}
+:root[data-theme="calc"] .coming[data-status="queued"] .id {
+  fill: var(--mid);
+  font-weight: 400;
+}
+:root[data-theme="calc"] .coming[data-status="blocked"] .id {
+  fill: var(--red);
+  font-weight: 600;
+}
+
+/* ticket queue: lamps in the traffic-light colours */
+:root[data-theme="calc"] .q circle {
+  fill: var(--green);
+  stroke: var(--edge);
+  stroke-width: 1;
+}
+:root[data-theme="calc"] .q text {
+  font-size: 9.5px;
+  font-weight: 500;
+}
+:root[data-theme="calc"] .q[data-status="queued"] circle {
+  fill: var(--bg);
+  stroke: var(--edge);
+  stroke-width: 1;
+}
+:root[data-theme="calc"] .q[data-status="unknown"] circle {
+  fill: none;
+  stroke: var(--dim);
+  stroke-width: 1;
+  stroke-dasharray: none;
+}
+:root[data-theme="calc"] .q[data-status="working"] circle {
+  fill: var(--amber);
+}
+:root[data-theme="calc"] .q[data-status="idle"] circle {
+  fill: var(--hi);
+}
+:root[data-theme="calc"] .q[data-status="blocked"] circle {
+  fill: var(--red);
+}
+
+/* packets: flat operator keys with a 1px gap edge */
+:root[data-theme="calc"] rect.pkt,
+:root[data-theme="calc"] circle.pkt,
+:root[data-theme="calc"] .pkt > rect:not(.trail, .ring) {
+  stroke: var(--edge);
+  stroke-width: 1;
+}
+/* the motion streak is one flat block in the darker operator tone, not a fade */
+:root[data-theme="calc"] .courier .trail {
+  mask: none;
+  fill: #cb7e0b;
+}
+:root[data-theme="calc"] .pkt text {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* freezer: function-key doors, two digit keys, a close-button red plaque; flat white steam */
+:root[data-theme="calc"] .door > path:first-child {
+  fill: var(--calc-fn);
+  stroke: var(--edge);
+  stroke-width: 1;
+}
+:root[data-theme="calc"] .door .panel {
+  fill: var(--calc-key);
+  stroke: var(--edge);
+}
+:root[data-theme="calc"] .door .plaque {
+  fill: var(--red);
+  stroke: var(--edge);
+}
+:root[data-theme="calc"] .door text {
+  fill: var(--hi);
+}
+:root[data-theme="calc"] .door .lamp {
+  stroke-linecap: butt;
+  opacity: 1;
+}
+:root[data-theme="calc"] .mist circle {
+  filter: none;
+}
+
+/* replay: a function key on the display */
+:root[data-theme="calc"] #play {
+  top: calc(50vh - var(--calc-w) * 0.45 + var(--calc-u) * 12);
+  right: calc(50vw - var(--calc-w) * 0.5 + var(--calc-u) * 47);
+  height: calc(var(--calc-u) * 24);
+  padding: 0 calc(var(--calc-u) * 12);
+  font-size: calc(var(--calc-u) * 12);
+  font-weight: 500;
+  color: #ffffff;
+  background: #5d5b57;
+  border: 0;
+  border-radius: 0;
+  box-shadow: 0 0 0 1px #3d3b3a;
+}
+:root[data-theme="calc"] #play:hover {
+  background: #787672;
+}
+:root[data-theme="calc"] #play:active {
+  background: #ffffff;
+  color: #fe960f;
+}
+:root[data-theme="calc"] #play:focus-visible {
+  outline: 2px solid #fe960f;
+  outline-offset: 2px;
+}
+
+:root[data-theme="calc"] #tip {
+  padding: 6px 10px;
+  border: 1px solid #3d3b3a;
+  border-radius: 0;
+  background: #5d5b57;
+  color: #ffffff;
+  font-weight: 400;
+}

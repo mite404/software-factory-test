@@ -1,0 +1,600 @@
+@import url("https://fonts.googleapis.com/css2?family=Kode+Mono:wght@400;500;700&display=swap");
+
+/*
+ * cockpit skin: a matte black instrument panel held by silver hex bolts. Stations are recessed
+ * display windows; everything lit is one amber, legends are engraved dim white.
+ * State inside one amber: solid cell = done, hatched and brighter = now, plain outline = idle,
+ * dotted outline = not reached. Red is the one warning lamp, for blocked and failed.
+ */
+:root[data-theme="cockpit"] {
+  --w: min(96vw, 96vh * 1280 / 1152); /* panel width */
+  --u: calc(var(--w) / 1280); /* one SVG unit in CSS length */
+
+  /* Every color below except red is sampled from the reference photograph. */
+  --glass: #15161b; /* display glass in the shadow of its recess */
+  --unlit: #9a6531; /* the display amber, unlit: not reached */
+  --low: #cf6f38; /* the display amber, secondary marks */
+
+  --bg: var(--glass);
+  --hi: #f88a35; /* the display amber */
+  --mid: #b0b0b9; /* engraved legend, at its brightest */
+  --dim: #989ca1;
+  --line: #f88a35;
+  --edge: var(--unlit);
+  --port: #a1a3a0;
+  --amber: #feba48; /* a lit lamp: now */
+  --red: #ff4530; /* the one warning lamp; the reference has no red */
+  --green: #f88a35; /* a solid display cell: done */
+  --ice: #fd9241;
+  --pkt: #feec8d; /* the hot core of the brightest marks */
+  --tick: #9a631e; /* a lamp warming up */
+
+  --t-ink: #feba48; /* lamp stripes over the display amber: now */
+  --t-ground: #f88a35;
+  --t-sheen-1a: #87641d; /* window bevel: the upper edge catches the display light */
+  --t-sheen-1b: #211a12;
+  --t-sheen-2a: #f4f5f1; /* steel connectors */
+  --t-sheen-2b: #989286;
+  --t-sheen-3a: #2a2f34; /* freezer shutters */
+  --t-sheen-3b: #131218;
+  --t-dome-1a: #2a2f34; /* glass where the room light reaches it */
+  --t-dome-1b: #131218;
+
+  --glow: drop-shadow(0 0 2.5px rgba(253, 146, 65, 0.75));
+  --glow-red: drop-shadow(0 0 2.5px rgba(255, 69, 48, 0.75));
+
+  --bolt-a: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cdefs%3E%3ClinearGradient id='g' x2='0' y2='1'%3E%3Cstop offset='0' stop-color='%23f4f5f1'/%3E%3Cstop offset='1' stop-color='%23989286'/%3E%3C/linearGradient%3E%3ClinearGradient id='h' x2='0' y2='1'%3E%3Cstop offset='0' stop-color='%23a1a3a0'/%3E%3Cstop offset='1' stop-color='%23efece4'/%3E%3C/linearGradient%3E%3C/defs%3E%3Ccircle cx='10' cy='10' r='10' fill='%23131218'/%3E%3Ccircle cx='10' cy='10' r='8.3' fill='url(%23g)'/%3E%3Ccircle cx='10' cy='10' r='5.8' fill='url(%23h)'/%3E%3Cpath d='M10 6.7 12.86 8.35v3.3L10 13.3 7.14 11.65V8.35z' fill='%23323230' stroke='%23201f1d' stroke-width='.7'/%3E%3C/svg%3E");
+  --bolt-b: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cdefs%3E%3ClinearGradient id='g' x2='0' y2='1'%3E%3Cstop offset='0' stop-color='%23f4f5f1'/%3E%3Cstop offset='1' stop-color='%23989286'/%3E%3C/linearGradient%3E%3ClinearGradient id='h' x2='0' y2='1'%3E%3Cstop offset='0' stop-color='%23a1a3a0'/%3E%3Cstop offset='1' stop-color='%23efece4'/%3E%3C/linearGradient%3E%3C/defs%3E%3Ccircle cx='10' cy='10' r='10' fill='%23131218'/%3E%3Ccircle cx='10' cy='10' r='8.3' fill='url(%23g)'/%3E%3Ccircle cx='10' cy='10' r='5.8' fill='url(%23h)'/%3E%3Cpath transform='rotate(24 10 10)' d='M10 6.7 12.86 8.35v3.3L10 13.3 7.14 11.65V8.35z' fill='%23323230' stroke='%23201f1d' stroke-width='.7'/%3E%3C/svg%3E");
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 .1 0 0 0 0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+  --seam: linear-gradient(#0e0c10, #0e0c10);
+  --lip: linear-gradient(#46464a, #46464a);
+  --bolt: calc(18 * var(--u));
+
+  color-scheme: dark;
+}
+
+/* the desk and the panel */
+:root[data-theme="cockpit"] body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  font-family: "Kode Mono", "Share Tech Mono", ui-monospace, monospace;
+  background: linear-gradient(160deg, #dee6ec, #d5dde4);
+}
+:root[data-theme="cockpit"] #stage {
+  width: var(--w);
+  height: auto;
+  aspect-ratio: 1280 / 1152;
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0.35px;
+  fill: var(--mid);
+  border-radius: calc(3 * var(--u));
+  box-shadow:
+    inset 0 calc(1.5 * var(--u)) 0 #46464a,
+    inset 0 calc(-1.5 * var(--u)) 0 #131218,
+    0 0 0 calc(1 * var(--u)) #0e0c10,
+    0 calc(26 * var(--u)) calc(36 * var(--u)) calc(-16 * var(--u))
+      rgba(14, 12, 16, 0.55);
+  /* Bolts sit in the corners and either side of the two module seams (ACTIVE at box y 656,
+     COMING at 920). All clear of text and wires. */
+  background:
+    var(--bolt-a) calc(11 * var(--u)) calc(11 * var(--u)) / var(--bolt)
+      var(--bolt) no-repeat,
+    var(--bolt-b) calc(1251 * var(--u)) calc(11 * var(--u)) / var(--bolt)
+      var(--bolt) no-repeat,
+    var(--bolt-b) calc(11 * var(--u)) calc(631 * var(--u)) / var(--bolt)
+      var(--bolt) no-repeat,
+    var(--bolt-a) calc(1251 * var(--u)) calc(631 * var(--u)) / var(--bolt)
+      var(--bolt) no-repeat,
+    var(--bolt-a) calc(11 * var(--u)) calc(663 * var(--u)) / var(--bolt)
+      var(--bolt) no-repeat,
+    var(--bolt-b) calc(1251 * var(--u)) calc(663 * var(--u)) / var(--bolt)
+      var(--bolt) no-repeat,
+    var(--bolt-a) calc(11 * var(--u)) calc(895 * var(--u)) / var(--bolt)
+      var(--bolt) no-repeat,
+    var(--bolt-b) calc(1251 * var(--u)) calc(895 * var(--u)) / var(--bolt)
+      var(--bolt) no-repeat,
+    var(--bolt-b) calc(11 * var(--u)) calc(927 * var(--u)) / var(--bolt)
+      var(--bolt) no-repeat,
+    var(--bolt-a) calc(1251 * var(--u)) calc(927 * var(--u)) / var(--bolt)
+      var(--bolt) no-repeat,
+    var(--bolt-b) calc(11 * var(--u)) calc(1123 * var(--u)) / var(--bolt)
+      var(--bolt) no-repeat,
+    var(--bolt-a) calc(1251 * var(--u)) calc(1123 * var(--u)) / var(--bolt)
+      var(--bolt) no-repeat,
+    var(--seam) 0 calc(652.4 * var(--u)) / 100% calc(3 * var(--u)) no-repeat,
+    var(--lip) 0 calc(655.4 * var(--u)) / 100% calc(1.2 * var(--u)) no-repeat,
+    var(--seam) 0 calc(916.4 * var(--u)) / 100% calc(3 * var(--u)) no-repeat,
+    var(--lip) 0 calc(919.4 * var(--u)) / 100% calc(1.2 * var(--u)) no-repeat,
+    var(--grain) 0 0 / calc(160 * var(--u)) calc(160 * var(--u)),
+    linear-gradient(#323132, #2b2a2c);
+}
+
+/* type: thin engraved legends in dim white, bold display values in amber */
+:root[data-theme="cockpit"] #stage text {
+  text-transform: uppercase;
+}
+:root[data-theme="cockpit"] .hi,
+:root[data-theme="cockpit"] .caps,
+:root[data-theme="cockpit"] .state,
+:root[data-theme="cockpit"] .amber,
+:root[data-theme="cockpit"] .green,
+:root[data-theme="cockpit"] .red {
+  font-weight: 700;
+}
+:root[data-theme="cockpit"] .caps .dim {
+  font-weight: 400;
+}
+/* Legends are smaller, thinner and wider-tracked than display type, as engraved on the panel. */
+:root[data-theme="cockpit"] #stage text:is(.mid, .dim):not(.small, .caps) {
+  font-size: 11px;
+  letter-spacing: 1px;
+}
+:root[data-theme="cockpit"] #stage text:is(.mid, .dim) .hi {
+  font-size: 12px;
+  letter-spacing: 0.35px;
+}
+:root[data-theme="cockpit"] #tally {
+  filter: var(--glow);
+}
+:root[data-theme="cockpit"] .lane .step {
+  fill: var(--amber);
+  font-weight: 700;
+}
+
+/* header */
+:root[data-theme="cockpit"] .clock circle {
+  stroke: var(--hi);
+  stroke-width: 1.4;
+}
+:root[data-theme="cockpit"] .clock line {
+  stroke: var(--hi);
+  stroke-width: 1.4;
+  stroke-linecap: butt;
+}
+
+/* wires: one crisp amber trace, square ends, no filter */
+:root[data-theme="cockpit"] .wire {
+  stroke: var(--line);
+  stroke-width: 1.4;
+  stroke-linecap: butt;
+  stroke-linejoin: miter;
+}
+:root[data-theme="cockpit"] .wire .head {
+  stroke: var(--amber);
+  stroke-width: 2;
+  stroke-linecap: butt;
+  stroke-linejoin: miter;
+}
+:root[data-theme="cockpit"] .lane-up {
+  stroke: var(--low);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-dasharray: 0 3.4;
+}
+:root[data-theme="cockpit"] .rule {
+  stroke: #46464a;
+  stroke-width: 1.2;
+}
+:root[data-theme="cockpit"] .arrow {
+  stroke: var(--low);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-dasharray: 0 3.4;
+}
+:root[data-theme="cockpit"] .coming[data-status="idle"] ~ .gatewire {
+  stroke: var(--amber);
+  stroke-width: 1.4;
+  stroke-linecap: butt;
+  stroke-dasharray: none;
+}
+
+/* display windows: glass set back in a bevelled frame */
+:root[data-theme="cockpit"] .box > rect:first-child {
+  fill: url(#t-dome-1);
+  stroke: url(#t-sheen-1);
+  stroke-width: 5;
+  rx: 2px;
+  filter: drop-shadow(0 1.2px 0 #46464a) drop-shadow(0 -1px 0 #0e0c10);
+}
+:root[data-theme="cockpit"] :is(#press, #freezer) rect {
+  rx: 0;
+}
+:root[data-theme="cockpit"] .port,
+:root[data-theme="cockpit"] .planned .port {
+  fill: url(#t-sheen-2);
+  stroke: #242626;
+  stroke-width: 1;
+  rx: 1px;
+}
+:root[data-theme="cockpit"] .planned rect:not(.port) {
+  fill: var(--glass);
+  stroke: #6d747a;
+  stroke-width: 1.4;
+  stroke-dasharray: 6 4;
+  rx: 2px;
+}
+:root[data-theme="cockpit"] .track {
+  stroke: var(--unlit);
+}
+/* The verdict is end-anchored and long: kept clear of the cold review legend beside it. */
+:root[data-theme="cockpit"] #stage .verdict {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+}
+/* text drawn inside a display is amber too */
+:root[data-theme="cockpit"] .box:not(.review) text,
+:root[data-theme="cockpit"] .gatewire + g > text.dim,
+:root[data-theme="cockpit"] .gatewire + g > text .dim {
+  fill: var(--low);
+}
+:root[data-theme="cockpit"] .gatewire + g > text.mid {
+  fill: var(--green);
+}
+/* display type: heavier and tighter than the legends, with the soft bloom of a lit display */
+:root[data-theme="cockpit"] #stage .gatewire + g > text:not(.small) {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.35px;
+}
+:root[data-theme="cockpit"] .gatewire + g > :is(text, .chips),
+:root[data-theme="cockpit"] .box text {
+  filter: drop-shadow(0 0 2px rgba(253, 146, 65, 0.45));
+}
+
+/* builders */
+:root[data-theme="cockpit"] .builder .bot rect,
+:root[data-theme="cockpit"] .builder .card rect {
+  fill: var(--glass);
+  stroke: var(--unlit);
+  rx: 1px;
+}
+:root[data-theme="cockpit"] .builder .card rect {
+  stroke-dasharray: 0 3.2;
+  stroke-linecap: round;
+}
+:root[data-theme="cockpit"] .builder .bot path,
+:root[data-theme="cockpit"] .builder .ink {
+  stroke: var(--unlit);
+  stroke-linecap: butt;
+}
+:root[data-theme="cockpit"] .builder .eye,
+:root[data-theme="cockpit"] .builder .tip {
+  fill: var(--unlit);
+}
+:root[data-theme="cockpit"] .builder .id {
+  fill: var(--low);
+}
+:root[data-theme="cockpit"] .builder[data-status="empty"] {
+  opacity: 0.5;
+}
+:root[data-theme="cockpit"] .builder[data-status="unknown"] .card rect {
+  stroke-dasharray: 5 3;
+}
+:root[data-theme="cockpit"]
+  .builder:is(
+    [data-status="idle"],
+    [data-status="accepted"],
+    [data-status="working"]
+  )
+  .bot
+  :is(rect, path) {
+  stroke: var(--green);
+}
+:root[data-theme="cockpit"]
+  .builder:is(
+    [data-status="idle"],
+    [data-status="accepted"],
+    [data-status="working"]
+  )
+  :is(.eye, .tip, .id) {
+  fill: var(--green);
+}
+:root[data-theme="cockpit"] .builder[data-status="idle"] .card rect {
+  stroke: var(--green);
+  stroke-width: 2;
+  stroke-dasharray: none;
+}
+:root[data-theme="cockpit"] .builder[data-status="idle"] .ink {
+  stroke: var(--green);
+}
+:root[data-theme="cockpit"] .builder[data-status="accepted"] .card rect {
+  fill: var(--green);
+  stroke: var(--green);
+  stroke-dasharray: none;
+}
+:root[data-theme="cockpit"] .builder[data-status="accepted"] .ink {
+  stroke: var(--glass);
+  stroke-width: 2;
+}
+:root[data-theme="cockpit"] .builder[data-status="working"] .card rect {
+  fill: url(#t-hatch);
+  stroke: var(--amber);
+  stroke-width: 2;
+  stroke-dasharray: none;
+  filter: var(--glow);
+}
+:root[data-theme="cockpit"] .builder[data-status="working"] .ink {
+  stroke: var(--glass);
+  stroke-width: 3;
+}
+:root[data-theme="cockpit"] .builder[data-status="working"] :is(.tip, .id) {
+  fill: var(--amber);
+}
+:root[data-theme="cockpit"]
+  [data-state="live"]
+  .builder[data-status="working"]
+  .card
+  rect {
+  animation: cockpit-glow 1.6s ease-in-out infinite alternate;
+}
+:root[data-theme="cockpit"] .builder[data-status="blocked"] .card rect {
+  fill: var(--red);
+  stroke: var(--red);
+  stroke-dasharray: none;
+  filter: var(--glow-red);
+}
+:root[data-theme="cockpit"] .builder[data-status="blocked"] .ink {
+  stroke: var(--glass);
+  stroke-width: 2;
+}
+:root[data-theme="cockpit"] .builder[data-status="blocked"] :is(.id, .tip) {
+  fill: var(--red);
+}
+@keyframes cockpit-glow {
+  from {
+    filter: drop-shadow(0 0 2px rgba(253, 146, 65, 0.35));
+  }
+  to {
+    filter: drop-shadow(0 0 8px rgba(254, 186, 72, 0.95));
+  }
+}
+
+/* submission: dotted scope rings, a lit ring holds a report */
+:root[data-theme="cockpit"] .slot circle {
+  stroke: var(--unlit);
+  stroke-width: 1.5;
+  stroke-dasharray: 0 3.3;
+  stroke-linecap: round;
+}
+:root[data-theme="cockpit"] .slot rect {
+  fill: var(--amber);
+  rx: 0;
+}
+:root[data-theme="cockpit"] .slot[data-on] {
+  filter: var(--glow);
+}
+:root[data-theme="cockpit"] .slot[data-on] circle {
+  stroke: var(--amber);
+  stroke-width: 2;
+  stroke-dasharray: none;
+}
+
+/* integrator press */
+:root[data-theme="cockpit"] .plate :is(.stem, .platen),
+:root[data-theme="cockpit"] .base {
+  fill: var(--low);
+  rx: 0;
+}
+:root[data-theme="cockpit"] .plate .face {
+  fill: var(--amber);
+}
+:root[data-theme="cockpit"] .load {
+  fill: var(--pkt);
+  rx: 0;
+}
+:root[data-theme="cockpit"] .sparks {
+  stroke: var(--pkt);
+  stroke-linecap: butt;
+}
+
+/* cold review: a scope */
+:root[data-theme="cockpit"] .review circle:not(.sweep) {
+  fill: none;
+  stroke: var(--low);
+  stroke-width: 1.5;
+}
+:root[data-theme="cockpit"] .review .sweep {
+  stroke-width: 3;
+}
+:root[data-theme="cockpit"] .door > path:first-child {
+  fill: url(#t-sheen-3);
+  stroke: var(--green);
+  stroke-width: 1.5;
+}
+:root[data-theme="cockpit"] .door .panel {
+  fill: url(#t-lines);
+  stroke: var(--low);
+  rx: 0;
+}
+:root[data-theme="cockpit"] .door .plaque {
+  fill: var(--green);
+  stroke: var(--green);
+}
+:root[data-theme="cockpit"] .door text {
+  fill: var(--glass);
+  font-weight: 700;
+}
+:root[data-theme="cockpit"] .door .lamp {
+  stroke: var(--amber);
+  stroke-linecap: butt;
+  opacity: 1;
+}
+
+/* main */
+:root[data-theme="cockpit"] .mainline {
+  stroke: var(--green);
+  stroke-width: 2;
+}
+:root[data-theme="cockpit"] .landed {
+  fill: var(--green);
+  stroke: var(--glass);
+  stroke-width: 2;
+  paint-order: stroke;
+}
+:root[data-theme="cockpit"] .landed.last {
+  fill: var(--amber);
+  stroke: var(--glass);
+  stroke-width: 2;
+  filter: var(--glow);
+}
+
+/* chips: table cells */
+:root[data-theme="cockpit"] .chips rect:not(.marker) {
+  fill: var(--glass);
+  stroke: var(--unlit);
+  stroke-width: 1.2;
+  stroke-dasharray: 0 3.2;
+  stroke-linecap: round;
+  rx: 0;
+}
+:root[data-theme="cockpit"] .chips text,
+:root[data-theme="cockpit"] .chips.dashed text {
+  fill: var(--low);
+}
+:root[data-theme="cockpit"] .chips.filled rect {
+  fill: var(--glass);
+  stroke: var(--green);
+  stroke-dasharray: none;
+}
+:root[data-theme="cockpit"] .chips.filled text {
+  fill: var(--hi);
+}
+:root[data-theme="cockpit"] .chip[data-s="done"] rect {
+  fill: var(--green);
+  stroke: var(--green);
+  stroke-dasharray: none;
+}
+:root[data-theme="cockpit"] .chip[data-s="done"] text {
+  fill: var(--glass);
+  font-weight: 700;
+}
+:root[data-theme="cockpit"] .chip[data-s="now"] rect {
+  fill: url(#t-hatch);
+  stroke: var(--amber);
+  stroke-width: 2;
+  stroke-dasharray: none;
+  filter: var(--glow);
+}
+:root[data-theme="cockpit"] .chip[data-s="now"] text {
+  fill: var(--t-dome-1b);
+  font-weight: 700;
+}
+:root[data-theme="cockpit"] .chip[data-s="fail"] rect {
+  fill: var(--red);
+  stroke: var(--red);
+  stroke-dasharray: none;
+  filter: var(--glow-red);
+}
+:root[data-theme="cockpit"] .chip[data-s="fail"] text {
+  fill: var(--glass);
+  font-weight: 700;
+}
+:root[data-theme="cockpit"] .marker,
+:root[data-theme="cockpit"] .landing .marker {
+  fill: var(--amber);
+  rx: 0;
+}
+
+/* ticket queue: lamps */
+:root[data-theme="cockpit"] .q circle {
+  fill: var(--green);
+}
+:root[data-theme="cockpit"] .q text {
+  fill: var(--hi);
+}
+:root[data-theme="cockpit"]
+  .q:is([data-status="queued"], [data-status="unknown"])
+  circle {
+  fill: var(--glass);
+  stroke: var(--unlit);
+  stroke-width: 1.5;
+  stroke-dasharray: 0 3.2;
+  stroke-linecap: round;
+}
+:root[data-theme="cockpit"] .q[data-status="unknown"] circle {
+  stroke-dasharray: 5 3;
+}
+:root[data-theme="cockpit"] .q[data-status="working"] circle {
+  fill: url(#t-hatch);
+  stroke: var(--amber);
+  stroke-width: 2;
+  filter: var(--glow);
+}
+:root[data-theme="cockpit"] .q[data-status="working"] text {
+  fill: var(--amber);
+}
+:root[data-theme="cockpit"] .q[data-status="idle"] circle {
+  fill: var(--glass);
+  stroke: var(--green);
+  stroke-width: 2.5;
+}
+:root[data-theme="cockpit"] .q[data-status="blocked"] circle {
+  fill: var(--red);
+  filter: var(--glow-red);
+}
+:root[data-theme="cockpit"] .q[data-status="blocked"] text {
+  fill: var(--red);
+}
+
+/* packets: the brightest marks on the panel */
+:root[data-theme="cockpit"] .pkt {
+  filter: drop-shadow(0 0 4px rgba(254, 186, 72, 0.95));
+}
+:root[data-theme="cockpit"] :is(.back, .up:not(.findings), .mainred) {
+  filter: drop-shadow(0 0 4px rgba(255, 69, 48, 0.95));
+}
+:root[data-theme="cockpit"] rect.pkt,
+:root[data-theme="cockpit"] .pkt rect:not(.ring) {
+  rx: 0;
+}
+:root[data-theme="cockpit"] .courier .ring {
+  stroke-width: 2;
+}
+:root[data-theme="cockpit"] .pkt text {
+  font-weight: 700;
+}
+
+/* push button and tooltip */
+:root[data-theme="cockpit"] #play {
+  top: calc((100vh - var(--w) * 0.9) / 2 + 12 * var(--u));
+  right: calc((100vw - var(--w)) / 2 + 44 * var(--u));
+  padding: calc(5 * var(--u)) calc(11 * var(--u));
+  font-size: calc(10 * var(--u));
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--mid);
+  background: #201f1d;
+  border: calc(1.5 * var(--u)) solid #fddcaa;
+  border-radius: calc(2 * var(--u));
+  outline: calc(2.5 * var(--u)) solid #131218;
+  box-shadow: 0 calc(1 * var(--u)) 0 calc(2.5 * var(--u)) #46464a;
+}
+:root[data-theme="cockpit"] #play:hover {
+  color: var(--amber);
+  border-color: var(--amber);
+}
+:root[data-theme="cockpit"] #play:active {
+  color: var(--glass);
+  background: var(--amber);
+}
+:root[data-theme="cockpit"] #play:focus-visible {
+  outline-color: var(--amber);
+}
+:root[data-theme="cockpit"] #tip {
+  padding: 6px 10px;
+  border: 1px solid var(--low);
+  border-radius: 0;
+  background: var(--glass);
+  color: var(--hi);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  box-shadow:
+    0 0 0 2px #131218,
+    0 8px 16px rgba(14, 12, 16, 0.5);
+}

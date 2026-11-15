@@ -1,0 +1,538 @@
+@import url("https://fonts.googleapis.com/css2?family=Tomorrow:wght@500;600&display=swap");
+
+/*
+ * pilot skin: a film-style flight HUD. Near-black screen, a teal rail down the left edge,
+ * navy panels, heavy pale progress strips for wires, hairline rust card edges, rust and bright
+ * orange for whatever is selected. Flat and sharp: square corners, no blur, glow, or gradient.
+ * Every colour below except --red was sampled from the sharp part of the reference
+ * (the selected card and its neighbours).
+ */
+:root[data-theme="pilot"] {
+  --bg: #090a0e; /* screen black */
+  --hi: #f4fdf0; /* the large code, bright names */
+  --mid: #c3d1bb; /* secondary labels */
+  --dim: #788a81; /* tiny annotations */
+  --line: #cdd9ca; /* wires: the pale strip on an unselected card */
+  --edge: #28454b; /* panel hairlines */
+  --port: #913512; /* the strip's start tick on an unselected card */
+  --amber: #fc7a2b; /* the bright cell of the code block */
+  --red: #f03c1e; /* not in the reference: its orange pushed toward red */
+  --green: #cdd9ca; /* done: strip fill */
+  --ice: #eaece0;
+  --pkt: #ff9047; /* the orange square */
+  --tick: #5a7876;
+  --t-ink: #913512;
+  --t-ground: #40160c;
+  --pilot-strip: #fcfaf0; /* the strip on the selected card */
+  --pilot-navy: #05162d;
+  --pilot-navy-deep: #070e18;
+  --pilot-rust: #91380e;
+  --pilot-teal: #203f48;
+  --pilot-teal-hi: #5a7876;
+  --pilot-ink: #090a0e;
+  /* The stage's width; #play is placed in stage units from it. */
+  --pilot-w: min(96vw, 96vh * 1280 / 1152);
+  --pilot-sel-bar: transparent;
+  --pilot-sel-edge: transparent;
+  --pilot-sel-fill: transparent;
+  color-scheme: dark;
+}
+/* The ACTIVE ticket row is the reference's selected card: brown tint, rust bar, rust hairline. */
+:root[data-theme="pilot"]:has(.rule + text + text + .coming:not([hidden])) {
+  --pilot-sel-bar: #67210a;
+  --pilot-sel-edge: #a25535;
+  --pilot-sel-fill: #1f1111;
+}
+:root[data-theme="pilot"]:has(
+    .rule + text + text + .coming[data-status="blocked"]:not([hidden])
+  ) {
+  --pilot-sel-bar: #f03c1e;
+  --pilot-sel-edge: #f03c1e;
+}
+
+:root[data-theme="pilot"] body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  background: #000;
+  font-family: Tomorrow, Eurostile, "Bank Gothic", sans-serif;
+  font-weight: 500;
+}
+
+/*
+ * The screen. Flat background layers in stage units (x / 1280, (y + 120) / 1152): the rail's
+ * pale cap, its two section tabs beside ACTIVE and COMING, the rail itself (x 0 to 24, stopping
+ * above the footer line), the header strip, and the selected-card band behind the ACTIVE ticket.
+ */
+:root[data-theme="pilot"] #stage {
+  width: var(--pilot-w);
+  height: auto;
+  aspect-ratio: 1280 / 1152;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  outline: 1px solid #183841;
+  background:
+    linear-gradient(#eaece0, #eaece0) 0 2.13% / 1.875% 2.17% no-repeat,
+    linear-gradient(var(--pilot-teal-hi), var(--pilot-teal-hi)) 0.317% 59.627% /
+      1.562% 2.17% no-repeat,
+    linear-gradient(#2d454a, #2d454a) 0.317% 82.964% / 1.562% 2.17% no-repeat,
+    linear-gradient(var(--pilot-teal), var(--pilot-teal)) 0 0 / 1.875% 93.75%
+      no-repeat,
+    linear-gradient(#183841, #183841) 50% 2.13% / 95.312% 2.17% no-repeat,
+    linear-gradient(var(--pilot-sel-bar), var(--pilot-sel-bar)) 2.353% 63.776% /
+      0.391% 3.906% no-repeat,
+    linear-gradient(
+        var(--pilot-sel-edge) 0 2.4%,
+        var(--pilot-sel-fill) 2.4% 97.6%,
+        var(--pilot-sel-edge) 97.6%
+      )
+      50% 63.776% / 95.312% 3.906% no-repeat,
+    var(--bg);
+}
+
+/* type: one squared face, medium for labels, semibold for names */
+:root[data-theme="pilot"] .hi {
+  font-weight: 600;
+}
+:root[data-theme="pilot"] .small {
+  font-size: 9.5px;
+}
+:root[data-theme="pilot"] .caps {
+  font-size: 12.5px;
+  letter-spacing: 1.4px;
+}
+:root[data-theme="pilot"] :is(.state, #tally, #head, #next, .checkpoint) {
+  font-weight: 600;
+}
+/* The legend's two words, drawn as the done and now treatments. */
+:root[data-theme="pilot"] .small :is(.green, .amber) {
+  font-weight: 600;
+}
+:root[data-theme="pilot"] .coming .id {
+  font-size: 15.5px;
+  letter-spacing: 0.6px;
+}
+:root[data-theme="pilot"] .coming .title {
+  font-size: 10.5px;
+}
+:root[data-theme="pilot"] .clock circle {
+  r: 9px;
+  stroke: var(--line);
+  stroke-width: 1;
+}
+:root[data-theme="pilot"] .clock line {
+  stroke: var(--amber);
+  stroke-width: 2.4;
+  stroke-linecap: butt;
+}
+
+/*
+ * Lines. The reference has two weights: a heavy pale strip (about a third of the cap height)
+ * and a hairline. Wires are the strip; rules, box edges, and chip edges are hairlines.
+ */
+:root[data-theme="pilot"] .wire {
+  stroke: var(--line);
+  stroke-width: 2.4;
+  stroke-linecap: butt;
+  stroke-linejoin: miter;
+}
+:root[data-theme="pilot"] .lane-up {
+  stroke: var(--line);
+  stroke-width: 1;
+  stroke-dasharray: 5 4;
+}
+:root[data-theme="pilot"] .rule {
+  stroke: #702812;
+  stroke-width: 1;
+}
+:root[data-theme="pilot"] .arrow {
+  stroke: var(--dim);
+  stroke-width: 1;
+  stroke-dasharray: none;
+}
+:root[data-theme="pilot"] .coming[data-status="idle"] ~ .gatewire {
+  stroke: var(--amber);
+}
+:root[data-theme="pilot"] .wire .head {
+  stroke: var(--amber);
+  stroke-width: 2.4;
+  stroke-linecap: butt;
+  stroke-linejoin: miter;
+}
+
+/* stations: flat navy panels, hairline edges, square corners */
+:root[data-theme="pilot"] .box > rect:first-child,
+:root[data-theme="pilot"] .planned rect {
+  fill: var(--pilot-navy);
+  stroke: var(--edge);
+  stroke-width: 1;
+  rx: 0;
+}
+:root[data-theme="pilot"] .planned rect:not(.port) {
+  fill: var(--pilot-navy-deep);
+  stroke: var(--pilot-teal-hi);
+  stroke-dasharray: 5 4;
+}
+:root[data-theme="pilot"] .port,
+:root[data-theme="pilot"] .planned .port {
+  fill: var(--port);
+  stroke: none;
+  rx: 0;
+}
+:root[data-theme="pilot"] :is(#freezer, #press) rect {
+  rx: 0;
+}
+:root[data-theme="pilot"] .review circle {
+  fill: var(--bg);
+  stroke: var(--pilot-teal-hi);
+  stroke-width: 1;
+}
+:root[data-theme="pilot"] .review .sweep {
+  fill: none;
+  stroke: var(--amber);
+  stroke-width: 2.4;
+}
+:root[data-theme="pilot"] .track {
+  stroke: var(--pilot-teal-hi);
+  stroke-width: 2.4;
+}
+
+/* builders: queued | working | idle | blocked | accepted | unknown | empty */
+:root[data-theme="pilot"] .builder .bot rect,
+:root[data-theme="pilot"] .builder .card rect {
+  fill: var(--bg);
+  stroke: var(--pilot-teal-hi);
+  stroke-width: 1;
+  rx: 0;
+}
+:root[data-theme="pilot"] .builder :is(.bot path, .ink) {
+  stroke: var(--pilot-teal-hi);
+  stroke-linecap: butt;
+}
+:root[data-theme="pilot"] .builder :is(.eye, .tip) {
+  fill: var(--pilot-teal-hi);
+}
+:root[data-theme="pilot"] .builder .id {
+  font-size: 9px;
+  letter-spacing: 0.1px;
+  fill: var(--dim);
+}
+:root[data-theme="pilot"] .builder[data-status="idle"] .card rect {
+  stroke: var(--hi);
+  stroke-width: 1.5;
+}
+:root[data-theme="pilot"] .builder[data-status="idle"] .ink {
+  stroke: var(--hi);
+}
+:root[data-theme="pilot"] .builder[data-status="idle"] .id {
+  fill: var(--hi);
+}
+:root[data-theme="pilot"] .builder[data-status="accepted"] .card rect {
+  fill: var(--green);
+  stroke: var(--green);
+}
+:root[data-theme="pilot"] .builder[data-status="accepted"] .ink {
+  stroke: var(--pilot-ink);
+}
+:root[data-theme="pilot"] .builder[data-status="accepted"] :is(.id, .tip) {
+  fill: var(--green);
+}
+:root[data-theme="pilot"] .builder[data-status="working"] .card rect {
+  fill: var(--pilot-rust);
+  stroke: var(--amber);
+  stroke-width: 1.5;
+  filter: none;
+}
+:root[data-theme="pilot"] .builder[data-status="working"] .ink {
+  stroke: var(--pilot-strip);
+  stroke-dasharray: 60;
+}
+:root[data-theme="pilot"] .builder[data-status="working"] :is(.id, .tip) {
+  fill: var(--amber);
+}
+:root[data-theme="pilot"]
+  .builder:is([data-status="working"], [data-status="blocked"])
+  .id {
+  font-weight: 600;
+}
+/* Flat screen graphics: the working card does not glow or pulse. Its ink still writes. */
+:root[data-theme="pilot"]
+  [data-state="live"]
+  .builder[data-status="working"]
+  .card
+  rect {
+  animation: none;
+}
+:root[data-theme="pilot"] .builder[data-status="blocked"] .card rect {
+  fill: url(#t-lines);
+  stroke: var(--red);
+  stroke-width: 1.5;
+}
+:root[data-theme="pilot"] .builder[data-status="blocked"] .ink {
+  stroke: var(--pilot-strip);
+}
+:root[data-theme="pilot"] .builder[data-status="blocked"] :is(.id, .tip) {
+  fill: var(--red);
+}
+
+/* submission slots */
+:root[data-theme="pilot"] .slot circle {
+  fill: var(--bg);
+  stroke: var(--edge);
+  stroke-width: 1;
+}
+:root[data-theme="pilot"] .slot rect {
+  fill: var(--pkt);
+  rx: 0;
+}
+:root[data-theme="pilot"] .slot[data-on] circle {
+  stroke: var(--pilot-strip);
+  stroke-width: 2.4;
+}
+
+/* integrator press */
+:root[data-theme="pilot"] .plate :is(.stem, .platen),
+:root[data-theme="pilot"] .base {
+  fill: var(--pilot-teal-hi);
+  rx: 0;
+}
+:root[data-theme="pilot"] .plate .face {
+  fill: var(--pilot-strip);
+}
+:root[data-theme="pilot"] .load {
+  fill: var(--amber);
+  rx: 0;
+}
+:root[data-theme="pilot"] .sparks {
+  stroke: var(--pilot-strip);
+  stroke-width: 1;
+  stroke-linecap: butt;
+}
+
+/* main: the strip of the selected card, heavier than the wires */
+:root[data-theme="pilot"] .mainline {
+  stroke: var(--pilot-strip);
+  stroke-width: 4;
+  stroke-linecap: butt;
+}
+:root[data-theme="pilot"] .landed {
+  fill: var(--green);
+  stroke: var(--bg);
+  stroke-width: 2.5;
+  paint-order: stroke;
+}
+:root[data-theme="pilot"] .landed.last {
+  fill: var(--pilot-strip);
+  stroke: var(--amber);
+  stroke-width: 2.4;
+}
+
+/* chips: code cells */
+:root[data-theme="pilot"] .chips rect:not(.marker) {
+  fill: var(--bg);
+  stroke: var(--edge);
+  stroke-width: 1;
+  stroke-dasharray: none;
+  rx: 0;
+}
+:root[data-theme="pilot"] .chips text {
+  font-size: 9.5px;
+  letter-spacing: 0.2px;
+  fill: var(--mid);
+}
+:root[data-theme="pilot"] .chips.filled rect {
+  fill: var(--pilot-navy-deep);
+  stroke: var(--pilot-teal-hi);
+}
+:root[data-theme="pilot"] .chips.filled text {
+  fill: var(--hi);
+}
+:root[data-theme="pilot"] .chips.dashed text {
+  fill: var(--dim);
+}
+:root[data-theme="pilot"] .chip[data-s="done"] rect {
+  fill: var(--green);
+  stroke: var(--green);
+}
+:root[data-theme="pilot"] .chip[data-s="done"] text {
+  fill: var(--pilot-ink);
+  font-weight: 600;
+}
+:root[data-theme="pilot"] .chip[data-s="now"] rect {
+  fill: var(--pilot-rust);
+  stroke: var(--amber);
+  stroke-width: 1.5;
+}
+:root[data-theme="pilot"] .chip[data-s="now"] text {
+  fill: var(--pilot-strip);
+  font-weight: 600;
+}
+:root[data-theme="pilot"] .chip[data-s="fail"] rect {
+  fill: url(#t-lines);
+  stroke: var(--red);
+  stroke-width: 1.5;
+}
+:root[data-theme="pilot"] .chip[data-s="fail"] text {
+  fill: var(--pilot-strip);
+  font-weight: 600;
+}
+:root[data-theme="pilot"] .coming[data-status="blocked"] .id {
+  fill: var(--red);
+}
+:root[data-theme="pilot"] .marker {
+  fill: var(--pkt);
+  rx: 0;
+}
+
+/* ticket queue */
+:root[data-theme="pilot"] .q circle {
+  fill: var(--green);
+  stroke: none;
+}
+:root[data-theme="pilot"] .q text {
+  font-size: 9px;
+  fill: var(--mid);
+}
+:root[data-theme="pilot"]
+  .q:is([data-status="queued"], [data-status="unknown"])
+  circle {
+  fill: var(--bg);
+  stroke: var(--pilot-teal-hi);
+  stroke-width: 1;
+}
+:root[data-theme="pilot"] .q[data-status="working"] circle {
+  fill: var(--amber);
+}
+:root[data-theme="pilot"] .q[data-status="working"] text {
+  fill: var(--amber);
+  font-weight: 600;
+}
+:root[data-theme="pilot"] .q[data-status="idle"] circle {
+  fill: var(--bg);
+  stroke: var(--hi);
+  stroke-width: 2.4;
+}
+:root[data-theme="pilot"] .q[data-status="idle"] text {
+  fill: var(--hi);
+}
+:root[data-theme="pilot"] .q[data-status="blocked"] circle {
+  fill: url(#t-lines);
+  stroke: var(--red);
+  stroke-width: 1.5;
+}
+:root[data-theme="pilot"] .q[data-status="blocked"] text {
+  fill: var(--red);
+  font-weight: 600;
+}
+
+/*
+ * Packets: the reference's solid orange square. A dark keyline on the block (never on its label)
+ * keeps it clear of the pale strips it rides.
+ */
+:root[data-theme="pilot"] .pkt {
+  stroke: var(--bg);
+  stroke-width: 2;
+  paint-order: stroke;
+}
+:root[data-theme="pilot"] rect.pkt,
+:root[data-theme="pilot"] .pkt rect {
+  rx: 0;
+}
+:root[data-theme="pilot"] .pkt text {
+  font-size: 9.5px;
+  font-weight: 600;
+  stroke: none;
+}
+/*
+ * The courier is the reference's two-cell code block: a rust cell trailing a bright orange one.
+ * It stays square through the press, and the trail is flat, not a fading blur.
+ */
+:root[data-theme="pilot"] .courier .block {
+  rx: 0 !important;
+}
+:root[data-theme="pilot"] .courier .trail {
+  fill: var(--pilot-rust);
+  stroke: none;
+  mask: none;
+}
+:root[data-theme="pilot"] .courier .ring {
+  stroke: var(--pilot-strip);
+  stroke-width: 1.5;
+  rx: 0;
+}
+:root[data-theme="pilot"] .review-passed .courier .ring {
+  stroke: var(--green);
+}
+
+/* cold review freezer */
+:root[data-theme="pilot"] .door > path:first-child {
+  fill: var(--pilot-navy-deep);
+  stroke: var(--line);
+  stroke-width: 1;
+}
+:root[data-theme="pilot"] .door .panel {
+  fill: var(--pilot-navy);
+  stroke: var(--pilot-teal-hi);
+  rx: 0;
+}
+:root[data-theme="pilot"] .door .plaque {
+  fill: var(--pilot-rust);
+  stroke: var(--amber);
+}
+:root[data-theme="pilot"] .door .lamp {
+  stroke: var(--pilot-strip);
+  stroke-width: 2.4;
+  stroke-linecap: butt;
+  opacity: 1;
+}
+:root[data-theme="pilot"] .door text {
+  font-weight: 600;
+  letter-spacing: 0;
+  fill: var(--pilot-strip);
+}
+/* Mist without blur: sharp pale rings leaving the seal. */
+:root[data-theme="pilot"] .mist circle {
+  fill: none;
+  stroke: var(--ice);
+  stroke-width: 1.5;
+  filter: none;
+}
+
+/* the HTML around the screen */
+:root[data-theme="pilot"] #play {
+  top: calc(50vh - var(--pilot-w) * 0.45 + var(--pilot-w) * 24 / 1280);
+  right: auto;
+  left: calc(50vw - var(--pilot-w) / 2 + var(--pilot-w) * 1166 / 1280);
+  width: calc(var(--pilot-w) * 84 / 1280);
+  height: calc(var(--pilot-w) * 25 / 1280);
+  padding: 0;
+  font-size: calc(var(--pilot-w) * 10.5 / 1280);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--pilot-ink);
+  background: var(--ice);
+  border: 0;
+  border-radius: 0;
+}
+:root[data-theme="pilot"] #play:hover {
+  color: var(--pilot-ink);
+  background: var(--pilot-strip);
+}
+:root[data-theme="pilot"] #play:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 2px;
+}
+:root[data-theme="pilot"] #tip {
+  border: 1px solid var(--pilot-sel-edge, #a25535);
+  border-radius: 0;
+  background: var(--pilot-navy);
+  color: var(--hi);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}

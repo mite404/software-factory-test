@@ -1,0 +1,699 @@
+@import url("https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=IBM+Plex+Mono:wght@400;500;600&display=swap");
+
+/*
+ * spines: a sheet of brutalist spine labels. Light grey paper inside a thick black frame with
+ * crop marks; labels cut from four flat stocks (black, kraft, mid grey, off-white); giant heavy
+ * condensed words; hairline rules; barcodes; boxed index numbers. Every colour is sampled from
+ * the reference. Flat print: no shadows, glows, gradients, or blur.
+ * State is ink and stock only:
+ *   done / accepted   solid black, white ink
+ *   now / working     kraft stock in a heavy black frame, heavy type
+ *   idle              mid grey stock, hairline edge
+ *   blocked / failed  diagonal hatch in a heavy frame (a heavy dashed frame where there is text)
+ *   queued            hairline outline, nothing printed inside
+ */
+:root[data-theme="spines"] {
+  --spines-frame: #000000; /* the surround */
+  --spines-paper: #bdbbb9; /* the sheet: the most common pixel */
+  --spines-black: #1d1c1c; /* OBJEKT label stock */
+  --spines-kraft: #b9a388; /* SYSTEM label stock */
+  --spines-grey: #92949a; /* MODUL label stock */
+  --spines-white: #e7e6e2; /* KINETIC label stock, and white ink on black */
+  --spines-ink: #201f1f; /* the heavy words */
+  --spines-print: #333130; /* small print, barcodes, line drawings */
+  --spines-sans: "Archivo", "Arial Narrow", Arial, sans-serif;
+  --spines-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  --spines-w: min(93vw, calc(93vh * 1280 / 1152));
+  --spines-u: calc(var(--spines-w) / 1280); /* one diagram unit in CSS px */
+
+  --bg: var(--spines-paper);
+  --hi: var(--spines-ink);
+  --mid: var(--spines-ink);
+  --dim: var(--spines-print);
+  --line: var(--spines-ink);
+  --edge: var(--spines-ink);
+  --port: var(--spines-ink);
+  --amber: var(--spines-ink);
+  --red: var(--spines-ink);
+  --green: var(--spines-ink);
+  --ice: var(--spines-ink);
+  --pkt: var(--spines-black);
+  --tick: var(--spines-kraft);
+  --t-ink: var(--spines-ink);
+  --t-ground: var(--spines-white);
+  color-scheme: light;
+}
+
+/* the black frame, its crop marks and its margin note */
+:root[data-theme="spines"] body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  background: var(--spines-frame);
+  font-family: var(--spines-mono);
+  -webkit-font-smoothing: antialiased;
+}
+:root[data-theme="spines"] body::before {
+  --spines-a: calc(var(--spines-u) * 13); /* half a crop mark */
+  --spines-m: calc(
+    var(--spines-u) * 34
+  ); /* how far the box reaches past the sheet */
+  /* one flat colour, written as a gradient only so it can be sized into hairlines */
+  --spines-c: linear-gradient(var(--spines-white), var(--spines-white));
+  content: "";
+  position: fixed;
+  left: calc(50vw - var(--spines-w) / 2 - var(--spines-m));
+  top: calc(50vh - var(--spines-w) * 0.45 - var(--spines-m));
+  width: calc(var(--spines-w) + var(--spines-m) * 2);
+  height: calc(var(--spines-w) * 0.9 + var(--spines-m) * 2);
+  pointer-events: none;
+  background:
+    var(--spines-c) left 0 top var(--spines-a) / calc(var(--spines-a) * 2) 1px
+      no-repeat,
+    var(--spines-c) left var(--spines-a) top 0 / 1px calc(var(--spines-a) * 2)
+      no-repeat,
+    var(--spines-c) right 0 top var(--spines-a) / calc(var(--spines-a) * 2) 1px
+      no-repeat,
+    var(--spines-c) right var(--spines-a) top 0 / 1px calc(var(--spines-a) * 2)
+      no-repeat,
+    var(--spines-c) left 0 bottom var(--spines-a) / calc(var(--spines-a) * 2)
+      1px no-repeat,
+    var(--spines-c) left var(--spines-a) bottom 0 / 1px
+      calc(var(--spines-a) * 2) no-repeat,
+    var(--spines-c) right 0 bottom var(--spines-a) / calc(var(--spines-a) * 2)
+      1px no-repeat,
+    var(--spines-c) right var(--spines-a) bottom 0 / 1px
+      calc(var(--spines-a) * 2) no-repeat,
+    var(--spines-c) left 0 top 50% / calc(var(--spines-a) * 1.4) 1px no-repeat,
+    var(--spines-c) right 0 top 50% / calc(var(--spines-a) * 1.4) 1px no-repeat;
+}
+:root[data-theme="spines"] body::after {
+  content: "SOFTWARE FACTORY: PIPELINE SHEET";
+  position: fixed;
+  left: calc((100vw - var(--spines-w)) / 4);
+  bottom: calc(50vh - var(--spines-w) * 0.45 + var(--spines-u) * 64);
+  translate: -50% 0;
+  rotate: 180deg;
+  writing-mode: vertical-rl;
+  white-space: nowrap;
+  font: 500 calc(var(--spines-u) * 10) / 1 var(--spines-mono);
+  letter-spacing: 0.16em;
+  color: var(--spines-white);
+  pointer-events: none;
+}
+:root[data-theme="spines"] #stage {
+  width: var(--spines-w);
+  height: auto;
+  aspect-ratio: 1280 / 1152;
+  font-family: var(--spines-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  fill: var(--spines-ink);
+  background: var(--spines-paper)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 -120 1280 1152' preserveAspectRatio='none'%3E%3Crect x='15' y='-116' width='1250' height='43' fill='%231d1c1c'/%3E%3Cpath fill='%23e7e6e2' d='M1128 -110h1.5v30h-1.5zM1131.5 -110h2v30h-2zM1135 -110h1v30h-1zM1140 -110h1v30h-1zM1143 -110h2v30h-2zM1146.5 -110h2v30h-2zM1150.5 -110h1v30h-1zM1153 -110h2v30h-2zM1158 -110h1v30h-1zM1161 -110h1v30h-1zM1166 -110h2v30h-2zM1169.5 -110h4v30h-4zM1177.5 -110h1v30h-1zM1180.5 -110h3v30h-3zM1187.5 -110h1v30h-1zM1192.5 -110h2v30h-2zM1197.5 -110h1v30h-1zM1200.5 -110h1v30h-1zM1205.5 -110h4v30h-4zM1211.5 -110h1.5v30h-1.5zM1216 -110h1v30h-1zM1221 -110h1v30h-1zM1226 -110h1.5v30h-1.5zM1231.5 -110h4v30h-4zM1237.5 -110h1v30h-1z'/%3E%3Crect x='15' y='536' width='1250' height='44' fill='%23b9a388'/%3E%3Crect x='15' y='800' width='1250' height='38' fill='%23e7e6e2'/%3E%3Crect x='196' y='632' width='1027' height='130' fill='%23e7e6e2'/%3E%3Cg fill='none' stroke='%23201f1f'%3E%3Cpath d='M208 676H1211M208 730H1211M512 644V718M982 644V718M39 891H1233M39 949H1233'/%3E%3Cpath stroke-dasharray='2 2' d='M213.5 651.5h16v17h-16zM525.5 651.5h16v17h-16zM995.5 651.5h16v17h-16z'/%3E%3C/g%3E%3Crect x='1072.5' y='557' width='39' height='16' fill='%231d1c1c'/%3E%3Crect x='1162.5' y='557' width='39' height='16' fill='none' stroke='%23201f1f' stroke-width='2.5'/%3E%3C/svg%3E")
+    0 0 / 100% 100% no-repeat;
+}
+:root[data-theme="spines"] #play {
+  top: calc(50vh - var(--spines-w) * 0.45 + var(--spines-u) * 64);
+  right: calc((100vw - var(--spines-w)) / 4);
+  translate: 50% 0;
+  writing-mode: vertical-rl;
+  text-orientation: sideways;
+  padding: calc(var(--spines-u) * 9) calc(var(--spines-u) * 4);
+  font: 600 calc(var(--spines-u) * 10) / 1 var(--spines-mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--spines-white);
+  background: none;
+  border: 1px solid var(--spines-white);
+  border-radius: 0;
+}
+:root[data-theme="spines"] #play:hover {
+  color: var(--spines-frame);
+  background: var(--spines-white);
+}
+:root[data-theme="spines"] #play:focus-visible {
+  outline: 2px solid var(--spines-white);
+  outline-offset: 2px;
+}
+:root[data-theme="spines"] #tip {
+  padding: 6px 9px;
+  border: 1px solid var(--spines-ink);
+  border-radius: 0;
+  background: var(--spines-white);
+  color: var(--spines-ink);
+  font: 500 11px/1.4 var(--spines-mono);
+  text-transform: uppercase;
+}
+
+/* type: heavy condensed grotesque for names and live values, small mono for the notes */
+:root[data-theme="spines"] .caps {
+  letter-spacing: 0.3px;
+}
+:root[data-theme="spines"] .small {
+  font-size: 9.5px;
+}
+:root[data-theme="spines"] .dim {
+  font-weight: 400;
+}
+:root[data-theme="spines"] .hi,
+:root[data-theme="spines"] g[transform="translate(0 -22)"] + text {
+  fill: var(--spines-ink);
+  font-family: var(--spines-sans);
+  font-size: 24px;
+  font-weight: 800;
+  font-stretch: 66%;
+  letter-spacing: 0;
+}
+:root[data-theme="spines"] .coming .id,
+:root[data-theme="spines"] .gatewire + g .hi,
+:root[data-theme="spines"] #lane {
+  font-size: 20px;
+}
+/* the gate steps carry boxed index numbers, drawn on the sheet behind them */
+:root[data-theme="spines"] .gatewire + g .mid > .dim:first-child {
+  fill: var(--spines-ink);
+  font-family: var(--spines-sans);
+  font-size: 14px;
+  font-weight: 800;
+  font-stretch: 80%;
+  letter-spacing: 7px;
+}
+:root[data-theme="spines"] .amber,
+:root[data-theme="spines"] .green,
+:root[data-theme="spines"] .red,
+:root[data-theme="spines"] .verdict {
+  font-family: var(--spines-sans);
+  font-size: 15px;
+  font-weight: 800;
+  font-stretch: 70%;
+  letter-spacing: 0.2px;
+}
+:root[data-theme="spines"] #tally {
+  font-size: 22px;
+  font-stretch: 66%;
+  letter-spacing: 0;
+}
+:root[data-theme="spines"] #head {
+  font-size: 20px;
+  font-stretch: 66%;
+  letter-spacing: 0;
+}
+
+/* the header is the black label: a giant white word, small white print */
+:root[data-theme="spines"] .caps .state {
+  fill: var(--spines-grey);
+  font-family: var(--spines-sans);
+  font-size: 42px;
+  font-weight: 900;
+  font-stretch: 62%;
+  letter-spacing: -0.3px;
+}
+:root[data-theme="spines"] [data-state="live"] .caps .state {
+  fill: var(--spines-white);
+}
+:root[data-theme="spines"] [data-state="paused"] .caps .state {
+  fill: var(--spines-kraft);
+}
+:root[data-theme="spines"] g[transform="translate(0 -120)"] .caps .dim {
+  fill: var(--spines-white);
+}
+:root[data-theme="spines"] .clock circle {
+  stroke: var(--spines-ink);
+  stroke-width: 1;
+}
+:root[data-theme="spines"] .clock line {
+  stroke: var(--spines-ink);
+  stroke-width: 2;
+  stroke-linecap: butt;
+}
+
+/* the section words: ACTIVE on the kraft strip, COMING on the off-white strip */
+:root[data-theme="spines"] .rule + .caps > .green,
+:root[data-theme="spines"] .caps #next {
+  font-size: 38px;
+  font-weight: 900;
+  font-stretch: 62%;
+  letter-spacing: -0.3px;
+}
+:root[data-theme="spines"] .rule + .caps > .mid {
+  font-family: var(--spines-sans);
+  font-size: 30px;
+  font-weight: 900;
+  font-stretch: 62%;
+  letter-spacing: -0.2px;
+}
+/* the key: "green" is printed white on a black cell, "amber" inside a heavy frame */
+:root[data-theme="spines"] text.end.small > :is(.green, .amber) {
+  font-family: var(--spines-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  font-stretch: 100%;
+  letter-spacing: 0.3px;
+}
+:root[data-theme="spines"] text.end.small > .green {
+  fill: var(--spines-white);
+}
+:root[data-theme="spines"] .coming .title {
+  font-size: 10px;
+}
+
+/* wires: the technical-drawing hairlines, square joins, solid heads */
+:root[data-theme="spines"] .wire {
+  stroke: var(--spines-ink);
+  stroke-width: 1.25;
+  stroke-linejoin: miter;
+}
+:root[data-theme="spines"] .wire .head {
+  fill: var(--spines-ink);
+  stroke: var(--spines-ink);
+  stroke-width: 1;
+  stroke-linecap: butt;
+  stroke-linejoin: miter;
+}
+:root[data-theme="spines"] .lane-up {
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+:root[data-theme="spines"] .rule {
+  stroke: var(--spines-ink);
+  stroke-width: 1;
+}
+:root[data-theme="spines"] .arrow {
+  stroke: var(--spines-ink);
+  stroke-width: 1;
+  stroke-dasharray: none;
+}
+:root[data-theme="spines"] .coming[data-status="idle"] ~ .gatewire {
+  stroke: var(--spines-ink);
+  stroke-width: 2.5;
+}
+:root[data-theme="spines"] .mainline {
+  stroke: var(--spines-ink);
+  stroke-width: 1.25;
+}
+
+/* stations: square labels cut from the four stocks, hairline edges */
+:root[data-theme="spines"] .box > rect:first-child,
+:root[data-theme="spines"] .planned rect {
+  fill: var(--spines-white);
+  stroke: var(--spines-ink);
+  stroke-width: 1;
+  rx: 0;
+}
+:root[data-theme="spines"] rect[width="98"][height="190"] {
+  fill: var(--spines-kraft);
+}
+:root[data-theme="spines"] .box.integrator > rect:first-child {
+  fill: var(--spines-grey);
+}
+:root[data-theme="spines"] .box.review > rect:first-child {
+  fill: var(--spines-black);
+  stroke: var(--spines-black);
+}
+/* the gate detail label is printed on the sheet behind it, with its cell rules */
+:root[data-theme="spines"] .gatewire + g .box > rect:first-child {
+  fill: none;
+}
+/* the planned full gate is a barcode with a dashed edge */
+:root[data-theme="spines"] .planned rect:not(.port) {
+  fill: url(#t-lines);
+  stroke-dasharray: 3 3;
+}
+:root[data-theme="spines"] .track {
+  stroke: var(--spines-ink);
+  stroke-width: 1.5;
+}
+:root[data-theme="spines"] #freezer rect,
+:root[data-theme="spines"] #press rect {
+  rx: 0;
+}
+
+/* ports: small solid black tabs where a wire meets a label */
+:root[data-theme="spines"] .port,
+:root[data-theme="spines"] .planned .port {
+  fill: var(--spines-ink);
+  stroke: var(--spines-ink);
+  stroke-width: 1;
+  stroke-dasharray: none;
+  rx: 0;
+}
+:root[data-theme="spines"] .integrator {
+  --amber: var(--spines-kraft);
+}
+/* the planned gate's tabs stay unprinted until a verdict inks them */
+:root[data-theme="spines"] .planned .port {
+  fill: var(--spines-white);
+}
+
+/* builders: line-drawn bots, the brief card carries the state */
+:root[data-theme="spines"] .builder .bot rect,
+:root[data-theme="spines"] .builder .card rect {
+  fill: none;
+  stroke: var(--spines-ink);
+  stroke-width: 1;
+  rx: 0;
+}
+:root[data-theme="spines"] .builder .bot path,
+:root[data-theme="spines"] .builder .ink {
+  stroke: var(--spines-ink);
+  stroke-width: 1;
+  stroke-linecap: butt;
+}
+:root[data-theme="spines"] .builder .eye,
+:root[data-theme="spines"] .builder .tip {
+  fill: var(--spines-ink);
+}
+:root[data-theme="spines"] .builder .id {
+  fill: var(--spines-ink);
+  font-family: var(--spines-sans);
+  font-size: 11px;
+  font-weight: 600;
+  font-stretch: 75%;
+  letter-spacing: 0.2px;
+}
+:root[data-theme="spines"] .builder[data-status="empty"] {
+  opacity: 0.35;
+}
+:root[data-theme="spines"] .builder[data-status="unknown"] .card rect {
+  stroke-dasharray: 2 2;
+}
+:root[data-theme="spines"] .builder[data-status="idle"] .card rect {
+  fill: var(--spines-grey);
+}
+:root[data-theme="spines"] .builder[data-status="accepted"] .card rect {
+  fill: var(--spines-black);
+  stroke: var(--spines-black);
+}
+:root[data-theme="spines"] .builder[data-status="accepted"] .ink {
+  stroke: var(--spines-white);
+  stroke-width: 1.5;
+}
+:root[data-theme="spines"]
+  .builder:is(
+    [data-status="accepted"],
+    [data-status="working"],
+    [data-status="blocked"]
+  )
+  .id {
+  font-weight: 900;
+}
+:root[data-theme="spines"] .builder[data-status="working"] .card rect {
+  fill: var(--spines-kraft);
+  stroke: var(--spines-ink);
+  stroke-width: 2.5;
+  filter: none;
+}
+:root[data-theme="spines"] .builder[data-status="working"] .ink {
+  stroke: var(--spines-ink);
+  stroke-width: 1.5;
+}
+:root[data-theme="spines"]
+  [data-state="live"]
+  .builder[data-status="working"]
+  .card
+  rect {
+  animation: spines-glow 1.6s steps(2, jump-none) infinite alternate;
+}
+@keyframes spines-glow {
+  from {
+    stroke-width: 2.5px;
+  }
+  to {
+    stroke-width: 4.5px;
+  }
+}
+:root[data-theme="spines"] .builder[data-status="blocked"] .card rect {
+  fill: url(#t-hatch);
+  stroke: var(--spines-ink);
+  stroke-width: 2.5;
+}
+:root[data-theme="spines"] .builder[data-status="blocked"] .ink {
+  stroke: none;
+}
+
+/* submission: registration rings on kraft, a black block where a report waits */
+:root[data-theme="spines"] .slot circle {
+  stroke: var(--spines-ink);
+  stroke-width: 1;
+}
+:root[data-theme="spines"] .slot rect {
+  fill: var(--spines-black);
+  rx: 0;
+}
+:root[data-theme="spines"] .slot[data-on] circle {
+  fill: var(--spines-white);
+  stroke: var(--spines-ink);
+  stroke-width: 2.5;
+}
+
+/* integrator press: solid black plates, the load bar inks in */
+:root[data-theme="spines"] .plate :is(.stem, .platen),
+:root[data-theme="spines"] .plate .face {
+  fill: var(--spines-ink);
+}
+:root[data-theme="spines"] .base {
+  fill: var(--spines-white);
+  stroke: var(--spines-ink);
+  stroke-width: 1;
+  rx: 0;
+}
+:root[data-theme="spines"] .load {
+  fill: var(--spines-ink);
+  rx: 0;
+}
+:root[data-theme="spines"] .sparks {
+  stroke: var(--spines-ink);
+  stroke-width: 1.25;
+  stroke-linecap: butt;
+}
+
+/* cold review: the black label. White marks; the packet waits on a white disc */
+:root[data-theme="spines"] .review {
+  --amber: var(--spines-kraft);
+  --green: var(--spines-white);
+}
+:root[data-theme="spines"] .review .port {
+  fill: var(--spines-white);
+}
+:root[data-theme="spines"] .review circle:not(.sweep) {
+  fill: var(--spines-white);
+  stroke: none;
+}
+:root[data-theme="spines"] .review .sweep {
+  stroke: var(--spines-kraft);
+  stroke-width: 3;
+}
+:root[data-theme="spines"] .door > path:first-child {
+  fill: var(--spines-white);
+  stroke: var(--spines-ink);
+  stroke-width: 1;
+  stroke-linejoin: miter;
+}
+:root[data-theme="spines"] .door .panel {
+  fill: url(#t-lines);
+  stroke: var(--spines-ink);
+  stroke-width: 1;
+  rx: 0;
+}
+:root[data-theme="spines"] .door .plaque {
+  fill: var(--spines-black);
+  stroke: var(--spines-black);
+}
+:root[data-theme="spines"] .door .lamp {
+  stroke: var(--spines-ink);
+  stroke-width: 1.5;
+  stroke-linecap: butt;
+  opacity: 1;
+}
+:root[data-theme="spines"] .door text {
+  fill: var(--spines-white);
+  font-family: var(--spines-sans);
+  font-weight: 800;
+  font-stretch: 80%;
+  letter-spacing: 0.3px;
+}
+/* mist: drawn rings, no blur */
+:root[data-theme="spines"] .mist circle {
+  fill: none;
+  stroke: var(--spines-ink);
+  stroke-width: 2;
+  filter: none;
+}
+
+/* main: commits are solid black dots, the newest one boxed like an index number */
+:root[data-theme="spines"] .landed {
+  fill: var(--spines-black);
+}
+:root[data-theme="spines"] .landed.last {
+  stroke: none;
+  outline: 1px solid var(--spines-ink);
+  outline-offset: 2px;
+}
+
+/* chips are square label cells */
+:root[data-theme="spines"] .chips rect:not(.marker) {
+  fill: none;
+  stroke: var(--spines-ink);
+  stroke-width: 1;
+  stroke-dasharray: none;
+  rx: 0;
+}
+:root[data-theme="spines"] .chips text {
+  fill: var(--spines-ink);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+}
+:root[data-theme="spines"] .chips.dashed text {
+  fill: var(--spines-print);
+  font-weight: 400;
+}
+:root[data-theme="spines"] .chip[data-s="done"] rect {
+  fill: var(--spines-black);
+  stroke: var(--spines-black);
+}
+:root[data-theme="spines"] .chip[data-s="done"] text {
+  fill: var(--spines-white);
+  font-weight: 600;
+}
+:root[data-theme="spines"] .chip[data-s="now"] rect {
+  fill: var(--spines-kraft);
+  stroke: var(--spines-ink);
+  stroke-width: 2.5;
+}
+:root[data-theme="spines"] .chip[data-s="now"] text {
+  fill: var(--spines-ink);
+  font-weight: 600;
+}
+:root[data-theme="spines"] .chip[data-s="fail"] rect {
+  fill: var(--spines-white);
+  stroke: var(--spines-ink);
+  stroke-width: 2.5;
+  stroke-dasharray: 5 3;
+}
+:root[data-theme="spines"] .chip[data-s="fail"] text {
+  fill: var(--spines-ink);
+  font-weight: 600;
+}
+/* the marker is the reference's short black dash, parked over the index number of its step */
+:root[data-theme="spines"] .marker,
+:root[data-theme="spines"] .landing .marker {
+  fill: var(--spines-ink);
+  rx: 0;
+}
+
+/* ticket queue: the same five marks, one per ticket */
+:root[data-theme="spines"] .q circle {
+  fill: var(--spines-black);
+}
+:root[data-theme="spines"] .q text {
+  fill: var(--spines-ink);
+  font-family: var(--spines-sans);
+  font-size: 10px;
+  font-weight: 800;
+  font-stretch: 80%;
+  letter-spacing: 0.3px;
+}
+:root[data-theme="spines"]
+  .q:is([data-status="queued"], [data-status="unknown"])
+  circle {
+  fill: none;
+  stroke: var(--spines-ink);
+  stroke-width: 1;
+}
+:root[data-theme="spines"] .q[data-status="working"] circle {
+  fill: var(--spines-kraft);
+  stroke: var(--spines-ink);
+  stroke-width: 3;
+}
+:root[data-theme="spines"] .q[data-status="idle"] circle {
+  fill: var(--spines-grey);
+  stroke: var(--spines-ink);
+  stroke-width: 1;
+}
+:root[data-theme="spines"] .q[data-status="blocked"] circle {
+  fill: url(#t-hatch);
+  stroke: var(--spines-ink);
+  stroke-width: 2.5;
+}
+
+/* packets: a solid black block. Failures are hatched, rework is kraft, both heavy-framed */
+:root[data-theme="spines"] rect.pkt,
+:root[data-theme="spines"] .pkt rect {
+  rx: 0 !important;
+}
+:root[data-theme="spines"] .courier .ring {
+  stroke: var(--spines-ink);
+  stroke-width: 1;
+}
+/* the streak behind the packet is a flat strip of barcode, not a fade */
+:root[data-theme="spines"] .courier .trail {
+  mask: none;
+  fill: url(#t-lines);
+}
+/* heavy enough to stay readable where a label rides on its wire */
+:root[data-theme="spines"] .pkt text {
+  fill: var(--spines-ink);
+  font-family: var(--spines-sans);
+  font-size: 11px;
+  font-weight: 800;
+  font-stretch: 80%;
+  letter-spacing: 0.3px;
+}
+:root[data-theme="spines"] rect.back,
+:root[data-theme="spines"] .mainred rect,
+:root[data-theme="spines"] .up:not(.findings) rect {
+  fill: url(#t-hatch);
+  stroke: var(--spines-ink);
+  stroke-width: 2;
+}
+:root[data-theme="spines"] .findings rect,
+:root[data-theme="spines"] .fixes rect {
+  fill: var(--spines-kraft);
+  stroke: var(--spines-ink);
+  stroke-width: 2;
+}
+/*
+ * Full gate verdicts, in keyframes of their own with the default timing, because neither a
+ * line weight nor a hatch can travel through the --verdict variable. Green prints the track
+ * heavy and the exit tab solid; red dashes the track and hatches the tab, like every failure.
+ */
+:root[data-theme="spines"] .passing .track {
+  animation-name: spines-verdict-good;
+}
+:root[data-theme="spines"] .gating .track {
+  animation-name: spines-verdict-bad;
+}
+:root[data-theme="spines"] .gating .planned .exit {
+  animation-name: spines-verdict-port;
+}
+@keyframes spines-verdict-good {
+  0%,
+  100% {
+    stroke: var(--spines-ink);
+    stroke-width: 5px;
+  }
+}
+@keyframes spines-verdict-bad {
+  0%,
+  100% {
+    stroke: var(--spines-ink);
+    stroke-width: 5px;
+    stroke-dasharray: 5 4;
+  }
+}
+@keyframes spines-verdict-port {
+  0%,
+  100% {
+    fill: url(#t-hatch);
+    stroke: var(--spines-ink);
+    stroke-width: 2px;
+  }
+}
+:root[data-theme="spines"] .verdict {
+  fill: var(--spines-ink);
+}
