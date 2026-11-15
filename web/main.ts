@@ -1,4 +1,5 @@
 import { derive, type Feed, type View } from "./derive";
+import { mount } from "./spec/tickets";
 
 const POLL_MS = 5000;
 // Must match the landing and return timelines in style.css.
@@ -10,8 +11,7 @@ const GATE_MS = 5000;
 const REPORT_MS = 7000;
 const PARAMS = new URLSearchParams(location.search);
 const DEMO = PARAMS.has("demo");
-// ?theme=<name> picks a skin from web/themes; any other value leaves the default.
-document.documentElement.dataset.theme = PARAMS.get("theme") ?? "";
+document.documentElement.dataset.theme = "spec";
 
 function one(selector: string, root: ParentNode = document): Element {
   const element = root.querySelector(selector);
@@ -27,25 +27,15 @@ const stage = all("#stage")[0]!;
 const builders = all(".builder");
 const slots = all(".slot");
 const dots = all(".landed");
-const queue = all(".q");
-const coming = all(".coming");
-// Each ticket row gets its own copy of the stage chips so they can be lit per ticket.
-for (const row of coming) {
-  const chips = one("#steps").cloneNode(true) as Element;
-  chips.removeAttribute("id");
-  const own = chips.cloneNode(false) as Element; // filled with the ticket's own steps
-  own.classList.add("own");
-  row.append(chips, own);
-}
-
-// ?theme=spec&kit swaps everything below the ACTIVE rule for the SPEC-01 device in web/spec.
-const paintKit =
-  PARAMS.get("theme") === "spec" && PARAMS.has("kit")
-    ? (await import("./spec/tickets")).mount(
-        stage,
-        all("#steps .chip:not(.target) text").map((text) => text.textContent!),
-      )
-    : null;
+const paintKit = mount(stage, [
+  "worktree",
+  "setup",
+  "builder thread",
+  "report.json",
+  "gate · 10 min cap",
+  "cold review",
+  "ff-merge",
+]);
 
 const DEMO_STEPS = [
   ["add steps to queue entry", "pass steps through feed", "render step chips"],
@@ -114,26 +104,7 @@ function paintBuilders(view: View) {
   });
 }
 
-// Draw a COMING row's own step chips by cloning one stage chip and one arrow from the row.
-function paintSteps(row: Element, chips: View["coming"][number]["chips"]) {
-  one(".chips:not(.own)", row).toggleAttribute("hidden", chips.length > 0);
-  one(".own", row).replaceChildren(
-    ...chips.flatMap((chip, n) => {
-      const node = one(".chip", row).cloneNode(true) as SVGElement;
-      delete node.dataset.s;
-      one("rect", node).setAttribute("x", `${chip.x}`);
-      one("rect", node).setAttribute("width", `${chip.width}`);
-      one("text", node).setAttribute("x", `${chip.x + chip.width / 2}`);
-      one("text", node).textContent = chip.text;
-      if (!n) return [node];
-      const arrow = one(".arrow", row).cloneNode() as Element;
-      arrow.setAttribute("d", `M${chip.x - 18} 0 H${chip.x - 2}`);
-      return [arrow, node];
-    }),
-  );
-}
-
-function paintTickets(view: View) {
+function paintMain(view: View) {
   dots.forEach((dot, i) => {
     const cell = view.main[i]!;
     dot.toggleAttribute("data-on", cell.on);
@@ -141,35 +112,6 @@ function paintTickets(view: View) {
     dot.dataset.tip = cell.label;
     link(dot.parentElement!, cell.href);
   });
-  queue.forEach((dot, i) => {
-    const cell = view.queue[i]!;
-    dot.dataset.status = cell.status;
-    write(dot, "text", cell.tag);
-    dot.dataset.tip = cell.label;
-  });
-  coming.forEach((row, i) => {
-    const cell = view.coming[i]!;
-    row.toggleAttribute("hidden", !cell.id);
-    write(row, ".id", cell.id);
-    write(row, ".title", cell.title);
-    row.dataset.status = cell.status;
-    paintSteps(row, cell.chips);
-    write(row, ".target text", view.target);
-    one(".target rect", row).setAttribute(
-      "width",
-      `${view.target.length * 6.4 + 18}`,
-    );
-    one(".target text", row).setAttribute(
-      "x",
-      `${1080 + view.target.length * 3.2}`,
-    );
-    row
-      .querySelectorAll<SVGElement>(".chips:not(.own) .chip:not(.target)")
-      .forEach((chip, n) => {
-        chip.dataset.s = cell.steps[n]!;
-      });
-  });
-  one("#idle-queue").toggleAttribute("hidden", !!view.coming[1]!.id);
 }
 
 function animate(view: View) {
@@ -192,12 +134,11 @@ function render(view: View) {
   write(document, "#observed", view.observed);
   write(document, "#tally", view.tally);
   write(document, "#head", view.head);
-  write(document, "#next", view.next);
   write(document, "#waiting", view.waiting);
   slots.forEach((slot, i) => slot.toggleAttribute("data-on", i < view.slots));
   paintBuilders(view);
-  paintTickets(view);
-  paintKit?.(view);
+  paintMain(view);
+  paintKit(view);
   if (view.reviewFinished)
     cycle(stage, `review-${view.reviewFinished}`, RETURN_MS + 240);
   else animate(view);

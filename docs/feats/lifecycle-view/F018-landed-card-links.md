@@ -35,8 +35,10 @@ it.
 - The feed has no pull request for a ticket. F014 adds a merge record with the pull request
   number and URL. A factory acceptance is a local fast-forward; the pull request is opened and
   merged by the Foreman afterwards.
-- For an accepted ticket the feed's `thread` is the last cold reviewer's thread, not the
-  worker's. F011 adds the worker thread separately.
+- For an accepted ticket `projectTask` in `factory/dashboard.ts` replaces the worker's thread
+  and title with the review record's. On 2026-11-15 the live feed gave every landed ticket the
+  title "<id> - post-graft review (sent)" and its last reviewer's thread, so the operator saw
+  nine landed "reviews" and each card opened a reviewer.
 
 ## Approach
 
@@ -45,22 +47,25 @@ Make the links real anchors. Wrap the landed dot's trigger and the card in one
 says which ticket and that it opens the thread. Do the same for the builder spots. Remove the
 `open` helper when nothing calls it.
 
-Beside the revision in `Landed`, render a second, nested-safe control: a small arrow link to the
-pull request, with the accessible name "Open pull request #N on GitHub". HTML forbids an anchor
-inside an anchor, so place the arrow as a sibling positioned over the card, or stop the card
-being an anchor around it; a click on the arrow must open only the pull request. Show the arrow
-only when the feed carries a pull request URL of the form
-`https://github.com/<owner>/<repo>/pull/<number>`. Until F014 lands, no ticket has one, so no
-arrow shows; "Page placeholders" in `docs/v1-execution.md` lists it.
+Print the pull request as text, "PR #N", beside the revision in `Landed`, so a landed ticket can be
+found by the number the Foreman reports. Next to it, render a second, nested-safe control: a small
+arrow link to the pull request, with the accessible name "Open pull request #N on GitHub". HTML
+forbids an anchor inside an anchor, so place the arrow as a sibling positioned over the card, or
+stop the card being an anchor around it; a click on the arrow must open only the pull request. Show
+the arrow only when the feed carries a pull request URL of the form
+`https://github.com/<owner>/<repo>/pull/<number>`. Until F014 lands, no ticket has one, so no arrow
+shows; "Page placeholders" in `docs/v1-execution.md` lists it.
 
-The card opens the worker's thread when the feed carries it (F011) and the feed's `thread`
-otherwise.
+Fix the feed for landed tickets: an accepted ticket keeps its own title and its worker's thread.
+A ticket still in review keeps today's review title and reviewer thread. The landed card then
+opens the worker's thread. F011 later adds the reviewer threads as separate fields.
 
 ## Scope
 
 - In: `web/spec/tickets.tsx`, `web/spec/tickets.css`, `web/derive.ts` and its test,
   and `web/replay.ts`.
-- Out: `factory/` and the feed, the vendored kit files, and any other card content.
+- In: the title and thread of an accepted ticket in `factory/dashboard.ts`, with its test.
+- Out: any other feed field, the vendored kit files, and any other card content.
 - Preserve: the hover card's appearance apart from the arrow, one card open at a time, and
   thread links elsewhere on the page.
 
@@ -68,26 +73,29 @@ otherwise.
 
 1. **Compare the old link**. Read how the page linked a ticket before the kit
    (`git show 586ea64:web/main.ts` and `web/index.html`) and use the same kind of anchor.
-2. **Model the two links**. In `web/derive.ts`, give each ticket a thread URL and a pull request
+2. **Fix the landed feed**. Give an accepted ticket its own title and its worker's thread in
+   the feed, with a test on the real fixtures.
+3. **Model the two links**. In `web/derive.ts`, give each ticket a thread URL and a pull request
    URL that is null unless the feed value validates, with tests.
-3. **Make the card a link**. Replace the scripted open on landed dots and builder spots with
+4. **Make the card a link**. Replace the scripted open on landed dots and builder spots with
    real anchors.
-4. **Add the pull request arrow**. Render the arrow beside the revision when the URL exists, so
+5. **Add the pull request arrow**. Render the arrow beside the revision when the URL exists, so
    that its click opens only the pull request.
-5. **Record replay frames**. Add a landed ticket with a pull request URL and one without to
+6. **Record replay frames**. Add a landed ticket with a pull request URL and one without to
    `web/replay.ts`.
-6. **Check it rendered**. Inspect screenshots and a short recording of hover, card click and
+7. **Check it rendered**. Inspect screenshots and a short recording of hover, card click and
    arrow click, by pointer and by keyboard.
 
 ## Test plan
 
-Model tests: a feed pull request URL on another host, with extra path, or not HTTPS gives null;
-a valid one gives the URL and number; a ticket with no thread gives no thread link. Rendered,
-on the replay feed: hovering a landed dot shows the card; a click on the card body and on the dot
-each opens the thread URL once; a click on the arrow opens the pull request URL and not the
-thread; a ticket without a pull request shows no arrow; Tab reaches both links and Enter opens
-them; only one card is open while sweeping along the row. Run the page inside an iframe once to
-show the links still open.
+Feed test: after acceptance with a cold review, the ticket's title is its own and its thread is the
+worker's; during review both are the reviewer's as today. Model tests: a feed pull request URL on
+another host, with extra path, or not HTTPS gives null; a valid one gives the URL and number; a
+ticket with no thread gives no thread link. Rendered, on the replay feed: hovering a landed dot
+shows the card; a click on the card body and on the dot each opens the thread URL once; a click on
+the arrow opens the pull request URL and not the thread; a ticket without a pull request shows no
+arrow; Tab reaches both links and Enter opens them; only one card is open while sweeping along the
+row. Run the page inside an iframe once to show the links still open.
 
 ## Why this approach?
 
@@ -99,14 +107,15 @@ show the links still open.
 
 ## Files You'll Touch
 
-| Path                                  | Role       | Contains                                 | Edit or Read |
-| ------------------------------------- | ---------- | ---------------------------------------- | ------------ |
-| `web/derive.ts`, `web/derive.test.ts` | Page model | `Ticket`, `href`                         | Edit         |
-| `web/spec/tickets.tsx`                | Kit page   | `Landed`, `Landings`, `Builders`, `open` | Edit         |
-| `web/spec/tickets.css`                | Kit page   | Spot and hover card rules                | Edit         |
-| `web/replay.ts`                       | Dev feed   | Recorded frames                          | Edit         |
-| `web/spec/components`                 | Vendored   | `HoverCard`                              | Read         |
-| `docs/v1-execution.md`                | Plan       | Page placeholders table                  | Read         |
+| Path                                                | Role       | Contains                                 | Edit or Read |
+| --------------------------------------------------- | ---------- | ---------------------------------------- | ------------ |
+| `factory/dashboard.ts`, `factory/dashboard.test.ts` | Projection | `projectTask`                            | Edit         |
+| `web/derive.ts`, `web/derive.test.ts`               | Page model | `Ticket`, `href`                         | Edit         |
+| `web/spec/tickets.tsx`                              | Kit page   | `Landed`, `Landings`, `Builders`, `open` | Edit         |
+| `web/spec/tickets.css`                              | Kit page   | Spot and hover card rules                | Edit         |
+| `web/replay.ts`                                     | Dev feed   | Recorded frames                          | Edit         |
+| `web/spec/components`                               | Vendored   | `HoverCard`                              | Read         |
+| `docs/v1-execution.md`                              | Plan       | Page placeholders table                  | Read         |
 
 Build order: reproduction, model, card link, arrow, replay frames, rendered check.
 
@@ -125,8 +134,10 @@ Run the shared preflight in `docs/v1-execution.md`. Baseline gates have not run 
 
 ## Done when
 
+- [ ] A landed ticket shows its own title and opens its worker's thread, not a reviewer's.
 - [ ] A click anywhere on a landed card, except the arrow, follows a real `<a target="_blank">`
       to the ticket's thread, as the previous dashboard did.
+- [ ] The card shows "PR #N" beside the revision when the feed has a pull request.
 - [ ] The arrow beside the revision opens the pull request and shows only when the feed has a
       valid pull request URL.
 - [ ] Both links work by keyboard and have accessible names.

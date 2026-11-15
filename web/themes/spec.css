@@ -37,7 +37,6 @@
   --green: var(--g);
   --ice: #c3d0d8; /* not kit: the freezer mist has to show on a white body */
   --pkt: var(--o);
-  --tick: var(--g);
   --t-sheen-1a: #ecece9; /* light key */
   --t-sheen-1b: #fdfdfc;
   --t-sheen-2a: #b6b7b1; /* LCD glass */
@@ -46,12 +45,6 @@
   --t-sheen-3b: oklch(0.71 0.18 48);
   --t-sheen-4a: #2c2c2a; /* dark key */
   --t-sheen-4b: #1c1c1b;
-  --t-tab-1g: #f8f8f6; /* badge, ready */
-  --t-tab-1: var(--g);
-  --t-tab-2g: #232322; /* badge on a dark key, error */
-  --t-tab-2: var(--r);
-  --t-tab-3g: #f1f1ee; /* badge, queued */
-  --t-tab-3: #c9c8c3;
   --t-segs-g: #060606; /* display glass with the bar graph's unlit ghost */
   --t-segs: rgba(242, 242, 238, 0.07);
   --t-knob-shade: rgba(83, 80, 70, 0.18);
@@ -143,7 +136,6 @@
   fill: var(--o-ink);
   font-weight: 600;
 }
-:root[data-theme="spec"] .red,
 :root[data-theme="spec"] .verdict.bad {
   fill: var(--r-ink);
   font-weight: 600;
@@ -194,25 +186,6 @@
   stroke-width: 1;
   stroke-dasharray: 3 3;
 }
-:root[data-theme="spec"] .rule {
-  stroke: var(--edge);
-  stroke-width: 1;
-  filter: drop-shadow(0 1px 0 #fff);
-}
-:root[data-theme="spec"] .arrow {
-  stroke: #8f8d87;
-  stroke-width: 1;
-  stroke-dasharray: none;
-}
-:root[data-theme="spec"] .gatewire {
-  stroke: var(--line);
-  stroke-width: 1.1;
-}
-:root[data-theme="spec"] .coming[data-status="idle"] ~ .gatewire {
-  stroke: var(--o-ink);
-  stroke-width: 1.6;
-}
-
 /* ports: bar LEDs set into the edge of each part; the landing lights them */
 :root[data-theme="spec"] :is(.port, .planned .port) {
   fill: var(--unlit);
@@ -244,8 +217,7 @@
 :root[data-theme="spec"]
   #stage
   > .box:not(.integrator, .review)
-  > rect:first-child,
-:root[data-theme="spec"] .gatewire + g > .box > rect:first-child {
+  > rect:first-child {
   fill: url(#t-sheen-2);
   stroke: #f2f2f0;
   stroke-width: 4;
@@ -517,132 +489,6 @@
   stroke-width: 6;
   stroke-linecap: round;
   filter: drop-shadow(0 1px 0 #fff);
-}
-
-/* ---------- stage chips: badges with a status stripe; the stage that is now is the orange key ---------- */
-:root[data-theme="spec"] .chips rect:not(.marker) {
-  fill: url(#t-tab-3);
-  stroke: rgba(83, 80, 70, 0.22);
-  stroke-width: 0.8;
-  stroke-dasharray: none;
-  rx: 8px;
-}
-:root[data-theme="spec"] .chips text {
-  font-size: 8.5px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  fill: var(--dim);
-}
-:root[data-theme="spec"] .chip[data-s="done"] rect {
-  fill: url(#t-tab-1);
-  stroke: rgba(83, 80, 70, 0.3);
-  filter: drop-shadow(0 1px 1px rgba(83, 80, 70, 0.14));
-}
-:root[data-theme="spec"] .chip[data-s="done"] text {
-  fill: var(--mid);
-}
-:root[data-theme="spec"] .chip[data-s="now"] rect {
-  fill: url(#t-sheen-3);
-  stroke: none;
-  filter: drop-shadow(0 2px 0 var(--o-edge))
-    drop-shadow(0 4px 5px color-mix(in oklab, var(--o) 47%, transparent));
-}
-:root[data-theme="spec"] .chip[data-s="now"] text {
-  fill: #fff;
-}
-:root[data-theme="spec"] .chip[data-s="fail"] rect {
-  fill: url(#t-tab-2);
-  stroke: #0e0e0d;
-  stroke-width: 1;
-  filter: drop-shadow(0 2px 0 #0e0e0d);
-}
-:root[data-theme="spec"] .chip[data-s="fail"] text {
-  fill: #f2f2ee;
-}
-:root[data-theme="spec"] .coming[data-status="blocked"] .id {
-  fill: var(--r-ink);
-}
-
-/* ---------- gate detail: the grey LCD with the item-list look ---------- */
-:root[data-theme="spec"] .gatewire + g > text {
-  fill: rgba(20, 20, 19, 0.62);
-}
-:root[data-theme="spec"] .gatewire + g > text .hi {
-  fill: #141413;
-}
-:root[data-theme="spec"] .gatewire + g > text .dim {
-  fill: var(--o-ink);
-  font-weight: 600;
-}
-:root[data-theme="spec"] .gatewire + g > text .green {
-  fill: oklch(0.42 0.14 150);
-}
-:root[data-theme="spec"] .gatewire + g > text .red {
-  fill: oklch(0.46 0.2 28);
-}
-:root[data-theme="spec"] .chips.filled rect {
-  fill: url(#t-tab-3);
-  stroke: rgba(20, 20, 19, 0.3);
-}
-:root[data-theme="spec"] .chips.filled text {
-  fill: var(--mid);
-}
-:root[data-theme="spec"] .chips.filled .arrow {
-  stroke: rgba(20, 20, 19, 0.45);
-}
-/* the dash that marks the selected item */
-:root[data-theme="spec"] .marker {
-  fill: rgba(20, 20, 19, 0.3);
-}
-:root[data-theme="spec"] .landing .marker {
-  fill: var(--o-ink);
-}
-
-/* ---------- ticket queue: LEDs ---------- */
-:root[data-theme="spec"] .q circle {
-  r: 5px;
-  fill: var(--g);
-  stroke: none;
-  filter: drop-shadow(0 0 2.5px var(--g));
-}
-:root[data-theme="spec"] .q text {
-  font-size: 8.5px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  fill: var(--mid);
-}
-:root[data-theme="spec"]
-  .q:is([data-status="queued"], [data-status="unknown"])
-  circle {
-  fill: var(--unlit);
-  stroke: rgba(0, 0, 0, 0.22);
-  stroke-width: 0.6;
-  filter: drop-shadow(0 0.5px 0 rgba(255, 255, 255, 0.9));
-}
-:root[data-theme="spec"] .q[data-status="working"] circle {
-  fill: var(--o);
-  filter: drop-shadow(0 0 3px var(--o));
-}
-:root[data-theme="spec"] .q[data-status="working"] text {
-  fill: var(--o-ink);
-}
-:root[data-theme="spec"] .q[data-status="idle"] circle {
-  fill: #fbfbfa;
-  stroke: #2c2c2b;
-  stroke-width: 1.6;
-  filter: none;
-}
-:root[data-theme="spec"] .q[data-status="idle"] text {
-  fill: var(--hi);
-}
-:root[data-theme="spec"] .q[data-status="blocked"] circle {
-  fill: var(--r);
-  stroke: #1d1d1c;
-  stroke-width: 3;
-  filter: none;
-}
-:root[data-theme="spec"] .q[data-status="blocked"] text {
-  fill: var(--r-ink);
 }
 
 /* ---------- packets: an orange key cap with its glow, lit orange inside the display ---------- */

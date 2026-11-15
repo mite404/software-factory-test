@@ -3,6 +3,9 @@
 Read-only page that draws the factory's status feed. It only ever calls `GET /api/status` on its
 own origin.
 
+The default URL shows the SPEC-01 diagram and ticket device. There are no theme or kit switches.
+`?demo` shows labelled sample data in the same page; `tick` selects its starting poll.
+
 ## Run it
 
 `amp orb services ensure` starts the page on a recorded feed and prints its portal URL. No
@@ -32,4 +35,9 @@ sign-in cookie and breaks. For a one-off look from this orb, open
 
 `bun test web`, `bun run typecheck`, `bun run lint:ci`, `bun run format:check`,
 `bun run fallow:ci`. Keep logic in tested functions in `web/derive.ts`; `web/main.ts` only
-paints. After any visual change, screenshot the page and look at it.
+paints. After any visual change, screenshot the page and look at it. Compare the default page at
+wide and narrow widths with the same feed frame. Preserve labelled placeholders until their
+backend tickets supply real data.
+
+`format:check` excludes `.tsx` and `web/themes`, so run Prettier by hand on edited files there.
+Do not edit or reformat the vendored `web/spec/components` or `web/spec/lib` files.
