@@ -23,11 +23,13 @@ it.
 - `Landings` in `web/spec/tickets.tsx` wraps each landed dot in a `span` whose `onClick` calls
   `open(dot.href)`, which is `window.open(href, "_blank", "noreferrer")`. The hover card
   (`Landed`) is rendered inside that span.
-- On 2026-11-15 the Foreman hovered a dot in headless Chromium against the live feed and clicked
-  the dot and the card body; both called `window.open` with the thread URL. The operator's
-  failure was not reproduced. A scripted `window.open` can be dropped by a popup blocker or an
-  embedded view where a real link is not, and it gives no link affordance: no status-bar URL,
-  no middle click, no keyboard focus.
+- The operator's report, 2026-11-15: in Amp's browser pane a click on the card does nothing. In
+  an external browser it opens the thread as a web page. The previous dashboard, which used an
+  SVG `<a target="_blank">`, opened the thread in a new Amp desktop window, and that is what the
+  operator wants.
+- The Foreman confirmed in headless Chromium that a click on the dot and on the card body each
+  calls `window.open` with the thread URL, so the handler runs; the difference is a scripted
+  open against a real link. A real link is also reachable by keyboard and middle click.
 - `Builders` uses the same `onClick` pattern for the working ticket.
 - `Landed` prints `{ticket.title} <span>{ticket.revision}</span>`. Nothing links to GitHub.
 - The feed has no pull request for a ticket. F014 adds a merge record with the pull request
@@ -64,8 +66,8 @@ otherwise.
 
 ## Steps
 
-1. **Reproduce the dead click**. Try the card click on the portal page in a normal browser tab
-   and in an embedded view, and record which one fails and why.
+1. **Compare the old link**. Read how the page linked a ticket before the kit
+   (`git show 586ea64:web/main.ts` and `web/index.html`) and use the same kind of anchor.
 2. **Model the two links**. In `web/derive.ts`, give each ticket a thread URL and a pull request
    URL that is null unless the feed value validates, with tests.
 3. **Make the card a link**. Replace the scripted open on landed dots and builder spots with
@@ -123,10 +125,16 @@ Run the shared preflight in `docs/v1-execution.md`. Baseline gates have not run 
 
 ## Done when
 
-- [ ] A click anywhere on a landed card, except the arrow, opens the ticket's thread.
+- [ ] A click anywhere on a landed card, except the arrow, follows a real `<a target="_blank">`
+      to the ticket's thread, as the previous dashboard did.
 - [ ] The arrow beside the revision opens the pull request and shows only when the feed has a
       valid pull request URL.
 - [ ] Both links work by keyboard and have accessible names.
 - [ ] Screenshots and a recording of the hover, card click and arrow click are inspected and
       named in the report.
 - [ ] Full gates, guard and fresh cold review pass on the exact candidate.
+
+## Notes
+
+The worker cannot test Amp's desktop app. The Foreman asks the operator to confirm, on the live
+portal, that the card opens a thread window in Amp before ticking the first box.
