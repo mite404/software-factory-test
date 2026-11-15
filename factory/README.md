@@ -484,6 +484,9 @@ Reloads reattach reviewers without replacements. Unknown creation or delivery st
 operator reconciliation; missing, invalid, blocked, stale, or unavailable verdicts cannot land or
 consume corrections. Issues return to the original worker, with Foreman escalation after every
 two verification or review rejections. Owner-only `resume` records the next repair decision.
+A gate rejection sends the worker the exit status, marked stdout and stderr tails of at most 8,192
+bytes combined cut on line boundaries, and the full log path, or names the precondition that
+prevented the run.
 A repair reruns the full gate and gets a fresh cold reviewer. Changed code or integration base
 blocks landing until revalidation; prior reports and worktrees remain available as evidence.
 

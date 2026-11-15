@@ -241,12 +241,16 @@ test.each([
       );
       expect(f.messages[1]?.message).not.toContain("CANARY");
       await f.verdict("issues");
+      const evidence = await readFile(review.report, "utf8");
       expect((await f.tick()).runs.A).toMatchObject({
         kind: "running",
         thread: "T-1",
         attempt: 2,
       });
       expect(f.messages.at(-1)?.thread).toBe("T-1");
+      expect(f.messages.at(-1)!.message).toStartWith(
+        `Verification rejected attempt 1. Evidence: ${evidence}. Repair the candidate and submit report attempt 2.\n`,
+      );
       expect(f.messages.at(-1)?.message).toContain("src/value:1");
       await f.submit(2);
       await f.tick();
