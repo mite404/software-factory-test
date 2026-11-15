@@ -473,10 +473,19 @@ Unsupported providers fail visibly. The implementation worker's saved provider d
 not the coordinator's model or subsequently edited worker settings.
 
 The reviewer receives original requirements, staged code/callers, and coordinator gate evidence,
-never worker messages, insights, self-review, or prior reviewer opinions. Its only permitted write
-is its JSON verdict report. Findings require severity, location, concrete evidence, and an
-actionable correction; empty findings can pass. Narrative text and idle state cannot approve a
-candidate.
+never worker messages, insights, self-review, or prior reviewer opinions. It loads `ce-code-review`
+in `mode:agent` and uses its defect-finding method within the factory's read-only, non-delegating
+contract. The factory's rules and JSON verdict override the skill's delegation, fixes, artifact
+writes and report format. The reviewer uses shell and Read to locate the versioned skill in
+`~/.cache/amp/global-skills/ampcode.com/user/`, falling back to the entry under
+`~/.cache/amp/global-skill-manifests/ampcode.com/user/`. If SKILL.md cannot load, the reviewer
+continues without it and adds no finding for the failure. A clean candidate still receives
+`kind: "pass"` with `findings: []`. If references are absent, the reviewer uses SKILL.md alone
+without guessing their contents. Installing or downloading skill files is not part of review.
+Worker process lines in the requirements are not reviewer instructions.
+Its only permitted write is its JSON verdict report. Findings require severity, location,
+concrete evidence, and an actionable correction; empty findings can pass. Narrative text and idle
+state cannot approve a candidate.
 
 Review identity, delivery, verdict evidence, and events live in the existing SQLite run state.
 The dashboard's existing title, thread, revision, and activity fields project the pending review.

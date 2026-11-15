@@ -960,6 +960,9 @@ test.each([
           reasoningEffort: "high",
         });
         expect(models[1]?.instructions).toContain("Do not implement");
+        expect(models[1]?.instructions).toContain(
+          "the ce-code-review skill's SKILL.md and referenced files in the synced user skill caches",
+        );
         const readDashboard = () =>
           Bun.file(join(root, ".git/factory/dashboard.json")).json();
         let dashboard = await readDashboard();

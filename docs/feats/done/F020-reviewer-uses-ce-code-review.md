@@ -108,8 +108,8 @@ Run the shared preflight in `docs/v1-execution.md`. Baseline gates have not run 
 
 ## Done when
 
-- [ ] The reviewer prompt tells the reviewer to load and use `ce-code-review`.
-- [ ] The factory's prohibitions and the JSON verdict are unchanged and rank above the skill.
-- [ ] The reviewer is told that worker process lines in the requirements are not for it.
-- [ ] A review round completes on the fixtures with a parsed verdict.
-- [ ] Full gates, guard and fresh cold review pass on the exact candidate.
+- [x] The reviewer prompt tells the reviewer to load and use `ce-code-review`.
+- [x] The factory's prohibitions and the JSON verdict are unchanged and rank above the skill.
+- [x] The reviewer is told that worker process lines in the requirements are not for it.
+- [x] A review round completes on the fixtures with a parsed verdict.
+- [x] Full gates, guard and fresh cold review pass on the exact candidate.

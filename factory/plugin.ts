@@ -230,7 +230,7 @@ export default function registerFactory(
         reasoningEffort,
         instructions:
           role === "reviewer"
-            ? "Independently review the named post-graft code artifact. Read only code, requirements and coordinator gate evidence. Do not implement or delegate. Write only the requested verdict report."
+            ? "Independently review the named post-graft code artifact. Read only code, requirements, coordinator gate evidence, and the ce-code-review skill's SKILL.md and referenced files in the synced user skill caches. Do not implement or delegate. Write only the requested verdict report."
             : "Implement the assigned factory ticket in its named local repository. Keep tool output concise.",
         tools: [
           "shell_command",
