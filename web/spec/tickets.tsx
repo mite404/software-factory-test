@@ -199,17 +199,9 @@ function Sheet({ ticket }: { ticket: Ticket }) {
           <dd>
             <span>3</span>unchanged: HEAD still the candidate, tree still clean
           </dd>
-          <dd>
-            <span />
-            check ticks are illustrative, not live
-          </dd>
         </div>
         <div>
           <dt>Record</dt>
-          <dd>
-            <span>review</span>
-            {ticket.review}
-          </dd>
           <dd>
             <span>revision</span>
             {ticket.revision || "not landed"}
