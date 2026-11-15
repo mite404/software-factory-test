@@ -73,20 +73,20 @@ In dispatch order.
 
 ## Done (15)
 
-| Ticket                                                                             | Outcome                                        | Done when |
-| ---------------------------------------------------------------------------------- | ---------------------------------------------- | --------- |
-| [foreman-watchdog-ticket2](feats/done/foreman-watchdog-ticket2.md)                 | Progress-based nudges and alert intent         | 4/4       |
-| [F001-backup-commit-identity](feats/done/F001-backup-commit-identity.md)           | Backup works under orb commit signing          | 5/5       |
-| [F002-worker-runner-executor](feats/done/F002-worker-runner-executor.md)           | Workers survive a Foreman CLI restart          | 6/6       |
-| [planned-intake-ticket1](feats/done/planned-intake-ticket1.md)                     | Planned backlog without accidental dispatch    | 4/4       |
-| [F008-gate-failure-feedback](feats/done/F008-gate-failure-feedback.md)             | A failed gate returns its output to the worker | 5/5       |
-| [F016-kit-page-default](feats/done/F016-kit-page-default.md)                       | The kit page is the only dashboard             | 5/5       |
-| [F021-merge-record](feats/done/F021-merge-record.md)                               | Each landed ticket records its pull request    | 5/5       |
-| [F019-gate-rerun-before-rejection](feats/done/F019-gate-rerun-before-rejection.md) | A load flake in the gate does not reject       | 6/6       |
-| [F024-serial-test-runs](feats/done/F024-serial-test-runs.md)                       | Test runs on one machine take turns            | 5/5       |
-| [noninteractive-launcher-ticket1](feats/done/noninteractive-launcher-ticket1.md)   |                                                | 4/4       |
-| [repair-escalation-ticket1](feats/done/repair-escalation-ticket1.md)               |                                                | 5/5       |
-| [ticket-step-labels-ticket1](feats/done/ticket-step-labels-ticket1.md)             |                                                | 6/6       |
-| [v1-ticket1](feats/done/v1-ticket1.md)                                             |                                                | 3/3       |
-| [v1-ticket2](feats/done/v1-ticket2.md)                                             |                                                | 4/4       |
-| [worktree-setup-ticket1](feats/done/worktree-setup-ticket1.md)                     |                                                | 5/5       |
+| Ticket                                                                             | Outcome                                         | Done when |
+| ---------------------------------------------------------------------------------- | ----------------------------------------------- | --------- |
+| [foreman-watchdog-ticket2](feats/done/foreman-watchdog-ticket2.md)                 | Progress-based nudges and alert intent          | 4/4       |
+| [F001-backup-commit-identity](feats/done/F001-backup-commit-identity.md)           | Backup works under orb commit signing           | 5/5       |
+| [F002-worker-runner-executor](feats/done/F002-worker-runner-executor.md)           | Workers survive a Foreman CLI restart           | 6/6       |
+| [planned-intake-ticket1](feats/done/planned-intake-ticket1.md)                     | Planned backlog without accidental dispatch     | 4/4       |
+| [F008-gate-failure-feedback](feats/done/F008-gate-failure-feedback.md)             | A failed gate returns its output to the worker  | 5/5       |
+| [F016-kit-page-default](feats/done/F016-kit-page-default.md)                       | The kit page is the only dashboard              | 5/5       |
+| [F021-merge-record](feats/done/F021-merge-record.md)                               | Each landed ticket records its pull request     | 5/5       |
+| [F019-gate-rerun-before-rejection](feats/done/F019-gate-rerun-before-rejection.md) | A load flake in the gate does not reject        | 6/6       |
+| [F024-serial-test-runs](feats/done/F024-serial-test-runs.md)                       | Test runs on one machine take turns             | 5/5       |
+| [v1-ticket1](feats/done/v1-ticket1.md)                                             | Public titles never show private briefs         | 3/3       |
+| [v1-ticket2](feats/done/v1-ticket2.md)                                             | One versioned definition that never auto-runs   | 4/4       |
+| [worktree-setup-ticket1](feats/done/worktree-setup-ticket1.md)                     | Each worktree is ready before its worker starts | 5/5       |
+| [noninteractive-launcher-ticket1](feats/done/noninteractive-launcher-ticket1.md)   | Setup and gates ignore shell startup files      | 4/4       |
+| [repair-escalation-ticket1](feats/done/repair-escalation-ticket1.md)               | Escalated repairs resume on the same worker     | 5/5       |
+| [ticket-step-labels-ticket1](feats/done/ticket-step-labels-ticket1.md)             | Dashboard shows ticket steps and target branch  | 6/6       |
