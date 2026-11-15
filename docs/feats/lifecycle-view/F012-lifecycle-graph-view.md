@@ -8,8 +8,8 @@
 - Risk: normal; a read-only page section. A wrong drawing can mislead, so it is derived, not
   hand-drawn.
 - Depends on: F007-run-transition-table, F011-step-actor-labels and F014-lifecycle-stages, whose
-  named stages are the nodes this view draws. v1-ticket23 adds richer stage facts and is not
-  required.
+  named stages are the nodes this view draws, and F016-kit-page-default, whose page it is drawn
+  on. v1-ticket23 adds richer stage facts and is not required.
 - Planned at: `b3127226af36e10022461c1c626ea2602c70948c`, 2026-11-15. Local only.
 
 ## Why this matters
@@ -31,13 +31,20 @@ this view is missing.
 
 ## Approach
 
-Add one section to the existing page, drawn from the F007 table in the feed. States on the
-normal path run left to right. Stops hang below the state they leave, each with its exits named.
-Every ticket appears as a marker on its current state, linked to its thread like a card.
+Add one section to the kit page (`web/spec/tickets.tsx`), drawn from the F007 table and the
+F014 stage list in the feed. States on the normal path run left to right. Stops hang below the
+state they leave, each with its exits named. Every ticket appears as a marker on its current
+state, linked to its thread like a card.
 
-Order and colour follow who must act, most urgent first: the operator, the Foreman, a clock,
-then work in progress, then quiet states. A count of tickets waiting for the operator is always
-visible at the start of the section.
+Colour keeps the page's meaning for state: green done, orange now, red blocked with a second
+cue that is not colour, unlit queued. `uncertain` has its own cue. Who must act is shown as
+text and by order, most urgent first: the operator, the Foreman, a clock, then work in progress,
+then quiet states. A clock wait is dim and shows a countdown to its clear time. A count of
+tickets waiting for the operator is always visible at the start of the section.
+
+A blocked ticket shows a banner with who must act, the declared reason code and its label from
+the feed, the exit action, the thread that caused the stop with its role, and when it stopped.
+Add `web/replay.ts` frames for each case in the test plan.
 
 The feed gains the run's real kind and stop reason as curated values, so the graph does not
 infer a state from the five public statuses.
@@ -78,13 +85,13 @@ the four states listed in the steps.
 
 ## Files You'll Touch
 
-| Path                                                | Role       | Contains                      | Edit or Read |
-| --------------------------------------------------- | ---------- | ----------------------------- | ------------ |
-| `factory/dashboard.ts`, `factory/dashboard.test.ts` | Projection | Public statuses and feed      | Edit         |
-| `web/derive.ts`, `web/derive.test.ts`               | Page model | Cards, steps, thread links    | Edit         |
-| `web/main.ts`, `web/index.html`, `web/style.css`    | Page       | Drawing                       | Edit         |
-| `factory/persistence.ts`                            | Records    | The lifecycle table from F007 | Read         |
-| `factory/README.md`                                 | Operation  | Dashboard sections            | Edit         |
+| Path                                                            | Role       | Contains                      | Edit or Read |
+| --------------------------------------------------------------- | ---------- | ----------------------------- | ------------ |
+| `factory/dashboard.ts`, `factory/dashboard.test.ts`             | Projection | Public statuses and feed      | Edit         |
+| `web/derive.ts`, `web/derive.test.ts`                           | Page model | Cards, steps, thread links    | Edit         |
+| `web/spec/tickets.tsx`, `web/spec/tickets.css`, `web/replay.ts` | Page       | Drawing                       | Edit         |
+| `factory/persistence.ts`                                        | Records    | The lifecycle table from F007 | Read         |
+| `factory/README.md`                                             | Operation  | Dashboard sections            | Edit         |
 
 Build order: feed, model, drawing, rendered check, documents.
 
