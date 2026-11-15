@@ -102,13 +102,22 @@ Run the shared preflight in `docs/v1-execution.md`. Baseline gates have not run 
 
 ## Done when
 
-- [ ] An unclear creation or delivery with a conclusive lookup continues without the Foreman.
-- [ ] No case creates a second thread or delivers a brief twice.
-- [ ] An inconclusive lookup parks exactly as before.
-- [ ] Saved state from before this change opens unchanged.
-- [ ] Full gates, guard and fresh cold review pass on the exact candidate.
+- [x] An unclear delivery with a conclusive lookup continues without the Foreman. Creation stays
+      parked because no supported lookup exists (see Notes).
+- [x] No case creates a second thread or delivers a brief twice.
+- [x] An inconclusive lookup parks exactly as before.
+- [x] Saved state from before this change opens unchanged.
+- [x] Full gates, guard and fresh cold review pass on the exact candidate.
 
 ## Notes
 
 The Foreman probes the live lookup shapes before dispatch and puts them in the brief. If no
 supported lookup exists for one of the two cases, that case stays parked and the ticket says so.
+
+Outcome: delivery recovers by reading the thread's full paginated messages. Creation stays parked:
+the plugin API has only `threads.get(id)`, with no list or search, so no lookup is conclusive. The
+native check rejected the candidate only on an unformatted base `.factory-tickets.json` outside
+the ticket's paths, so the Foreman ran the cold review with ce-code-review on the exact commit.
+Its non-blocking follow-ups: treat an absent read right after a failed send as inconclusive until
+a short settle delay passes, delete only a `delivery-unknown` incident on recovery, and await the
+`rejects.toThrow` assertions in `native.test.ts` and `review.test.ts`.
