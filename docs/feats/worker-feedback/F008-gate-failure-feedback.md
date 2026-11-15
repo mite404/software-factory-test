@@ -96,8 +96,8 @@ Run the shared preflight in `docs/v1-execution.md`. Baseline gates have not run 
 
 ## Done when
 
-- [ ] A gate rejection message contains the exit status and the end of the gate output.
-- [ ] The excerpt has a fixed byte limit and the full log path follows it.
-- [ ] A precondition failure names the precondition.
-- [ ] Review rejection text, events and the escalation rule are unchanged.
-- [ ] Full gates, guard and fresh cold review pass on the exact candidate.
+- [x] A gate rejection message contains the exit status and the end of the gate output.
+- [x] The excerpt has a fixed byte limit and the full log path follows it.
+- [x] A precondition failure names the precondition.
+- [x] Review rejection text, events and the escalation rule are unchanged.
+- [x] Full gates, guard and fresh cold review pass on the exact candidate.

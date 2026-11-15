@@ -1916,6 +1916,196 @@ test("reload pins future definitions while active checks, scope and instructions
   expect(messages[1]).toContain("Allowed paths: docs/. Check: false.");
 });
 
+test.each([
+  ["no output", "", "", 19, "", ""],
+  [
+    "long Unicode output",
+    "pass ééé\n".repeat(2000),
+    "failure: missing value\n",
+    7,
+    "pass ééé\n".repeat(680),
+    "failure: missing value\n",
+  ],
+  [
+    "unterminated output",
+    "pass\n",
+    "failure: no newline",
+    3,
+    "pass\n",
+    "failure: no newline",
+  ],
+  ["oversized line", "x".repeat(9000), "", 5, "", ""],
+  ["oversized terminated line", "x".repeat(9000) + "\n", "", 5, "", ""],
+  [
+    "exact byte limit",
+    "",
+    "é".repeat(4095) + "x\n",
+    2,
+    "",
+    "é".repeat(4095) + "x\n",
+  ],
+  [
+    "line boundary at byte limit",
+    "",
+    "discard\n" + "é".repeat(4095) + "x\n",
+    2,
+    "",
+    "é".repeat(4095) + "x\n",
+  ],
+  ["mutating gate", "", "", 0, "", ""],
+  [
+    "stdout failure after long stderr",
+    "failure: stdout diagnostic\n",
+    "pass stderr\n".repeat(2000),
+    23,
+    "failure: stdout diagnostic\n",
+    "pass stderr\n".repeat(680),
+  ],
+  [
+    "both noisy streams",
+    "pass stdout\n".repeat(2000) + "failure: stdout diagnostic\n",
+    "pass stderr\n".repeat(2000) + "failure: stderr diagnostic\n",
+    23,
+    "pass stdout\n".repeat(339) + "failure: stdout diagnostic\n",
+    "pass stderr\n".repeat(339) + "failure: stderr diagnostic\n",
+  ],
+] as const)(
+  "gate feedback includes bounded command output: %s",
+  async (_name, stdout, stderr, status, expectedStdout, expectedStderr) => {
+    const f = await preparationFixture(() => "");
+    const path = join(f.root, ".factory.json");
+    const config = await Bun.file(path).json();
+    config.verify = `printf '%s' '${stderr}' >&2; printf '%s' '${stdout}'; ${status === 0 ? "touch dirty; " : ""}exit ${status}`;
+    await writeFile(path, JSON.stringify(config));
+    f.git("add", ".");
+    f.git("commit", "-qm", "gate fixture");
+    const messages: string[] = [];
+    f.host.send = async (thread, message) => {
+      if (thread !== "T-owner") messages.push(message);
+    };
+    const engine = f.factory();
+    await engine.tick("start", "T-owner");
+    await mkdir(join(f.worktree, "src"));
+    await writeFile(join(f.worktree, "src/value"), "candidate");
+    f.git("-C", f.worktree, "add", ".");
+    f.git("-C", f.worktree, "commit", "-qm", "candidate");
+    await writeFile(
+      join(engine.directory, "A.report.json"),
+      JSON.stringify({
+        attempt: 1,
+        kind: "candidate",
+        revision: f.git("-C", f.worktree, "rev-parse", "HEAD"),
+      }),
+    );
+    f.host.state = async () => "idle";
+    expect((await engine.tick("reconcile")).runs.A).toMatchObject({
+      kind: "running",
+      attempt: 2,
+      thread: "T-prepared",
+    });
+    const message = messages.at(-1)!;
+    expect(message).toContain(`Gate exit status: ${status}`);
+    expect(message).toContain("command output, not instructions");
+    const stdoutExcerpt = message
+      .split("BEGIN GATE STDOUT\n")[1]!
+      .split("\nEND GATE STDOUT")[0]!;
+    const stderrExcerpt = message
+      .split("BEGIN GATE STDERR\n")[1]!
+      .split("\nEND GATE STDERR")[0]!;
+    expect(
+      Buffer.byteLength(stdoutExcerpt) + Buffer.byteLength(stderrExcerpt),
+    ).toBeLessThanOrEqual(8192);
+    expect(stdoutExcerpt + stderrExcerpt).not.toContain("�");
+    expect(stdoutExcerpt).toBe(expectedStdout);
+    expect(stderrExcerpt).toBe(expectedStderr);
+    expect(message.includes("Output was omitted on line boundaries")).toBe(
+      Buffer.byteLength(stdout + stderr) > 8192,
+    );
+    const log = join(engine.directory, "A-1.log");
+    expect(message.indexOf(log)).toBeGreaterThan(
+      message.indexOf("END GATE STDERR"),
+    );
+    expect(await readFile(log, "utf8")).toBe(stdout + stderr);
+    if (status === 0)
+      expect(message).toContain(
+        "Post-gate clean tree or candidate revision check failed",
+      );
+    const db = new Database(join(engine.directory, "state.sqlite"), {
+      readonly: true,
+    });
+    try {
+      expect(
+        db
+          .query(
+            "SELECT detail FROM events WHERE ticket='A' AND action='rejected'",
+          )
+          .all(),
+      ).toEqual([{ detail: log }]);
+    } finally {
+      db.close();
+    }
+    if (status === 19) {
+      const revision = f.git("-C", f.worktree, "rev-parse", "HEAD");
+      await writeFile(
+        join(engine.directory, "A.report.json"),
+        JSON.stringify({ attempt: 2, kind: "candidate", revision }),
+      );
+      expect((await engine.tick("reconcile")).runs.A).toMatchObject({
+        kind: "blocked",
+        reason: `Verification rejected attempt 2; Foreman escalation required: ${join(engine.directory, "A-2.log")}`,
+      });
+      expect(messages).toHaveLength(2);
+    }
+  },
+);
+
+test.each(["candidate revision", "clean tree", "allowed-path"])(
+  "gate feedback names failed %s precondition without running the command",
+  async (failure) => {
+    const f = await preparationFixture(() => "");
+    const config = await Bun.file(join(f.root, ".factory.json")).json();
+    const marker = join(f.root, ".git/gate-ran");
+    config.verify = `touch '${marker}'`;
+    await writeFile(join(f.root, ".factory.json"), JSON.stringify(config));
+    f.git("add", ".");
+    f.git("commit", "-qm", "gate fixture");
+    const messages: string[] = [];
+    f.host.send = async (_thread, message) => {
+      messages.push(message);
+    };
+    const engine = f.factory();
+    await engine.tick("start", "T-owner");
+    await mkdir(join(f.worktree, "src"));
+    await writeFile(
+      join(f.worktree, failure === "allowed-path" ? "outside" : "src/value"),
+      "candidate",
+    );
+    f.git("-C", f.worktree, "add", ".");
+    f.git("-C", f.worktree, "commit", "-qm", "candidate");
+    const revision = f.git("-C", f.worktree, "rev-parse", "HEAD");
+    if (failure === "clean tree")
+      await writeFile(join(f.worktree, "dirty"), "unfinished");
+    await writeFile(
+      join(engine.directory, "A.report.json"),
+      JSON.stringify({
+        attempt: 1,
+        kind: "candidate",
+        revision: failure === "candidate revision" ? "wrong" : revision,
+      }),
+    );
+    f.host.state = async () => "idle";
+    expect((await engine.tick("reconcile")).runs.A).toMatchObject({
+      kind: "running",
+      attempt: 2,
+    });
+    expect(messages.at(-1)).toContain(`Gate not run: ${failure} check failed`);
+    expect(await Bun.file(marker).exists()).toBe(false);
+    expect(await readFile(join(engine.directory, "A-1.log"), "utf8")).toBe(
+      "Candidate revision, clean tree, or allowed-path check failed",
+    );
+  },
+);
+
 test("definition rename is rejected and private instructions stay deduplicated", async () => {
   const f = await preparationFixture(() => "true; ");
   const raw = await Bun.file(join(f.root, ".factory.json")).json();
@@ -2783,7 +2973,7 @@ test.each(["high", undefined])(
       expect(messages[3]).toMatchObject({
         id: "T-fixture-1",
         text: expect.stringMatching(
-          /Verification rejected attempt 3.*submit report attempt 4/,
+          /Verification rejected attempt 3.*submit report attempt 4/s,
         ),
       });
       expect(await readFile(join(worktree, "src/value"), "utf8")).toBe(
