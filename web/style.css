@@ -11,7 +11,6 @@
   --green: #86d39c;
   --ice: #bfe3f2;
   --pkt: #cfcfcf; /* a packet in flight */
-  --tick: #2f4a3a; /* a verify check as it ticks */
   color-scheme: dark;
 }
 
@@ -90,16 +89,10 @@ body {
 }
 
 /* structure */
-.wire,
-.rule,
-.arrow {
+.wire {
   fill: none;
   stroke: var(--line);
   stroke-width: 1.5;
-}
-.arrow {
-  stroke: var(--edge);
-  stroke-dasharray: 3 3;
 }
 .box > rect:first-child,
 .planned rect {
@@ -252,9 +245,6 @@ body {
   stroke-width: 1.5;
   opacity: 0;
 }
-.red {
-  fill: var(--red);
-}
 #play {
   position: fixed;
   top: 14px;
@@ -297,91 +287,6 @@ body {
   stroke-width: 1.5;
   paint-order: stroke;
   r: 8px;
-}
-
-/* chips */
-.chips rect:not(.marker) {
-  fill: none;
-  stroke: var(--edge);
-  stroke-width: 1.2;
-  stroke-dasharray: 3 3;
-}
-.chips text {
-  font-size: 10.5px;
-  text-anchor: middle;
-  fill: var(--mid);
-}
-.chips.filled rect {
-  fill: #1c2a22;
-  stroke: #2f4a3a;
-}
-.chips.dashed text {
-  fill: var(--dim);
-}
-/* ticket rows: stages reached, as inferred by derive.ts */
-.chip[data-s="done"] rect {
-  fill: #1c2a22;
-  stroke: #2f4a3a;
-  stroke-dasharray: none;
-}
-.chip[data-s="done"] text {
-  fill: var(--green);
-}
-.chip[data-s="now"] rect {
-  stroke: var(--amber);
-}
-.chip[data-s="now"] text {
-  fill: var(--amber);
-}
-.chip[data-s="fail"] rect {
-  stroke: var(--red);
-}
-.chip[data-s="fail"] text,
-.coming[data-status="blocked"] .id {
-  fill: var(--red);
-}
-.coming[data-status="idle"] ~ .gatewire {
-  stroke: var(--amber);
-}
-.marker {
-  fill: #77777b;
-  transform: translate(226px, 598px);
-}
-
-/* ticket queue */
-.q:is(:not([data-status]), [data-status="empty"]) {
-  display: none;
-}
-.q circle {
-  fill: #a9a9ac;
-}
-.q text {
-  font-size: 9px;
-  text-anchor: middle;
-  fill: var(--mid);
-}
-.q:is([data-status="queued"], [data-status="unknown"]) circle {
-  fill: var(--bg);
-  stroke: var(--dim);
-  stroke-width: 1.5;
-}
-.q[data-status="unknown"] circle {
-  stroke-dasharray: 2 2;
-}
-.q[data-status="working"] circle {
-  fill: var(--amber);
-}
-.q[data-status="working"] text {
-  fill: var(--amber);
-}
-.q[data-status="idle"] circle {
-  fill: var(--hi);
-}
-.q[data-status="blocked"] circle {
-  fill: var(--red);
-}
-.q[data-status="blocked"] text {
-  fill: var(--red);
 }
 
 /* packets ride SVG paths; main.ts adds .go and the stage's .landing for one cycle */
@@ -532,10 +437,6 @@ body {
 .landing .load {
   animation: load 1.15s 1.9s linear;
 }
-/* The six checks tick while the marker sits on verify. */
-.landing .checks rect {
-  animation: tick 0.3s calc(2.35s + var(--i) * 75ms);
-}
 .landing .integrator .port {
   animation: lit 1.7s 1.7s;
 }
@@ -557,10 +458,6 @@ body {
 .landing .s4 {
   animation-delay: 2.88s;
   animation-duration: 0.8s;
-}
-.landing .marker {
-  animation: walk 3.6s 1.75s steps(1) both;
-  fill: var(--hi);
 }
 .landing .landed.last {
   animation: pop 0.5s 5.3s backwards;
@@ -866,17 +763,6 @@ body {
     opacity: 1;
   }
 }
-@keyframes walk {
-  0% {
-    transform: translate(226px, 598px);
-  }
-  17% {
-    transform: translate(538px, 598px);
-  }
-  29% {
-    transform: translate(1008px, 598px);
-  }
-}
 @keyframes shut {
   0%,
   100% {
@@ -964,12 +850,6 @@ body {
   }
   to {
     scale: 1 1;
-  }
-}
-@keyframes tick {
-  50% {
-    fill: var(--tick);
-    stroke: var(--green);
   }
 }
 @keyframes pop {

@@ -11,7 +11,6 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="./style.css" />
-    <!-- Skins: ?theme=<name> picks one, see web/themes. -->
     <link rel="stylesheet" href="./themes/spec.css" />
   </head>
   <body>
@@ -77,7 +76,7 @@
           id="fg-out"
           d="M1212 313 H1221 Q1233 313 1233 325 V488 Q1233 500 1221 500 H48 Q36 500 36 488 V126 Q36 114 48 114 H66"
         />
-        <!-- Paint servers for the skins in web/themes, coloured by their CSS variables. The default skin uses none. -->
+        <!-- Diagram paint servers, coloured by the SPEC-01 CSS variables. -->
         <linearGradient id="t-sheen-1" x2="0" y2="1">
           <stop offset="0" style="stop-color: var(--t-sheen-1a, #888)" />
           <stop offset="1" style="stop-color: var(--t-sheen-1b, #444)" />
@@ -94,40 +93,6 @@
           <stop offset="0" style="stop-color: var(--t-sheen-4a, #888)" />
           <stop offset="1" style="stop-color: var(--t-sheen-4b, #444)" />
         </linearGradient>
-        <!-- t-tab-*: a ground and a 3x11 status stripe 4 units in from the left of any rect 22 units high. The tile is the rect's own box; the content is in user units. -->
-        <pattern id="t-tab-1" width="1" height="1">
-          <rect width="400" height="22" style="fill: var(--t-tab-1g, none)" />
-          <rect
-            x="4"
-            y="5.5"
-            width="3"
-            height="11"
-            rx="1.5"
-            style="fill: var(--t-tab-1, #888)"
-          />
-        </pattern>
-        <pattern id="t-tab-2" width="1" height="1">
-          <rect width="400" height="22" style="fill: var(--t-tab-2g, none)" />
-          <rect
-            x="4"
-            y="5.5"
-            width="3"
-            height="11"
-            rx="1.5"
-            style="fill: var(--t-tab-2, #888)"
-          />
-        </pattern>
-        <pattern id="t-tab-3" width="1" height="1">
-          <rect width="400" height="22" style="fill: var(--t-tab-3g, none)" />
-          <rect
-            x="4"
-            y="5.5"
-            width="3"
-            height="11"
-            rx="1.5"
-            style="fill: var(--t-tab-3, #888)"
-          />
-        </pattern>
         <!-- t-knob: a round cap with a ring and a pointer lamp, drawn in the middle of a circle and scaled to it. -->
         <pattern
           id="t-knob"
@@ -189,50 +154,6 @@
         <clipPath id="press">
           <rect x="679" y="146" width="140" height="94" rx="7" />
         </clipPath>
-        <g id="steps" class="chips dashed">
-          <g class="chip">
-            <rect x="311" y="-11" width="68" height="22" rx="5" />
-            <text x="345" y="4">worktree</text>
-          </g>
-          <path class="arrow" d="M381 0 H397" />
-          <g class="chip">
-            <rect x="399" y="-11" width="50" height="22" rx="5" />
-            <text x="424" y="4">setup</text>
-          </g>
-          <path class="arrow" d="M451 0 H467" />
-          <g class="chip">
-            <rect x="469" y="-11" width="108" height="22" rx="5" />
-            <text x="523" y="4">builder thread</text>
-          </g>
-          <path class="arrow" d="M579 0 H595" />
-          <g class="chip">
-            <rect x="597" y="-11" width="88" height="22" rx="5" />
-            <text x="641" y="4">report.json</text>
-          </g>
-          <path class="arrow" d="M687 0 H703" />
-          <g class="chip">
-            <rect x="705" y="-11" width="150" height="22" rx="5" />
-            <text x="780" y="4">gate · 10 min cap</text>
-          </g>
-          <path class="arrow" d="M857 0 H873" />
-          <g class="chip">
-            <rect x="875" y="-11" width="88" height="22" rx="5" />
-            <text x="919" y="4">cold review</text>
-          </g>
-          <path class="arrow" d="M965 0 H981" />
-          <g class="chip">
-            <rect x="983" y="-11" width="68" height="22" rx="5" />
-            <text x="1017" y="4">ff-merge</text>
-          </g>
-          <path class="arrow" d="M1053 0 H1069" />
-          <g
-            class="chip target"
-            data-tip="merge target: must be clean and unmoved before the ff-merge"
-          >
-            <rect x="1071" y="-11" width="44" height="22" rx="5" />
-            <text x="1093" y="4"></text>
-          </g>
-        </g>
       </defs>
 
       <!-- LIVE -->
@@ -577,147 +498,6 @@
           <circle cx="896" cy="203" r="11" />
         </g>
       </g>
-
-      <!-- ACTIVE -->
-      <path class="rule" d="M39 536 H1233" />
-      <text x="39" y="569" class="caps">
-        <tspan class="green">ACTIVE</tspan>
-        <tspan class="dim">·</tspan>
-        <tspan id="next" class="amber"></tspan>
-      </text>
-      <text x="1233" y="569" class="dim end small">
-        <tspan class="green">green</tspan>
-        = done ·
-        <tspan class="amber">amber</tspan>
-        = now
-      </text>
-      <g class="coming" transform="translate(0 607)" hidden>
-        <text x="39" y="-3" class="hi id"></text>
-        <text x="39" y="18" class="dim title"></text>
-      </g>
-      <!-- the gate pill above opens into this box; its output feeds cold review -->
-      <path class="arrow gatewire" d="M780 619 V632 M919 632 V619" />
-      <g transform="translate(0 48)">
-        <g class="box">
-          <rect x="196" y="584" width="1027" height="130" rx="10" />
-          <rect class="port" x="762" y="581" width="36" height="7" rx="3" />
-          <rect class="port" x="901" y="581" width="36" height="7" rx="3" />
-        </g>
-        <rect class="marker" x="-8" y="-5" width="16" height="7" rx="1" />
-        <text x="218" y="616" class="mid">
-          <tspan class="dim">1</tspan>
-          <tspan class="hi">candidate</tspan>
-          · from report.json
-        </text>
-        <text x="218" y="648" class="dim">revision = HEAD, not the base</text>
-        <text x="218" y="672" class="dim">
-          tree clean · every path in scope
-        </text>
-        <text x="530" y="616" class="mid">
-          <tspan class="dim">2</tspan>
-          <tspan class="hi">verify</tspan>
-          · project check command · 10 min cap
-        </text>
-        <g class="chips filled checks">
-          <rect x="530" y="633" width="44" height="22" rx="5" style="--i: 0" />
-          <text x="552" y="648">test</text>
-          <path class="arrow" d="M576 644 H588" />
-          <rect x="590" y="633" width="44" height="22" rx="5" style="--i: 1" />
-          <text x="612" y="648">lint</text>
-          <path class="arrow" d="M636 644 H648" />
-          <rect x="650" y="633" width="74" height="22" rx="5" style="--i: 2" />
-          <text x="687" y="648">typecheck</text>
-          <path class="arrow" d="M726 644 H738" />
-          <rect x="740" y="633" width="56" height="22" rx="5" style="--i: 3" />
-          <text x="768" y="648">format</text>
-          <path class="arrow" d="M798 644 H810" />
-          <rect x="812" y="633" width="56" height="22" rx="5" style="--i: 4" />
-          <text x="840" y="648">fallow</text>
-          <path class="arrow" d="M870 644 H882" />
-          <rect x="884" y="633" width="80" height="22" rx="5" style="--i: 5" />
-          <text x="924" y="648">diff-check</text>
-        </g>
-        <text x="530" y="672" class="dim small">
-          illustrative ticks · not live
-        </text>
-        <text x="1000" y="616" class="mid">
-          <tspan class="dim">3</tspan>
-          <tspan class="hi">unchanged</tspan>
-        </text>
-        <text x="1000" y="648" class="dim">HEAD still the candidate</text>
-        <text x="1000" y="672" class="dim">tree still clean</text>
-        <text x="218" y="700" class="dim">
-          <tspan class="green">pass</tspan>
-          → cold review
-        </text>
-        <text x="530" y="700" class="dim">
-          <tspan class="red">fail</tspan>
-          → same builder with the log · 2nd fail → escalated
-        </text>
-        <g id="queue" transform="translate(0 164)">
-          <g class="q" transform="translate(884.0 616)">
-            <text y="-17"></text>
-            <circle r="7" />
-          </g>
-          <g class="q" transform="translate(918.6 616)">
-            <text y="-17"></text>
-            <circle r="7" />
-          </g>
-          <g class="q" transform="translate(953.1 616)">
-            <text y="-17"></text>
-            <circle r="7" />
-          </g>
-          <g class="q" transform="translate(987.7 616)">
-            <text y="-17"></text>
-            <circle r="7" />
-          </g>
-          <g class="q" transform="translate(1022.2 616)">
-            <text y="-17"></text>
-            <circle r="7" />
-          </g>
-          <g class="q" transform="translate(1056.8 616)">
-            <text y="-17"></text>
-            <circle r="7" />
-          </g>
-          <g class="q" transform="translate(1091.4 616)">
-            <text y="-17"></text>
-            <circle r="7" />
-          </g>
-          <g class="q" transform="translate(1125.9 616)">
-            <text y="-17"></text>
-            <circle r="7" />
-          </g>
-          <g class="q" transform="translate(1160.5 616)">
-            <text y="-17"></text>
-            <circle r="7" />
-          </g>
-          <g class="q" transform="translate(1195.0 616)">
-            <text y="-17"></text>
-            <circle r="7" />
-          </g>
-        </g>
-      </g>
-
-      <!-- COMING -->
-      <path class="rule" d="M39 800 H1233" />
-      <text x="39" y="832" class="caps">
-        <tspan class="mid">COMING</tspan>
-        <tspan class="dim">· IN ORDER</tspan>
-      </text>
-      <text x="866" y="832" class="dim end small">all tickets</text>
-      <text id="idle-queue" x="39" y="867" class="dim" hidden>
-        nothing pending
-      </text>
-      <g class="coming" transform="translate(0 862)" hidden>
-        <text x="39" y="-3" class="hi id"></text>
-        <text x="39" y="18" class="dim title"></text>
-      </g>
-      <g class="coming" transform="translate(0 920)" hidden>
-        <text x="39" y="-3" class="hi id"></text>
-        <text x="39" y="18" class="dim title"></text>
-      </g>
-
-      <text x="15" y="992" class="dim">read-only · one poll every 5 s</text>
     </svg>
     <div id="tip" hidden></div>
     <button id="play" type="button">▶ replay</button>
