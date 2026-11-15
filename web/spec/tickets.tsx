@@ -62,8 +62,7 @@ const NONE: Ticket = {
   attempt: null,
 };
 const COLUMNS: Column<Ticket>[] = [
-  { key: "id", label: "Ticket", width: "150px", render: (row) => row.id },
-  { key: "title", label: "Title", width: "100px", render: (row) => row.title },
+  { key: "id", label: "Ticket", width: "250px", render: (row) => row.id },
   {
     key: "plan",
     label: "Plan",
@@ -200,17 +199,9 @@ function Sheet({ ticket }: { ticket: Ticket }) {
           <dd>
             <span>3</span>unchanged: HEAD still the candidate, tree still clean
           </dd>
-          <dd>
-            <span />
-            check ticks are illustrative, not live
-          </dd>
         </div>
         <div>
           <dt>Record</dt>
-          <dd>
-            <span>review</span>
-            {ticket.review}
-          </dd>
           <dd>
             <span>revision</span>
             {ticket.revision || "not landed"}
