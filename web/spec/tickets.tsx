@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
 import {
@@ -12,18 +12,22 @@ import {
   ComboboxTrigger,
 } from "@ui-sdk/react/combobox";
 import { Popover, PopoverContent, PopoverTrigger } from "@ui-sdk/react/popover";
+import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "@ui-sdk/react/hover-card";
+import { Tooltip, TooltipTrigger } from "@ui-sdk/react/tooltip";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { BarGraph } from "@/components/ui/bar-graph";
 import { Device } from "@/components/ui/device";
 import { Display } from "@/components/ui/display";
 import { Hardware } from "@/components/ui/hardware";
-import { HoverCard } from "@/components/ui/hover-card";
 import { PageWheel } from "@/components/ui/page-wheel";
 import { ItemList, type Column } from "@/components/ui/item-list";
 import { Lcd, LcdDigits } from "@/components/ui/lcd";
 import { Toasts, notify } from "@/components/ui/toaster";
-import { Tooltip } from "@/components/ui/tooltip";
 import type { Ticket, View } from "../derive";
 import "./kit.css";
 import "./tickets.css";
@@ -48,6 +52,9 @@ const NOTE: Record<string, string> = { fail: " · fail" };
 const TOAST = { success: "success", danger: "error", info: "info" } as const;
 // The feed says "accepted"; the page has always said "landed".
 const WORD: Record<string, string> = { accepted: "landed" };
+const COARSE =
+  typeof matchMedia !== "undefined" && matchMedia("(pointer: coarse)").matches;
+const LETTERS = new Intl.Segmenter();
 const NONE: Ticket = {
   status: "unknown",
   id: "",
@@ -58,6 +65,7 @@ const NONE: Ticket = {
   steps: [],
   plan: [],
   revision: "",
+  pullRequest: null,
   review: "none",
   attempt: null,
 };
@@ -80,10 +88,6 @@ const COLUMNS: Column<Ticket>[] = [
 
 const word = (ticket: Ticket) => WORD[ticket.status] ?? ticket.status;
 const line = (i: number) => ({ "--i": i }) as CSSProperties;
-
-function open(href: string | null) {
-  if (href) window.open(href, "_blank", "noreferrer");
-}
 
 // The dark screen: one ticket, and how far every ticket in the queue window has got.
 function Screen({
@@ -432,12 +436,43 @@ function Everything({ view }: { view: View }) {
   );
 }
 
+function PullRequest({ request }: { request: Ticket["pullRequest"] }) {
+  if (!request) return null;
+  return (
+    <span>
+      {" "}
+      PR #{request.number}{" "}
+      {request.href && (
+        <a
+          data-card-pr
+          href={request.href}
+          target="_blank"
+          rel="noreferrer"
+          aria-label={`Open pull request #${request.number} on GitHub`}
+        >
+          ↗
+        </a>
+      )}
+    </span>
+  );
+}
+
 // What the feed knows about a landed ticket, printed on the hover card.
 function Landed({ ticket, target }: { ticket: Ticket; target: string }) {
   return (
     <>
+      {ticket.href && (
+        <a
+          data-card-thread
+          href={ticket.href}
+          target="_blank"
+          rel="noreferrer"
+          aria-label={`Open ${ticket.id} thread in Amp`}
+        />
+      )}
       <strong style={line(0)}>
         {ticket.title} <span>{ticket.revision}</span>
+        <PullRequest request={ticket.pullRequest} />
       </strong>
       <small style={line(1)}>
         {ticket.id} · landed on {target}
@@ -464,28 +499,122 @@ function Landed({ ticket, target }: { ticket: Ticket; target: string }) {
   );
 }
 
-// Invisible triggers over the diagram: the kit's tooltip on each builder, its hover card on each
-// landed commit. A click still opens the ticket's thread, as the SVG link under it did.
-// A trigger is keyed by its place, not its ticket: tickets shift along the row as they land, and a
-// trigger that moved out from under a still pointer would leave its card open.
+// One element is both the tooltip trigger and the thread link, never a button inside a link.
+function Builder({ cell }: { cell: View["builders"][number] }) {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!COARSE || !open) return;
+    const away = (event: PointerEvent) => {
+      if (!wrap.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const timer = setTimeout(() => setOpen(false), 2500);
+    document.addEventListener("pointerdown", away, true);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener("pointerdown", away, true);
+    };
+  }, [open]);
+  return (
+    <span data-kit="tooltip-wrap" ref={wrap}>
+      <span data-kit="tooltip-legend" data-open={open || undefined} aria-hidden>
+        {Array.from(LETTERS.segment(cell.label), ({ segment }, i) => (
+          <span key={i} style={line(i)}>
+            {segment}
+          </span>
+        ))}
+      </span>
+      <Tooltip open={open} onOpenChange={setOpen} toggleable={COARSE}>
+        <TooltipTrigger
+          data-kit="tooltip-trigger"
+          aria-label={cell.href ? `Open ${cell.id} thread in Amp` : cell.label}
+          render={
+            cell.href ? (
+              <a href={cell.href} target="_blank" rel="noreferrer" />
+            ) : (
+              <button type="button" />
+            )
+          }
+        >
+          <span />
+        </TooltipTrigger>
+      </Tooltip>
+    </span>
+  );
+}
+
 function Builders({ view, spots }: { view: View; spots: Spots }) {
   return view.builders.map(
     (cell, i) =>
       cell.id && (
-        <span
-          key={i}
-          data-spot
-          style={spots.builders[i]}
-          onClick={() => open(cell.href)}
-        >
-          <Tooltip label={cell.label}>
-            <span />
-          </Tooltip>
+        <span key={i} data-spot style={spots.builders[i]}>
+          <Builder cell={cell} />
         </span>
       ),
   );
 }
 
+function Landing({
+  ticket,
+  target,
+  open,
+  onOpenChange,
+}: {
+  ticket: Ticket;
+  target: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const trigger = useRef<HTMLAnchorElement>(null);
+  useEffect(() => {
+    if (!COARSE || !open) return;
+    const away = (event: PointerEvent) => {
+      const node = event.target as Element;
+      if (
+        trigger.current?.contains(node) ||
+        node.closest?.("[data-hover-card]")
+      )
+        return;
+      onOpenChange(false);
+    };
+    document.addEventListener("pointerdown", away, true);
+    return () => document.removeEventListener("pointerdown", away, true);
+  }, [open, onOpenChange]);
+  return (
+    <HoverCard open={open} onOpenChange={COARSE ? undefined : onOpenChange}>
+      <HoverCardTrigger
+        ref={trigger}
+        data-kit="spot"
+        href={ticket.href ?? undefined}
+        target="_blank"
+        rel="noreferrer"
+        tabIndex={0}
+        aria-label={
+          ticket.href
+            ? `Open ${ticket.id} thread in Amp`
+            : `${ticket.id} · landed`
+        }
+        onClick={(event) => {
+          if (!COARSE) return;
+          event.preventDefault();
+          onOpenChange(!open);
+        }}
+      />
+      <HoverCardContent
+        data-kit="popover"
+        data-hover-card
+        side="top"
+        sideOffset={16}
+      >
+        <div data-kit="hover-lcd" data-variant="ticket">
+          <Landed ticket={ticket} target={target} />
+        </div>
+      </HoverCardContent>
+    </HoverCard>
+  );
+}
+
+// Triggers stay keyed by place, so shifting tickets never leaves a card under a still pointer.
 function Landings({ view, spots }: { view: View; spots: Spots }) {
   // The one dot whose card is out, so a sweep along the row never shows two cards.
   const [out, setOut] = useState(-1);
@@ -493,23 +622,15 @@ function Landings({ view, spots }: { view: View; spots: Spots }) {
     const ticket = view.tickets.find((t) => t.id === dot.id);
     return (
       ticket && (
-        <span
-          key={i}
-          data-spot
-          style={spots.main[i]}
-          onClick={() => open(dot.href)}
-        >
-          <HoverCard
-            trigger={<span />}
-            triggerKit="spot"
-            variant="ticket"
+        <span key={i} data-spot style={spots.main[i]}>
+          <Landing
+            ticket={ticket}
+            target={view.target}
             open={out === i}
             onOpenChange={(open) =>
               setOut((now) => (open ? i : now === i ? -1 : now))
             }
-          >
-            <Landed ticket={ticket} target={view.target} />
-          </HoverCard>
+          />
         </span>
       )
     );

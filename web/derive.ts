@@ -6,6 +6,7 @@ import type { DashboardSnapshot } from "../factory/dashboard";
 export type Task = DashboardSnapshot["tasks"][number] & {
   attempt?: number | null; // the worker's current attempt, null before a worker exists
   evidence?: { review: { pending?: boolean; attempt?: number } | null };
+  merge?: { pr: number; url: string | null } | null;
 };
 
 // One step chip of a COMING row, placed in SVG units.
@@ -36,6 +37,7 @@ export type Ticket = Cell & {
   steps: string[]; // the state of each of the 7 stages, as on a COMING row
   plan: string[]; // the ticket's own authored steps, uncut
   revision: string; // short hash, "" until the ticket lands
+  pullRequest: { number: number; href: string | null } | null;
   review: "pending" | "recorded" | "none"; // the cold review record on its current revision
   attempt: number | null;
 };
@@ -141,7 +143,10 @@ function cell(task: Task | undefined): Cell {
     status: task.status,
     id: task.id,
     label: describe(task),
-    href: task.thread ? `https://ampcode.com/threads/${task.thread}` : null,
+    href:
+      task.thread && /^T-[\w-]+$/.exec(task.thread)?.[0] === task.thread
+        ? `https://ampcode.com/threads/${task.thread}`
+        : null,
     stage: stagesOf(task).filter((step) => step === "done").length,
   };
 }
@@ -160,6 +165,22 @@ function stagesOf(task: Task): string[] {
   return steps(task.status, task.evidence?.review?.pending === true);
 }
 
+function pullRequest(merge: Task["merge"]): Ticket["pullRequest"] {
+  if (!merge || !Number.isSafeInteger(merge.pr) || merge.pr <= 0) return null;
+  const parts =
+    /^https:\/\/github\.com\/([\w-]+)\/([\w.-]+)\/pull\/([1-9]\d*)$/.exec(
+      merge.url ?? "",
+    );
+  if (
+    !parts ||
+    [".", ".."].includes(parts[2]!) ||
+    parts[3] !== String(merge.pr)
+  )
+    return { number: merge.pr, href: null };
+  const href = `https://github.com/${parts[1]}/${parts[2]}/pull/${merge.pr}`;
+  return { number: merge.pr, href: href === merge.url ? href : null };
+}
+
 function ticket(task: Task): Ticket {
   const review = task.evidence?.review;
   return {
@@ -168,6 +189,7 @@ function ticket(task: Task): Ticket {
     steps: stagesOf(task),
     plan: task.steps,
     revision: task.revision?.slice(0, 7) ?? "",
+    pullRequest: pullRequest(task.merge),
     review: review?.pending ? "pending" : review ? "recorded" : "none",
     // Older feeds carry the attempt only on a pending review record.
     attempt: task.attempt ?? review?.attempt ?? null,

@@ -199,13 +199,17 @@ function projectTask(
 ) {
   const row = durableTask(id, steps, run);
   const review = reviewFor(id, run);
+  const pending = row.status !== "accepted";
   let gate = null;
   let reviewEvidence = null;
   if (review) {
     const revision = reference(review.revision, /^[a-f0-9]{40}$/);
     const base = reference(review.base, /^[a-f0-9]{40}$/);
-    row.title = `${id} - post-graft review (${review.delivery})`;
-    row.thread = reference(review.thread ?? null, /^T-[\w-]+$/);
+    const thread = reference(review.thread ?? null, /^T-[\w-]+$/);
+    if (pending) {
+      row.title = `${id} - post-graft review (${review.delivery})`;
+      row.thread = thread;
+    }
     row.revision = revision;
     if (row.status === "unknown" && review.delivery !== "sent")
       row.status = "blocked";
@@ -213,8 +217,8 @@ function projectTask(
     reviewEvidence = {
       ...gate,
       attempt: review.attempt,
-      pending: run?.kind !== "done",
-      thread: row.thread,
+      pending,
+      thread,
     };
   }
   applyObservation(row, observed, fresh);

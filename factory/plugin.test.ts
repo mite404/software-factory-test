@@ -453,7 +453,13 @@ test("plugin and HTTP keep private briefs and native titles out of public titles
       steps: ["Verify public identity"],
     }));
     expect(snapshot.tasks).toMatchObject(expected);
-    expect(JSON.parse(body).tasks).toMatchObject(expected);
+    expect(JSON.parse(body).tasks).toMatchObject(
+      expected.map((task) =>
+        task.id === "reviewed"
+          ? { ...task, title: "reviewed", thread: "T-worker" }
+          : task,
+      ),
+    );
     expect(await readFile(join(directory, "state.sqlite"))).toEqual(bytes);
     for (const id of ["T-worker", "T-review", "T-stranger"])
       expect(
