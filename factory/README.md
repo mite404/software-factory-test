@@ -694,6 +694,17 @@ bun test
 bun run fallow:ci
 ```
 
+Every `bun test` loads `factory/test-setup.ts` before loading test files. It keeps the 20 s
+default test timeout and takes an exclusive OS lock on `/tmp/software-factory-bun-test.lock`.
+All checkouts on the machine share that path. The system `/usr/bin/flock` command must be installed.
+The Bun process holds the file descriptor, so exit or SIGKILL releases the lock. Do not delete
+the lock file; its stored PID can be stale when no run holds the lock.
+
+A waiting run writes `Waiting for test lock held by PID <pid> (<seconds>s elapsed)` to stderr
+every 30 s. Waiting precedes test timers, but counts toward the factory gate's fixed 600 000 ms
+budget. A gate that spends that budget waiting still times out. Builds and lint do not take
+this lock.
+
 Installation enables Lefthook. Pre-commit runs type-aware correctness and async-safety lint,
 Oxlint's native TypeScript check over both `src` and `factory`, and a staged-diff Fallow audit.
 Use `lint:type-aware:fix` to apply available lint fixes. CI additionally rejects lint warnings,
