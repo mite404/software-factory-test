@@ -149,6 +149,18 @@ test("the queue window follows the active ticket", () => {
   );
 });
 
+test("an admitted ticket is the active one, ahead of the planned tickets it was picked from", () => {
+  // Real feed from 2026-11-15: F021 was admitted first but listed after fifteen planned tickets.
+  const view = derive(
+    null,
+    feed(["accepted", "planned", "planned", "working"]),
+    NOW,
+  );
+  expect(view.tickets.map((t) => t.id)).toEqual(["T1", "T4", "T2", "T3"]);
+  expect(view.next).toBe("T4, WORKING");
+  expect(view.coming.map((c) => c.id)).toEqual(["T4", "T2", "T3"]);
+});
+
 test("COMING rows lay out a ticket's own steps and drop what does not fit", () => {
   const next = feed(["working", "queued", "queued"]);
   next.tasks[0]!.steps = ["first", "second"];
