@@ -38,6 +38,15 @@ for (const row of coming) {
   row.append(chips, own);
 }
 
+// ?theme=spec&kit swaps everything below the ACTIVE rule for the SPEC-01 device in web/spec.
+const paintKit =
+  PARAMS.get("theme") === "spec" && PARAMS.has("kit")
+    ? (await import("./spec/tickets")).mount(
+        stage,
+        all("#steps .chip:not(.target) text").map((text) => text.textContent!),
+      )
+    : null;
+
 const DEMO_STEPS = [
   ["add steps to queue entry", "pass steps through feed", "render step chips"],
   ["rerun failing tests since green", "bisect flaky suite"],
@@ -188,6 +197,7 @@ function render(view: View) {
   slots.forEach((slot, i) => slot.toggleAttribute("data-on", i < view.slots));
   paintBuilders(view);
   paintTickets(view);
+  paintKit?.(view);
   if (view.reviewFinished)
     cycle(stage, `review-${view.reviewFinished}`, RETURN_MS + 240);
   else animate(view);
