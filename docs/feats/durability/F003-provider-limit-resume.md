@@ -119,12 +119,12 @@ Run the shared preflight in `docs/v1-execution.md`. Baseline gates have not run 
 
 ## Done when
 
-- [ ] A provider usage limit is recorded as `provider-limit` with its reset time, not as
+- [x] A provider usage limit is recorded as `provider-limit` with its reset time, not as
       `worker-error`.
-- [ ] After the reset the same worker or reviewer receives exactly one automatic continuation.
-- [ ] One watchdog wake lands just after the reset, and the 30-minute rule returns afterwards.
-- [ ] Other errors, saved state and unrelated schedules behave as before.
-- [ ] Full gates, guard and fresh cold review pass on the exact candidate.
+- [x] After the reset the same worker or reviewer receives exactly one automatic continuation.
+- [x] One watchdog wake lands just after the reset, and the 30-minute rule returns afterwards.
+- [x] Other errors, saved state and unrelated schedules behave as before.
+- [x] Full gates, guard and fresh cold review pass on the exact candidate.
 - [ ] Live proof by the Foreman when a real limit next occurs; it is not claimed before then.
 
 ## Notes

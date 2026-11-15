@@ -33,8 +33,8 @@ those patterns visible and audits against them.
   answer per question: `choice` with probabilities and confidence, `score` on an ordered
   rubric, or `noul`, the probability a statement is true. Questions are evaluated independently
   in one request. The service asks for backoff on `429` and `529`.
-- The key is the project secret `JEV_API_KEY`. The TypeSafe SDK reads `TYPESAFE_API_KEY` by
-  default, so the name is passed explicitly.
+- The key is the project secret `TYPESAFE_API_KEY`, the name TypeSafe's documentation and SDK
+  use.
 
 ## Approach
 
@@ -143,7 +143,7 @@ Run the shared preflight in `docs/v1-execution.md`. Baseline gates have not run 
 | `git rev-parse HEAD && git status --short`              | Record the dispatch revision; clean tree.       |
 | `git diff --stat 0b8a74d..HEAD -- factory/`             | Revalidate drift.                               |
 | `git diff -- factory/ && git diff --cached -- factory/` | Preserve unrelated changes.                     |
-| `test -n "$JEV_API_KEY" && echo present`                | `present`. Otherwise return to the Foreman.     |
+| `test -n "$TYPESAFE_API_KEY" && echo present`           | `present`. Otherwise return to the Foreman.     |
 | `ls factory/audit.ts`                                   | Absent.                                         |
 | `GIT_CONFIG_GLOBAL=/dev/null bun test factory`          | Passes; CI runners have no global Git identity. |
 

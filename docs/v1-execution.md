@@ -135,9 +135,11 @@ accepted at attempt four and merged through PR #18; see workflow trial 13. Its l
 pending: a scheduled wake of a sleeping orb and real alert delivery. The plugin tool bridge
 installed and cleared a real schedule; see workflow trial 14. F001-backup-commit-identity was
 accepted at attempt one, merged through PR #20, and proven live. F002-worker-runner-executor was
-accepted at attempt one and merged through PR #23. Its live proof first failed and then passed
-after PR #24; see workflow trial 15. planned-intake-ticket1 was accepted at attempt two on the
-runner and merged through PR #25. The planned inventory has not been imported yet.
+accepted at attempt one and merged through PR #23. Its live proof first failed and then passed after
+PR #24; see workflow trial 15. planned-intake-ticket1 was accepted at attempt two on the runner and
+merged through PR #25. F003-provider-limit-resume was accepted at attempt three and merged through
+PR #31; see workflow trial 16. Its live proof at a real provider limit is still pending. The planned
+inventory has not been imported yet.
 
 Next are the five durability units, in table order, which the operator approved after a provider
 limit stopped the factory for two hours. F003-provider-limit-resume is first. The factory runs one
