@@ -8,5 +8,11 @@
     "typescript/no-floating-promises": "error",
     "typescript/no-misused-promises": "error"
   },
+  "overrides": [
+    {
+      "files": ["web/spec/components/**"],
+      "rules": { "typescript/no-misused-spread": "off" }
+    }
+  ],
   "ignorePatterns": [".amp/**", "node_modules/**"]
 }
