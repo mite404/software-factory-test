@@ -144,6 +144,61 @@ afterEach(async () => {
     await rm(root, { recursive: true, force: true });
 });
 
+test("merge records validate on save and reopen without changing legacy runs", async () => {
+  const f = await fixture();
+  const storage = openPersistence(f.directory, queue);
+  storage.commit(parked, "D", "fixture", "legacy");
+  expect(factoryStatus(f.directory)).toEqual(parked);
+  const merge = {
+    pr: 42,
+    commit: "a".repeat(40),
+    at: "2026-11-15T12:34:56.000Z",
+  };
+  const state = structuredClone(parked);
+  const done = state.runs.D! as Extract<
+    State["runs"][string],
+    { kind: "done" }
+  >;
+  done.merge = merge;
+  storage.commit(state, "D", "merge-recorded", merge.commit);
+  storage.close();
+  const reopened = openPersistence(f.directory, queue);
+  try {
+    expect(reopened.state.runs.D).toEqual(done);
+    for (const invalid of [
+      { ...merge, pr: 0 },
+      { ...merge, pr: 1.5 },
+      { ...merge, pr: "42" },
+      { ...merge, commit: "main" },
+      { ...merge, at: "not a date" },
+      { ...merge, url: "https://caller.invalid/private" },
+      null,
+    ]) {
+      const broken = {
+        ...state,
+        runs: { D: { ...done, merge: invalid } },
+      } as unknown as State;
+      expect(() =>
+        reopened.commit(broken, "D", "invalid", "private"),
+      ).toThrow();
+      expect(factoryStatus(f.directory).runs.D).toEqual(done);
+    }
+    expect(() =>
+      reopened.commit(
+        {
+          ...state,
+          runs: { A: { ...parked.runs.A, merge } },
+        } as unknown as State,
+        "A",
+        "invalid",
+        "private",
+      ),
+    ).toThrow();
+  } finally {
+    reopened.close();
+  }
+});
+
 test("planning refresh cannot grant admission or rewrite admitted scope", async () => {
   const f = await fixture();
   const planned = {

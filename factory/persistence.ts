@@ -6,6 +6,11 @@ import { validReview, type Review } from "./review";
 import { validExecutor, type Executor } from "./executor";
 
 export type ThreadID = `T-${string}`;
+export type MergeRecord = {
+  pr: number;
+  commit: string;
+  at: string;
+};
 export type WatchdogPolicy = {
   suspicionMs: number;
   spendingFirstAttempt: number;
@@ -123,6 +128,8 @@ export type Run = (
   | {
       kind: "done";
       revision: string;
+      acceptedBase?: string;
+      merge?: MergeRecord;
       thread: ThreadID;
       insight: string;
       review?: Review;
@@ -283,6 +290,20 @@ function reviewFields(run: Record<string, unknown>): boolean {
   );
 }
 
+function validateMerge(id: string, run: Record<string, unknown>) {
+  if (run.merge === undefined) return;
+  const merge = record(run.merge);
+  const valid =
+    run.kind === "done" &&
+    positiveInteger(merge.pr) &&
+    typeof merge.commit === "string" &&
+    /^[a-f0-9]{40}$/.test(merge.commit) &&
+    typeof merge.at === "string" &&
+    Number.isFinite(Date.parse(merge.at)) &&
+    Object.keys(merge).every((key) => ["pr", "commit", "at"].includes(key));
+  if (!valid) throw new Error(`Invalid factory merge ${id}`);
+}
+
 const runValidators: Record<string, (run: Record<string, unknown>) => boolean> =
   {
     preparing: preparationRun,
@@ -306,6 +327,9 @@ const runValidators: Record<string, (run: Record<string, unknown>) => boolean> =
     uncertain: (run) => text(run.reason) && thread(run.thread),
     done: (run) =>
       text(run.revision) &&
+      (run.acceptedBase === undefined ||
+        (typeof run.acceptedBase === "string" &&
+          /^[a-f0-9]{40}$/.test(run.acceptedBase))) &&
       thread(run.thread) &&
       typeof run.insight === "string" &&
       reviewFields(run),
@@ -430,6 +454,7 @@ function validateIncident(id: string, value: unknown) {
 
 function validateRun(id: string, value: unknown) {
   const run = record(value);
+  validateMerge(id, run);
   validateIncident(id, run.incident);
   validateTiming(id, run);
   if (!validExecutor(run.executor))
@@ -569,6 +594,7 @@ function readState(db: Database): State {
 }
 
 function saveState(db: Database, state: State) {
+  stateRecord(state);
   db.query(
     "INSERT OR REPLACE INTO coordinator (id, enabled, owner) VALUES (1, ?, ?)",
   ).run(Number(state.enabled), state.owner ?? null);

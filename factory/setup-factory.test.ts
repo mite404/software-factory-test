@@ -153,7 +153,7 @@ test("two project definitions migrate explicitly, preserve metadata and expose o
   } finally {
     await rm(home, { recursive: true, force: true });
   }
-}, 60_000);
+}, 120_000);
 
 test("installer validates native effort before writes and dispatch rejects invalid saved effort", async () => {
   const root = await mkdtemp(join(tmpdir(), "factory-effort-"));

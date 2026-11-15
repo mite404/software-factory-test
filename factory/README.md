@@ -490,6 +490,31 @@ prevented the run.
 A repair reruns the full gate and gets a fresh cold reviewer. Changed code or integration base
 blocks landing until revalidation; prior reports and worktrees remain available as evidence.
 
+## Record a merged pull request
+
+After merging an accepted ticket, the owning Foreman calls the factory control tool with
+`action: "record-merge"`, `ticket`, a positive integer `pr`, and the full 40-character merge
+`commit`. Fetch the target branch first. The root checkout's configured upstream is the target
+as last fetched; the action does not fetch, push, or call GitHub.
+
+Recording requires a `done` run, ancestry of the commit in that upstream, and a matching stable
+Git patch ID in a non-merge commit reachable from the merge commit but not from the accepted base.
+The accepted patch is the revision's diff against its saved base. Both diffs use `-U0`, so changes
+to surrounding context do not affect patch identity. Older runs use the review base or, without
+review, the accepted revision's first parent. Cherry-picked integration commits can have different
+hashes and context.
+Git verifies the change and ancestry, not whether GitHub assigned that PR number to the commit.
+
+The record stores `pr`, `commit`, and the commit time as `at`. Repeating the same number and commit
+does not write; conflicting values are refused. Recording works while paused, preserves the
+enabled state, and never dispatches work or changes watchdog schedules. Backfill older accepted
+tickets once from their pull request records.
+
+Each task in `/api/status` includes `merge: { pr, url, commit, at }` or `merge: null`. The URL comes
+only from the root branch's configured GitHub remote and the validated number. HTTPS and SSH
+GitHub.com remotes produce `https://github.com/<owner>/<repo>/pull/<pr>`; other remotes produce
+`url: null`. No caller-supplied URL is accepted or stored. Private briefs and insights are excluded.
+
 ## Refresh an installed adapter
 
 Run the setup command with `--refresh` to rebuild only the repository's generated plugin:

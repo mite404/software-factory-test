@@ -1,6 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
 import type { PluginAPI, PluginToolContext } from "@ampcode/plugin";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, writeFileSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -12,6 +12,253 @@ import { watchdogFixture } from "./bookkeeping.fixture";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
+
+test("owner records a cherry-picked merge across changed adjacent context and publishes only curated metadata", async () => {
+  const root = await mkdtemp(join(tmpdir(), "factory-merge-"));
+  const directory = join(root, ".git/factory");
+  const canary = "PRIVATE-MERGE-BRIEF-CANARY";
+  let effects = 0;
+  const queue = ["A", "legacy", "queued"].map((id) => ({
+    id,
+    brief: canary,
+    after: [],
+  }));
+  let execute!: (
+    input: Record<string, unknown>,
+    ctx: PluginToolContext,
+  ) => Promise<unknown>;
+  let dispose = () => {};
+  let server: ReturnType<typeof startDashboard> | undefined;
+  try {
+    git(root, "init", "-qb", "main");
+    git(root, "config", "user.name", "Fixture");
+    git(root, "config", "user.email", "fixture@example.invalid");
+    await writeFile(join(root, "prd.md"), canary);
+    await writeFile(join(root, "tickets.json"), JSON.stringify(queue));
+    await writeFile(
+      join(root, ".factory.json"),
+      JSON.stringify({
+        version: 1,
+        capacity: 1,
+        workerModel: "openai/gpt-6.1-sol",
+        prd: "prd.md",
+        tickets: "tickets.json",
+        scope: ["src/"],
+        verify: "false",
+        permissions: { execute: false, publish: false, externalTickets: false },
+      }),
+    );
+    await writeFile(join(root, "value"), "context\nbefore\n");
+    git(root, "add", ".");
+    git(root, "commit", "-qm", "base");
+    const base = git(root, "rev-parse", "HEAD");
+    git(root, "checkout", "-qb", "accepted");
+    await writeFile(join(root, "value"), "context\nafter\n");
+    git(root, "commit", "-qam", "accepted change");
+    const revision = git(root, "rev-parse", "HEAD");
+    git(root, "checkout", "-q", "main");
+    await writeFile(join(root, "value"), "main context\nbefore\n");
+    await writeFile(join(root, "unrelated"), "main moved\n");
+    git(root, "add", ".");
+    git(root, "commit", "-qm", "unrelated");
+    const missing = git(root, "rev-parse", "HEAD");
+    git(root, "checkout", "-qb", "integration");
+    const pick = spawnSync("git", ["-C", root, "cherry-pick", revision], {
+      encoding: "utf8",
+    });
+    expect(pick.status).toBe(1);
+    await writeFile(join(root, "value"), "main context\nafter\n");
+    git(root, "add", "value");
+    git(root, "cherry-pick", "--continue");
+    expect(git(root, "rev-parse", "HEAD")).not.toBe(revision);
+    git(root, "checkout", "-q", "main");
+    git(root, "merge", "--no-ff", "-qm", "merge PR", "integration");
+    const commit = git(root, "rev-parse", "HEAD");
+    const at = new Date(
+      git(root, "show", "-s", "--format=%cI", commit),
+    ).toISOString();
+    git(
+      root,
+      "remote",
+      "add",
+      "origin",
+      "git@github.com:example/merge-fixture.git",
+    );
+    git(root, "update-ref", "refs/remotes/origin/main", commit);
+    git(root, "branch", "--set-upstream-to=origin/main", "main");
+    const storage = openPersistence(directory, queue);
+    const done = {
+      kind: "done" as const,
+      revision,
+      thread: "T-worker" as const,
+      insight: canary,
+    };
+    storage.commit(
+      {
+        enabled: false,
+        owner: "T-owner",
+        runs: {
+          A: { ...done, acceptedBase: base },
+          legacy: done,
+        },
+      },
+      "factory",
+      "fixture",
+      canary,
+    );
+    storage.close();
+    const amp = {
+      threads: {
+        get() {
+          effects++;
+          throw new Error("record-merge must not observe or dispatch threads");
+        },
+      },
+      logger: { log() {} },
+      on() {},
+      registerTool(tool: { execute: typeof execute }) {
+        execute = tool.execute;
+      },
+      onDispose(fn: () => void) {
+        dispose = fn;
+      },
+    } as unknown as PluginAPI;
+    registerFactory(amp, root, () => ({
+      async init() {},
+      async close() {},
+      ledger: {
+        async record() {
+          effects++;
+          throw new Error("record-merge must not accept work");
+        },
+      },
+    }));
+    server = startDashboard({ root, port: 0 });
+    const status = async () => {
+      const response = await fetch(
+        `http://localhost:${server!.port}/api/status`,
+      );
+      expect(response.status).toBe(200);
+      const text = await response.text();
+      expect(text).not.toContain(canary);
+      expect(text).not.toContain("caller.invalid");
+      return JSON.parse(text);
+    };
+    expect(
+      (await status()).tasks.map((task: { merge: unknown }) => task.merge),
+    ).toEqual([null, null, null]);
+    const request = {
+      action: "record-merge",
+      ticket: "A",
+      pr: 42,
+      commit,
+      url: `https://caller.invalid/${canary}`,
+    };
+    const owner = {
+      thread: { id: "T-owner" },
+      tools: {
+        async call() {
+          effects++;
+          throw new Error("record-merge must not touch schedules or dispatch");
+        },
+      },
+    } as unknown as PluginToolContext;
+    for (const id of ["T-worker", "T-stranger"])
+      expect(
+        execute(request, { thread: { id } } as unknown as PluginToolContext),
+      ).rejects.toThrow();
+    for (const invalid of [
+      { ticket: "queued" },
+      { ticket: "unknown" },
+      { commit: revision },
+      { commit: missing },
+      { pr: 0 },
+      { pr: -1 },
+      { pr: 1.5 },
+      { pr: "42" },
+      { pr: Number.MAX_SAFE_INTEGER + 1 },
+      { commit: "main" },
+      { commit: "f".repeat(40) },
+    ])
+      expect(execute({ ...request, ...invalid }, owner)).rejects.toThrow();
+    expect(execute({ ...request, commit: base }, owner)).rejects.toThrow(
+      /does not contain the accepted change/,
+    );
+    expect((await status()).tasks[0].merge).toBeNull();
+    await execute(request, owner);
+    const saved = factoryStatus(directory);
+    expect(saved).toMatchObject({
+      enabled: false,
+      owner: "T-owner",
+      runs: {
+        A: {
+          kind: "done",
+          revision,
+          acceptedBase: base,
+          merge: { pr: 42, commit, at },
+        },
+      },
+    });
+    const bytes = await readFile(join(directory, "state.sqlite"));
+    await execute(request, owner);
+    expect(await readFile(join(directory, "state.sqlite"))).toEqual(bytes);
+    for (const conflict of [{ pr: 43 }, { commit: missing }])
+      expect(execute({ ...request, ...conflict }, owner)).rejects.toThrow(
+        /Conflicting/,
+      );
+    const queued = { kind: "creating" as const, base, worktree: "/unused" };
+    const enabled = openPersistence(directory, queue);
+    enabled.commit(
+      { ...saved, enabled: true, runs: { ...saved.runs, queued } },
+      "factory",
+      "fixture",
+      "enabled",
+    );
+    enabled.close();
+    expect(execute({ ...request, ticket: "queued" }, owner)).rejects.toThrow(
+      /done ticket/,
+    );
+    await execute({ ...request, ticket: "legacy" }, owner);
+    const body = await status();
+    expect(body.enabled).toBe(true);
+    expect(factoryStatus(directory).runs.queued).toEqual(queued);
+    expect(effects).toBe(0);
+    expect(body.tasks[0].merge).toEqual({
+      pr: 42,
+      url: "https://github.com/example/merge-fixture/pull/42",
+      commit,
+      at,
+    });
+    expect(body.tasks[1].merge).toEqual(body.tasks[0].merge);
+    expect(body.tasks[2].merge).toBeNull();
+    for (const remote of [
+      "https://github.com/example/merge-fixture.git",
+      "ssh://git@github.com/example/merge-fixture.git",
+    ]) {
+      git(root, "remote", "set-url", "origin", remote);
+      expect((await status()).tasks[0].merge.url).toBe(
+        "https://github.com/example/merge-fixture/pull/42",
+      );
+    }
+    for (const remote of [
+      "https://gitlab.com/example/repo.git",
+      "https://github.com.evil.invalid/example/repo",
+      "https://github.com/example/repo?private=secret",
+    ]) {
+      git(root, "remote", "set-url", "origin", remote);
+      expect((await status()).tasks[0].merge).toEqual({
+        pr: 42,
+        url: null,
+        commit,
+        at,
+      });
+    }
+  } finally {
+    dispose();
+    await server?.stop(true);
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("plugin and HTTP keep private briefs and native titles out of public titles", async () => {
   const root = await mkdtemp(join(tmpdir(), "factory-plugin-privacy-"));
@@ -1484,4 +1731,5 @@ test.each([
       await rm(root, { recursive: true, force: true });
     }
   },
+  30_000,
 );

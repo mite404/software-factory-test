@@ -28,6 +28,7 @@ const controlActions = [
   "resume",
   "reload",
   "admit",
+  "record-merge",
 ] as const;
 
 function activity(value: unknown): Awaited<ReturnType<NativeHost["state"]>> {
@@ -397,8 +398,15 @@ export default function registerFactory(
         ticket: {
           type: "string",
           description:
-            "For admit, one canonical planned ID. Only the owning Foreman may admit it after accepted prerequisites. Admission does not start or dispatch work.",
+            "Canonical ticket ID for admit or record-merge. Only the owning Foreman may use these actions; neither starts or dispatches work.",
         },
+        pr: {
+          type: "integer",
+          minimum: 1,
+          description:
+            "For owner-only record-merge. Git checks the done ticket's change and commit against the fetched upstream. Recording is repeat-safe, works while paused, and has no lifecycle or schedule effects.",
+        },
+        commit: { type: "string", pattern: "^[a-f0-9]{40}$" },
         decision: { type: "string" },
         incident: { type: "string", minLength: 1 },
         message: { type: "string", minLength: 1 },
@@ -416,6 +424,13 @@ export default function registerFactory(
       }
       const action = controlActions.find((action) => action === requested);
       if (!action) throw new Error("Unknown action");
+      if (action === "record-merge")
+        return JSON.stringify(
+          await factory.recordMerge(
+            { ticket: input.ticket, pr: input.pr, commit: input.commit },
+            ctx.thread.id,
+          ),
+        );
       const tools = connectedTools(
         action,
         factoryStatus(factory.directory),

@@ -155,12 +155,47 @@ function attemptOf(run: Run | undefined): number | null {
   return run && "attempt" in run ? (run.attempt ?? null) : null;
 }
 
+function githubRepository(root: string): string | null {
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-C", root, ...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  try {
+    const branch = git("branch", "--show-current");
+    const remote = git("config", "--get", `branch.${branch}.remote`);
+    const url = git("remote", "get-url", remote);
+    const match =
+      /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([\w-]+)\/([\w.-]+?)(?:\.git)?\/?$/.exec(
+        url,
+      );
+    return match && ![".", ".."].includes(match[2]!)
+      ? `${match[1]}/${match[2]}`
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function projectMerge(run: Run | undefined, repository: string | null) {
+  if (run?.kind !== "done" || !run.merge) return null;
+  return {
+    pr: run.merge.pr,
+    url: repository
+      ? `https://github.com/${repository}/pull/${run.merge.pr}`
+      : null,
+    commit: run.merge.commit,
+    at: run.merge.at,
+  };
+}
+
 function projectTask(
   id: string,
   steps: string[],
   run: Run | undefined,
   observed: DashboardSnapshot["tasks"][number] | undefined,
   fresh: boolean,
+  repository: string | null,
 ) {
   const row = durableTask(id, steps, run);
   const review = reviewFor(id, run);
@@ -185,6 +220,7 @@ function projectTask(
   applyObservation(row, observed, fresh);
   return {
     ...row,
+    merge: projectMerge(run, repository),
     // The owning worker's current attempt; a repair after rejection raises it.
     attempt: attemptOf(run),
     evidence: {
@@ -304,6 +340,7 @@ export function startDashboard({ root, port }: { root: string; port: number }) {
           snapshot?.tasks.map((task) => [task.id, task]),
         );
         const publicTickets = new Map(tickets.map((task) => [task.id, task]));
+        const repository = githubRepository(root);
         const tasks = [
           ...new Set([...steps.keys(), ...Object.keys(state.runs)]),
         ].map((id) => {
@@ -314,6 +351,7 @@ export function startDashboard({ root, port }: { root: string; port: number }) {
             Object.hasOwn(state.runs, id) ? state.runs[id] : undefined,
             observed.get(id),
             fresh,
+            repository,
           );
           if (!Object.hasOwn(state.runs, id) && ticket?.intake === "planned")
             row.status = "planned";
