@@ -10,6 +10,8 @@
   --red: #e0605e;
   --green: #86d39c;
   --ice: #bfe3f2;
+  --pkt: #cfcfcf; /* a packet in flight */
+  --tick: #2f4a3a; /* a verify check as it ticks */
   color-scheme: dark;
 }
 
@@ -384,7 +386,7 @@ body {
 
 /* packets ride SVG paths; main.ts adds .go and the stage's .landing for one cycle */
 .pkt {
-  fill: #cfcfcf;
+  fill: var(--pkt);
   opacity: 0;
   offset-rotate: 0deg;
   pointer-events: none; /* an invisible packet at rest must not cover a link */
@@ -697,7 +699,7 @@ body {
   }
   20% {
     offset-distance: 100%;
-    fill: #cfcfcf;
+    fill: var(--pkt);
   }
   54% {
     offset-distance: 100%;
@@ -729,7 +731,7 @@ body {
   }
   68% {
     offset-distance: 100%;
-    fill: #cfcfcf;
+    fill: var(--pkt);
   }
   72% {
     fill: var(--verdict);
@@ -793,7 +795,7 @@ body {
   }
   17.8% {
     offset-distance: 47.2%;
-    fill: #cfcfcf;
+    fill: var(--pkt);
   }
   21% {
     fill: var(--amber);
@@ -966,7 +968,7 @@ body {
 }
 @keyframes tick {
   50% {
-    fill: #2f4a3a;
+    fill: var(--tick);
     stroke: var(--green);
   }
 }
@@ -1062,7 +1064,7 @@ body {
   }
   17.8% {
     offset-distance: 56.6%;
-    fill: #cfcfcf;
+    fill: var(--pkt);
   }
   21% {
     fill: var(--amber);

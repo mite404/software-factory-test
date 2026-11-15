@@ -11,6 +11,16 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="./style.css" />
+    <!-- Skins: ?theme=<name> picks one, see web/themes. -->
+    <link rel="stylesheet" href="./themes/calc.css" />
+    <link rel="stylesheet" href="./themes/synth.css" />
+    <link rel="stylesheet" href="./themes/fono.css" />
+    <link rel="stylesheet" href="./themes/budget.css" />
+    <link rel="stylesheet" href="./themes/saving.css" />
+    <link rel="stylesheet" href="./themes/cockpit.css" />
+    <link rel="stylesheet" href="./themes/spines.css" />
+    <link rel="stylesheet" href="./themes/pilot.css" />
+    <link rel="stylesheet" href="./themes/spec.css" />
   </head>
   <body>
     <!-- One fixed 1280x1152 canvas; the foreman layer sits at negative y. CSS owns every animation; main.ts only sets attributes and text. -->
@@ -75,6 +85,136 @@
           id="fg-out"
           d="M1212 313 H1221 Q1233 313 1233 325 V488 Q1233 500 1221 500 H48 Q36 500 36 488 V126 Q36 114 48 114 H66"
         />
+        <!-- Paint servers for the skins in web/themes, coloured by their CSS variables. The default skin uses none. -->
+        <pattern
+          id="t-hatch"
+          width="5"
+          height="5"
+          patternUnits="userSpaceOnUse"
+          patternTransform="rotate(45)"
+        >
+          <rect width="5" height="5" style="fill: var(--t-ground, none)" />
+          <rect width="2" height="5" style="fill: var(--t-ink, #888)" />
+        </pattern>
+        <pattern
+          id="t-lines"
+          width="5"
+          height="5"
+          patternUnits="userSpaceOnUse"
+        >
+          <rect width="5" height="5" style="fill: var(--t-ground, none)" />
+          <rect width="1" height="5" style="fill: var(--t-ink, #888)" />
+        </pattern>
+        <pattern id="t-dots" width="6" height="6" patternUnits="userSpaceOnUse">
+          <rect width="6" height="6" style="fill: var(--t-ground, none)" />
+          <circle cx="3" cy="3" r="1.3" style="fill: var(--t-ink, #888)" />
+        </pattern>
+        <linearGradient id="t-sheen-1" x2="0" y2="1">
+          <stop offset="0" style="stop-color: var(--t-sheen-1a, #888)" />
+          <stop offset="1" style="stop-color: var(--t-sheen-1b, #444)" />
+        </linearGradient>
+        <linearGradient id="t-sheen-2" x2="0" y2="1">
+          <stop offset="0" style="stop-color: var(--t-sheen-2a, #888)" />
+          <stop offset="1" style="stop-color: var(--t-sheen-2b, #444)" />
+        </linearGradient>
+        <linearGradient id="t-sheen-3" x2="0" y2="1">
+          <stop offset="0" style="stop-color: var(--t-sheen-3a, #888)" />
+          <stop offset="1" style="stop-color: var(--t-sheen-3b, #444)" />
+        </linearGradient>
+        <radialGradient id="t-dome-1" cx="0.35" cy="0.3" r="0.8">
+          <stop offset="0" style="stop-color: var(--t-dome-1a, #888)" />
+          <stop offset="1" style="stop-color: var(--t-dome-1b, #444)" />
+        </radialGradient>
+        <radialGradient id="t-dome-2" cx="0.35" cy="0.3" r="0.8">
+          <stop offset="0" style="stop-color: var(--t-dome-2a, #888)" />
+          <stop offset="1" style="stop-color: var(--t-dome-2b, #444)" />
+        </radialGradient>
+        <linearGradient id="t-sheen-4" x2="0" y2="1">
+          <stop offset="0" style="stop-color: var(--t-sheen-4a, #888)" />
+          <stop offset="1" style="stop-color: var(--t-sheen-4b, #444)" />
+        </linearGradient>
+        <!-- t-tab-*: a ground and a 3x11 status stripe 4 units in from the left of any rect 22 units high. The tile is the rect's own box; the content is in user units. -->
+        <pattern id="t-tab-1" width="1" height="1">
+          <rect width="400" height="22" style="fill: var(--t-tab-1g, none)" />
+          <rect
+            x="4"
+            y="5.5"
+            width="3"
+            height="11"
+            rx="1.5"
+            style="fill: var(--t-tab-1, #888)"
+          />
+        </pattern>
+        <pattern id="t-tab-2" width="1" height="1">
+          <rect width="400" height="22" style="fill: var(--t-tab-2g, none)" />
+          <rect
+            x="4"
+            y="5.5"
+            width="3"
+            height="11"
+            rx="1.5"
+            style="fill: var(--t-tab-2, #888)"
+          />
+        </pattern>
+        <pattern id="t-tab-3" width="1" height="1">
+          <rect width="400" height="22" style="fill: var(--t-tab-3g, none)" />
+          <rect
+            x="4"
+            y="5.5"
+            width="3"
+            height="11"
+            rx="1.5"
+            style="fill: var(--t-tab-3, #888)"
+          />
+        </pattern>
+        <!-- t-knob: a round cap with a ring and a pointer lamp, drawn in the middle of a circle and scaled to it. -->
+        <pattern
+          id="t-knob"
+          width="1"
+          height="1"
+          patternContentUnits="objectBoundingBox"
+        >
+          <circle
+            cx="0.515"
+            cy="0.54"
+            r="0.36"
+            style="fill: var(--t-knob-shade, none)"
+          />
+          <circle
+            cx="0.5"
+            cy="0.5"
+            r="0.34"
+            style="fill: var(--t-knob-ring, #444)"
+          />
+          <circle
+            cx="0.5"
+            cy="0.5"
+            r="0.3"
+            style="fill: var(--t-knob-cap, #888)"
+          />
+          <circle
+            cx="0.37"
+            cy="0.37"
+            r="0.04"
+            style="fill: var(--t-knob-lamp, none)"
+          />
+        </pattern>
+        <!-- t-segs: columns of 2-unit segments on a 4-unit pitch, the unlit ghost of a bar graph. -->
+        <pattern
+          id="t-segs"
+          width="11"
+          height="4"
+          patternUnits="userSpaceOnUse"
+        >
+          <rect width="11" height="4" style="fill: var(--t-segs-g, none)" />
+          <rect
+            x="1.5"
+            y="1"
+            width="8"
+            height="2"
+            style="fill: var(--t-segs, #888)"
+          />
+        </pattern>
         <linearGradient id="fade-ramp">
           <stop offset="0" stop-color="#000" />
           <stop offset="1" stop-color="#999" />

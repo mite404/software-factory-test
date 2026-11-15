@@ -1,0 +1,1382 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Software factory - spines prototype</title>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --frame: #0b0b0b;
+        --paper: #cdcdca;
+        --ink: #131313;
+        --black: #181818;
+        --kraft: #c6a987;
+        --grey: #a1a2a4;
+        --white: #efeee9;
+        --sans: "Archivo", "Arial Narrow", Arial, sans-serif;
+        --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--frame);
+        color: var(--ink);
+        font: 500 12px/1.3 var(--sans);
+        -webkit-font-smoothing: antialiased;
+      }
+      p,
+      h1,
+      h2,
+      h3,
+      ol,
+      ul {
+        margin: 0;
+        padding: 0;
+      }
+      ol,
+      ul {
+        list-style: none;
+      }
+      svg {
+        display: block;
+      }
+      .defs {
+        position: absolute;
+        width: 0;
+        height: 0;
+      }
+
+      /* ---- black frame and its margin notes ---- */
+      .frame {
+        position: relative;
+        max-width: 1440px;
+        min-width: 1280px;
+        margin: 0 auto;
+        padding: 40px 52px 44px;
+      }
+      .note {
+        position: absolute;
+        writing-mode: vertical-rl;
+        white-space: nowrap;
+        font: 500 10.5px/1 var(--mono);
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: #e4e3de;
+        display: flex;
+        gap: 9px;
+      }
+      .note p {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+      }
+      .note.up {
+        transform: rotate(180deg);
+      }
+      .note .live {
+        background: var(--white);
+        color: var(--frame);
+        font-weight: 600;
+        padding: 6px 2px 4px;
+        letter-spacing: 0.2em;
+      }
+      .note svg {
+        width: 15px;
+        height: 15px;
+      }
+      .replay {
+        writing-mode: vertical-rl;
+        font: 600 10.5px/1 var(--mono);
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: #e4e3de;
+        background: none;
+        border: 1px solid #e4e3de;
+        padding: 9px 3px 8px;
+        margin: 6px 0 0;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+      }
+      .replay::before {
+        content: "";
+        border: 4px solid transparent;
+        border-top: 7px solid currentColor;
+        border-bottom: 0;
+      }
+      .replay:hover,
+      .replay:focus-visible {
+        background: var(--white);
+        color: var(--frame);
+        outline: none;
+      }
+      .n-head {
+        left: 13px;
+        top: 66px;
+      }
+      .n-foot {
+        left: 13px;
+        bottom: 70px;
+      }
+      .n-seen {
+        right: 19px;
+        top: 66px;
+      }
+      .n-sheet {
+        right: 19px;
+        bottom: 70px;
+      }
+      .reg {
+        position: absolute;
+        width: 17px;
+        height: 17px;
+        background:
+          linear-gradient(#e4e3de, #e4e3de) 50% 0 / 1px 100% no-repeat,
+          linear-gradient(#e4e3de, #e4e3de) 0 50% / 100% 1px no-repeat;
+      }
+      .tick {
+        position: absolute;
+        background: #e4e3de;
+      }
+
+      /* ---- paper sheet ---- */
+      .sheet {
+        background: var(--paper);
+        padding: 24px 26px 26px;
+      }
+
+      /* ---- stocks ---- */
+      .k {
+        background: var(--kraft);
+        --stock: var(--kraft);
+      }
+      .g {
+        background: var(--grey);
+        --stock: var(--grey);
+      }
+      .w {
+        background: var(--white);
+        --stock: var(--white);
+      }
+      .b {
+        background: var(--black);
+        --stock: var(--black);
+        color: var(--white);
+      }
+      .label {
+        box-shadow:
+          0 1px 0 rgba(255, 255, 255, 0.18) inset,
+          0 1px 2px rgba(0, 0, 0, 0.28);
+      }
+
+      /* ---- status marks: solid, inverted, hatched, outlined ---- */
+      .m {
+        display: inline-block;
+        flex: none;
+        width: 10px;
+        height: 10px;
+        border: 1px solid currentColor;
+      }
+      .m.s {
+        background: currentColor;
+      }
+      .m.n {
+        background: var(--white);
+        border: 2.5px solid var(--ink);
+      }
+      .b .m.n {
+        border-color: var(--white);
+        box-shadow: 0 0 0 1.5px var(--black) inset;
+        background: var(--white);
+      }
+      .m.e {
+        border-style: dashed;
+      }
+      .m.h {
+        border-width: 1.5px;
+        background: repeating-linear-gradient(135deg, currentColor 0 1.5px, transparent 1.5px 3.6px);
+      }
+
+      /* ---- hero band ---- */
+      .hero {
+        display: grid;
+        grid-template-columns: 500px 1fr 62px 66px;
+        height: 180px;
+        position: relative;
+        z-index: 2;
+      }
+      .hero-title {
+        padding: 14px 18px 0 18px;
+      }
+      .hero-meta {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font: 500 10.5px/1 var(--mono);
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+      .tag {
+        background: var(--white);
+        color: var(--black);
+        font-weight: 600;
+        padding: 3px 6px 3px 7px;
+        letter-spacing: 0.2em;
+      }
+      .hero h1 {
+        font: 900 112px/0.8 var(--sans);
+        font-stretch: 62%;
+        letter-spacing: -0.012em;
+        text-transform: uppercase;
+        white-space: nowrap;
+        margin: 13px 0 11px -3px;
+      }
+      .hero-state {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        border-top: 1px solid currentColor;
+        padding-top: 9px;
+        font: 800 22px/1 var(--sans);
+        font-stretch: 82%;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+      .hero-state .m {
+        width: 15px;
+        height: 15px;
+      }
+      .hero-state small {
+        margin-left: auto;
+        font: 500 10.5px/1 var(--mono);
+        letter-spacing: 0.14em;
+      }
+      .stages {
+        display: grid;
+        grid-template-columns: repeat(8, 1fr);
+        color: var(--ink);
+      }
+      .stages li {
+        position: relative;
+        border-left: 1px solid var(--ink);
+      }
+      .stages li:first-child {
+        border-left-color: var(--kraft);
+      }
+      .stages .no,
+      .stages .st {
+        position: absolute;
+        left: 9px;
+        font: 500 10.5px/1 var(--mono);
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+      .stages .no {
+        top: 12px;
+      }
+      .stages .st {
+        bottom: 12px;
+      }
+      .stages b {
+        position: absolute;
+        right: 11px;
+        top: 12px;
+        writing-mode: vertical-rl;
+        white-space: nowrap;
+        font: 800 19px/1 var(--sans);
+        font-stretch: 70%;
+        letter-spacing: 0.01em;
+        text-transform: uppercase;
+      }
+      .stages .done {
+        background: var(--ink);
+        color: var(--kraft);
+        border-left-color: var(--kraft);
+      }
+      .stages .now {
+        background: var(--white);
+        box-shadow: inset 0 0 0 4px var(--ink);
+        border-left: 0;
+        margin-bottom: -14px;
+        z-index: 1;
+      }
+      .stages .now b {
+        font-weight: 900;
+        font-size: 21px;
+        top: 16px;
+        right: 14px;
+      }
+      .stages .now .no {
+        top: 16px;
+        left: 13px;
+      }
+      .stages .now .st {
+        left: 4px;
+        bottom: 4px;
+        background: var(--ink);
+        color: var(--white);
+        font-weight: 600;
+        padding: 6px 8px 6px 9px;
+      }
+      .stages .todo b {
+        font-weight: 600;
+      }
+      .hero-legend {
+        border-left: 1px solid var(--ink);
+        color: var(--ink);
+        writing-mode: vertical-rl;
+        padding: 12px 10px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 5px;
+        font: 500 10px/1 var(--mono);
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+      .hero-legend p {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .hero-end {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: space-between;
+        padding: 14px 0;
+      }
+      .dash {
+        display: block;
+        width: 18px;
+        height: 4px;
+        background: currentColor;
+      }
+      .idx {
+        writing-mode: vertical-rl;
+        border: 1.5px solid currentColor;
+        font: 800 15px/1 var(--sans);
+        font-stretch: 88%;
+        letter-spacing: 0.02em;
+        padding: 5px 3px;
+        white-space: nowrap;
+      }
+
+      /* ---- rack of spines ---- */
+      .rack {
+        display: grid;
+        grid-template-columns: repeat(7, minmax(0, 1fr));
+        gap: 26px;
+        padding-top: 46px;
+      }
+      .spine {
+        position: relative;
+        height: 790px;
+        padding: 0 11px;
+        display: grid;
+        grid-template-rows: 380px 48px 184px 100px 78px;
+      }
+      .spine > * + * {
+        border-top: 1px solid currentColor;
+      }
+      .spine:not(:last-child)::after {
+        content: "";
+        position: absolute;
+        right: -17px;
+        top: 398px;
+        border: 5px solid transparent;
+        border-left: 8px solid var(--ink);
+        border-right: 0;
+      }
+      .spine.here {
+        top: -30px;
+        box-shadow:
+          0 1px 0 rgba(255, 255, 255, 0.12) inset,
+          0 14px 18px -8px rgba(0, 0, 0, 0.55);
+      }
+      .word {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+      }
+      .word h2 {
+        writing-mode: vertical-rl;
+        white-space: nowrap;
+        font: 900 var(--fs, 100px) / 0.8 var(--sans);
+        font-stretch: var(--wd, 62%);
+        letter-spacing: -0.012em;
+        text-transform: uppercase;
+      }
+      .key {
+        display: flex;
+        align-items: center;
+        white-space: nowrap;
+        font: 800 29px/1 var(--sans);
+        font-stretch: 76%;
+        letter-spacing: 0.005em;
+        text-transform: uppercase;
+      }
+      .key.hash {
+        text-transform: none;
+        font-stretch: 84%;
+      }
+      .data {
+        writing-mode: vertical-rl;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        padding: 10px 0 10px;
+        min-width: 0;
+      }
+      .data p {
+        font: 800 13px/1.14 var(--sans);
+        font-stretch: 84%;
+        letter-spacing: 0.015em;
+        text-transform: uppercase;
+      }
+      .data p.sub {
+        font-size: 12px;
+      }
+      .data .lc {
+        text-transform: none;
+        font-stretch: 92%;
+      }
+      .data p.id,
+      .data .fine p {
+        font: 500 10.5px/1.2 var(--sans);
+        font-stretch: 92%;
+        letter-spacing: 0.01em;
+        text-transform: none;
+      }
+      .data p.id {
+        font-weight: 600;
+        margin-left: 5px;
+      }
+      .data p.id:last-child {
+        margin-left: 0;
+      }
+      .data .fine b {
+        font-weight: 800;
+        text-transform: uppercase;
+      }
+      .data .m {
+        width: 9px;
+        height: 9px;
+        margin-bottom: 4px;
+        vertical-align: -1px;
+      }
+      .draw {
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        padding: 8px 0 8px;
+      }
+      .draw svg {
+        width: 100%;
+        height: 63px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1;
+        overflow: visible;
+      }
+      .draw .fill {
+        fill: currentColor;
+        stroke: none;
+      }
+      .draw .stock {
+        fill: var(--stock);
+      }
+      .draw .cl {
+        stroke-dasharray: 5 2 1 2;
+        stroke-width: 0.6;
+      }
+      .draw .da {
+        stroke-dasharray: 3 2.5;
+      }
+      .cap {
+        font: 500 10px/1 var(--mono);
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+      .foot {
+        display: flex;
+        justify-content: space-between;
+        padding: 10px 0;
+      }
+      .foot .bcw {
+        display: flex;
+        gap: 5px;
+      }
+      .foot .code {
+        writing-mode: vertical-rl;
+        transform: rotate(180deg);
+        font: 500 10px/1 var(--mono);
+        letter-spacing: 0.08em;
+        text-align: center;
+      }
+      .foot .bc {
+        width: 74px;
+        height: 58px;
+        fill: currentColor;
+      }
+      .foot .end {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        justify-content: space-between;
+      }
+      .foot .idx {
+        font-size: 12.5px;
+        padding: 3px 3px;
+      }
+
+      /* ---- return path ---- */
+      .return {
+        height: 42px;
+        margin-top: 0;
+      }
+      .return svg {
+        width: 100%;
+        height: 42px;
+        overflow: visible;
+        fill: none;
+        stroke: var(--ink);
+        stroke-width: 1;
+      }
+      .return text {
+        font: 500 10.5px var(--mono);
+        letter-spacing: 0.1em;
+        fill: var(--ink);
+        stroke: none;
+        text-transform: uppercase;
+      }
+
+      /* ---- horizontal labels ---- */
+      .hl-head {
+        font: 900 28px/0.86 var(--sans);
+        font-stretch: 66%;
+        white-space: nowrap;
+        text-transform: uppercase;
+        letter-spacing: -0.005em;
+      }
+      .monot {
+        font: 500 10.5px/1.25 var(--mono);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .tickets {
+        display: grid;
+        grid-template-columns: 166px repeat(10, 1fr) 54px;
+        margin-top: 10px;
+        padding: 11px 0;
+      }
+      .tickets > * {
+        padding: 0 9px;
+        border-left: 1px solid var(--ink);
+        min-width: 0;
+      }
+      .tickets > :first-child {
+        border-left: 0;
+        padding: 0 12px 0 14px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+      }
+      .tickets .keyset {
+        display: grid;
+        grid-template-columns: auto auto;
+        gap: 4px 8px;
+        font: 600 10px/1 var(--sans);
+        font-stretch: 88%;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      .tickets .keyset span {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        white-space: nowrap;
+      }
+      .tk {
+        display: flex;
+        flex-direction: column;
+      }
+      .tk .top {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        font: 800 11.5px/1 var(--sans);
+        font-stretch: 84%;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      .tk .top span {
+        font: 500 10.5px/1 var(--mono);
+        letter-spacing: 0.06em;
+      }
+      .tk svg {
+        width: 100%;
+        height: 36px;
+        margin: 6px 0 7px;
+        fill: var(--ink);
+        overflow: visible;
+      }
+      .tk .name {
+        font: 700 11.5px/1.12 var(--sans);
+        font-stretch: 74%;
+        letter-spacing: 0.01em;
+        min-height: 26px;
+      }
+      .tk .det {
+        font: 500 10px/1.15 var(--sans);
+        font-stretch: 86%;
+        letter-spacing: 0.01em;
+        margin-top: 3px;
+        white-space: nowrap;
+      }
+      .tk.empty .top,
+      .tk.empty .name {
+        font-weight: 500;
+      }
+      .tickets .last {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: space-between;
+        padding: 2px 0;
+      }
+
+      .lower {
+        display: grid;
+        grid-template-columns: 1fr 462px;
+        gap: 16px;
+        margin-top: 16px;
+      }
+      .gate {
+        display: grid;
+        grid-template-columns: 46px 1.02fr 1.42fr 0.9fr;
+        grid-template-rows: 1fr auto;
+        padding: 0 14px 0 0;
+      }
+      .gate .side {
+        grid-row: 1 / 3;
+        writing-mode: vertical-rl;
+        transform: rotate(180deg);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-left: 1px solid var(--ink);
+        font: 900 21px/1 var(--sans);
+        font-stretch: 70%;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+      .gate .part {
+        padding: 11px 12px 9px 13px;
+        border-left: 1px solid var(--ink);
+      }
+      .gate .part.first {
+        border-left: 0;
+      }
+      .gate h3 {
+        display: flex;
+        align-items: baseline;
+        gap: 7px;
+        font: 800 17px/1 var(--sans);
+        font-stretch: 80%;
+        text-transform: uppercase;
+        letter-spacing: 0.01em;
+      }
+      .gate h3 i {
+        font: 500 10.5px/1 var(--mono);
+      }
+      .gate .from {
+        margin: 4px 0 7px;
+      }
+      .gate li {
+        font: 500 11.5px/1.32 var(--sans);
+        font-stretch: 94%;
+      }
+      .checks {
+        display: grid;
+        grid-template-columns: repeat(3, auto);
+        justify-content: start;
+        gap: 4px 5px;
+      }
+      .checks li {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        border: 1px dashed var(--ink);
+        padding: 2px 6px 2px 4px;
+        font: 600 11px/1.2 var(--sans);
+        font-stretch: 90%;
+      }
+      .checks svg {
+        width: 10px;
+        height: 10px;
+        fill: none;
+        stroke: var(--ink);
+        stroke-width: 1.8;
+      }
+      .gate .ill {
+        margin-top: 6px;
+        font: 500 10px/1 var(--mono);
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      .gate .out {
+        grid-column: 2 / 5;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        border-top: 1px solid var(--ink);
+        padding: 8px 0 9px 13px;
+        font: 500 11.5px/1 var(--sans);
+        font-stretch: 94%;
+        white-space: nowrap;
+      }
+      .gate .out b {
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+      }
+      .gate .out .sep {
+        width: 1px;
+        height: 12px;
+        background: var(--ink);
+        margin: 0 5px;
+      }
+      .ar {
+        display: inline-block;
+        width: 16px;
+        height: 7px;
+        flex: none;
+        background:
+          linear-gradient(var(--ink), var(--ink)) 0 50% / 12px 1px no-repeat,
+          conic-gradient(from 240deg at 100% 50%, var(--ink) 0 60deg, transparent 0) 100% 50% / 6px 7px no-repeat;
+      }
+
+      .coming {
+        display: grid;
+        grid-template-rows: 1fr 1fr;
+        gap: 10px;
+      }
+      .next {
+        display: grid;
+        grid-template-columns: 34px 178px 1fr;
+        padding: 0 12px 0 0;
+      }
+      .next .side {
+        writing-mode: vertical-rl;
+        transform: rotate(180deg);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-left: 1px solid var(--ink);
+        font: 900 13px/1 var(--sans);
+        font-stretch: 78%;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+      .next .who {
+        padding: 9px 10px 8px 11px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+      }
+      .next .who b {
+        font: 800 15px/1.02 var(--sans);
+        font-stretch: 76%;
+        letter-spacing: 0.005em;
+      }
+      .next .who span {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .next ol {
+        border-left: 1px solid var(--ink);
+        padding: 9px 0 8px 11px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 3px;
+      }
+      .next ol li {
+        display: flex;
+        gap: 8px;
+        font: 600 11.5px/1.2 var(--sans);
+        font-stretch: 92%;
+        white-space: nowrap;
+      }
+      .next ol li i {
+        font: 500 10.5px/1.25 var(--mono);
+      }
+    </style>
+  </head>
+  <body>
+    <svg class="defs" aria-hidden="true">
+      <defs>
+        <symbol id="bars" viewBox="0 0 84 40" preserveAspectRatio="none">
+          <path
+            d="M0 0h2v40h-2zM4 0h1v40h-1zM7 0h3v40h-3zM12 0h1v40h-1zM15 0h1v40h-1zM18 0h2v40h-2zM22 0h4v40h-4zM28 0h1v40h-1zM31 0h2v40h-2zM35 0h1v40h-1zM38 0h3v40h-3zM43 0h1v40h-1zM46 0h2v40h-2zM50 0h1v40h-1zM53 0h4v40h-4zM59 0h1v40h-1zM62 0h2v40h-2zM66 0h1v40h-1zM69 0h3v40h-3zM74 0h1v40h-1zM77 0h2v40h-2zM81 0h3v40h-3z"
+          />
+        </symbol>
+        <symbol id="bars2" viewBox="0 0 84 40" preserveAspectRatio="none">
+          <path
+            d="M0 0h3v40h-3zM5 0h1v40h-1zM8 0h1v40h-1zM11 0h4v40h-4zM17 0h2v40h-2zM21 0h1v40h-1zM24 0h3v40h-3zM29 0h1v40h-1zM32 0h1v40h-1zM35 0h2v40h-2zM39 0h4v40h-4zM45 0h1v40h-1zM48 0h3v40h-3zM53 0h1v40h-1zM56 0h2v40h-2zM60 0h1v40h-1zM63 0h4v40h-4zM69 0h2v40h-2zM73 0h1v40h-1zM76 0h1v40h-1zM79 0h2v40h-2zM83 0h1v40h-1z"
+          />
+        </symbol>
+        <symbol id="tick" viewBox="0 0 10 10"><path d="M1.5 5.4l2.4 2.6 4.6-6" /></symbol>
+        <pattern id="hatch" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+          <rect width="2" height="5" fill="#131313" />
+        </pattern>
+      </defs>
+    </svg>
+
+    <div class="frame">
+      <!-- header facts, in the black margin -->
+      <div class="note up n-head">
+        <p>Project: sample data, not a running factory</p>
+        <p>state <span class="live">LIVE</span></p>
+      </div>
+      <div class="note n-seen">
+        <p>
+          observed 2 s ago
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" aria-label="clock">
+            <circle cx="8" cy="8" r="6.6" />
+            <path d="M8 3.6V8l3 2" />
+          </svg>
+        </p>
+        <button class="replay" type="button">replay</button>
+      </div>
+      <div class="note up n-foot">
+        <p>read-only</p>
+        <p>one poll every 5 s</p>
+      </div>
+      <div class="note n-sheet"><p>S.F. pipeline spines - sheet 01/001</p></div>
+      <i class="reg" style="left: 17px; top: 50%"></i>
+      <i class="reg" style="right: 17px; top: 50%"></i>
+      <i class="tick" style="left: 52px; top: 12px; width: 1px; height: 16px"></i>
+      <i class="tick" style="right: 52px; top: 12px; width: 1px; height: 16px"></i>
+      <i class="tick" style="left: 50%; top: 12px; width: 1px; height: 16px"></i>
+      <i class="tick" style="left: 52px; bottom: 14px; width: 1px; height: 16px"></i>
+      <i class="tick" style="right: 52px; bottom: 14px; width: 1px; height: 16px"></i>
+      <i class="tick" style="left: 50%; bottom: 14px; width: 1px; height: 16px"></i>
+
+      <main class="sheet">
+        <!-- ACTIVE ticket: wide label band -->
+        <section class="hero label" aria-label="Active ticket">
+          <div class="hero-title b">
+            <p class="hero-meta"><span class="tag">ACTIVE</span> ticket 04/010 - builder 1</p>
+            <h1>v1-ticket2</h1>
+            <p class="hero-state"><i class="m n"></i> working - attempt 2 <small>COLD REVIEW RUNNING</small></p>
+          </div>
+          <ol class="stages k">
+            <li class="done"><span class="no">01</span><b>worktree</b><span class="st">done</span></li>
+            <li class="done"><span class="no">02</span><b>setup</b><span class="st">done</span></li>
+            <li class="done"><span class="no">03</span><b>builder thread</b><span class="st">done</span></li>
+            <li class="done"><span class="no">04</span><b>report.json</b><span class="st">done</span></li>
+            <li class="done"><span class="no">05</span><b>gate - 10 min cap</b><span class="st">done</span></li>
+            <li class="now"><span class="no">06</span><b>cold review</b><span class="st">now</span></li>
+            <li class="todo"><span class="no">07</span><b>ff-merge</b><span class="st">-</span></li>
+            <li class="todo"><span class="no">08</span><b>main</b><span class="st">-</span></li>
+          </ol>
+          <div class="hero-legend k">
+            <p><i class="m s"></i> = done</p>
+            <p><i class="m n"></i> = now</p>
+            <p><i class="m"></i> = not reached</p>
+          </div>
+          <div class="hero-end b"><i class="dash"></i><span class="idx">04/010</span></div>
+        </section>
+
+        <!-- the pipeline: one spine per station -->
+        <section class="rack" aria-label="Pipeline">
+          <article class="spine label k">
+            <div class="word"><h2 id="w1" style="--fs: 99px; --wd: 62%">Foreman</h2></div>
+            <p class="key">8 tickets</p>
+            <div class="data">
+              <div>
+                <p>Orchestrator</p>
+                <p class="sub">01 discovery</p>
+                <p class="sub">02 stories</p>
+                <p class="sub">03 tickets</p>
+              </div>
+              <div class="fine">
+                <p>picks the next eligible ticket</p>
+                <p><b>Hand-off:</b> ticket brief, scope, check command</p>
+              </div>
+            </div>
+            <div class="draw">
+              <svg viewBox="0 0 139 68" aria-hidden="true">
+                <path class="cl" d="M0 36h139" />
+                <rect class="stock" x="5" y="6" width="34" height="44" />
+                <rect class="stock" x="11" y="12" width="34" height="44" />
+                <rect class="stock" x="17" y="18" width="34" height="44" />
+                <path d="M23 28h22M23 35h22M23 42h14" />
+                <path d="M59 36h24M79 32l5 4-5 4" />
+                <path class="stock" d="M92 14h42v15a7 7 0 0 0 0 14v15h-42v-15a7 7 0 0 0 0-14z" />
+                <path d="M103 24h20M103 36h20M103 48h12" />
+                <circle cx="113" cy="36" r="13" class="cl" />
+              </svg>
+              <span class="cap">hand-off to a builder</span>
+            </div>
+            <div class="foot">
+              <div class="bcw">
+                <span class="code">STN 01</span><svg class="bc" aria-hidden="true"><use href="#bars" /></svg>
+              </div>
+              <div class="end"><i class="dash"></i><span class="idx">01/007</span></div>
+            </div>
+          </article>
+
+          <article class="spine label g">
+            <div class="word"><h2 id="w2" style="--fs: 100px; --wd: 62%">Builders</h2></div>
+            <p class="key">4 threads</p>
+            <div class="data">
+              <div>
+                <p><i class="m n"></i> B1 working</p>
+                <p class="id">v1-ticket2</p>
+                <p><i class="m"></i> B2 idle</p>
+                <p class="id">foreman-watchdog-ticket1</p>
+                <p><i class="m h"></i> B3 blocked</p>
+                <p class="id">v1-ticket7</p>
+                <p><i class="m"></i> B4 queued</p>
+                <p class="id">v1-ticket8</p>
+              </div>
+            </div>
+            <div class="draw">
+              <svg viewBox="0 0 139 68" aria-hidden="true">
+                <path class="cl" d="M0 53h139" />
+                <g id="bot">
+                  <path d="M18 9v-5" />
+                  <circle cx="18" cy="3" r="1.4" class="fill" />
+                  <path d="M18 27v26M18 53l-8 11M18 53l8 11M18 53v12" />
+                </g>
+                <use href="#bot" x="34.5" />
+                <use href="#bot" x="69" />
+                <use href="#bot" x="103.5" />
+                <rect x="6.5" y="9" width="23" height="18" fill="#efeee9" stroke-width="2.5" />
+                <rect x="41" y="9" width="23" height="18" />
+                <rect x="75.500" y="9" width="23" height="18" fill="url(#hatch)" stroke-width="1.5" />
+                <rect x="110" y="9" width="23" height="18" />
+                <g class="fill">
+                  <circle cx="14" cy="18" r="1.5" />
+                  <circle cx="22" cy="18" r="1.5" />
+                  <circle cx="48.500" cy="18" r="1.5" />
+                  <circle cx="56.500" cy="18" r="1.5" />
+                  <circle cx="117.500" cy="18" r="1.5" />
+                  <circle cx="125.500" cy="18" r="1.5" />
+                </g>
+              </svg>
+              <span class="cap">own thread + worktree</span>
+            </div>
+            <div class="foot">
+              <div class="bcw">
+                <span class="code">STN 02</span><svg class="bc" aria-hidden="true"><use href="#bars2" /></svg>
+              </div>
+              <div class="end"><i class="dash"></i><span class="idx">02/007</span></div>
+            </div>
+          </article>
+
+          <article class="spine label w">
+            <div class="word"><h2 id="w3" style="--fs: 125px; --wd: 62%">Submit</h2></div>
+            <p class="key">Slot 1/3</p>
+            <div class="data">
+              <div>
+                <p>Submission</p>
+                <p class="sub">report.json</p>
+                <p class="id"><i class="m"></i> foreman-watchdog-ticket1 - idle</p>
+              </div>
+              <div class="fine">
+                <p>commit locally, then report.json</p>
+                <p>candidate: revision + insight</p>
+                <p>or blocked: reason</p>
+              </div>
+            </div>
+            <div class="draw">
+              <svg viewBox="0 0 139 68" aria-hidden="true">
+                <path class="cl" d="M0 34h139" />
+                <rect class="stock" x="7" y="5" width="125" height="58" rx="5" />
+                <rect class="fill" x="3" y="25" width="4" height="18" />
+                <rect class="fill" x="132" y="25" width="4" height="18" />
+                <circle cx="33" cy="34" r="16" class="fill" />
+                <path d="M27 24h9l4 4v16h-13z" style="fill: var(--stock); stroke: none" />
+                <path d="M30 32h7M30 36h7M30 40h4" />
+                <circle cx="69.500" cy="34" r="16" class="stock" />
+                <circle cx="106" cy="34" r="16" class="stock" />
+                <path class="cl" d="M69.500 12v44M106 12v44" />
+              </svg>
+              <span class="cap">3 slots - 1 filled</span>
+            </div>
+            <div class="foot">
+              <div class="bcw">
+                <span class="code">STN 03</span><svg class="bc" aria-hidden="true"><use href="#bars" /></svg>
+              </div>
+              <div class="end"><i class="dash"></i><span class="idx">03/007</span></div>
+            </div>
+          </article>
+
+          <article class="spine label k">
+            <div class="word"><h2 id="w4" style="--fs: 136px; --wd: 88.7%">Gate</h2></div>
+            <p class="key">3 landed</p>
+            <div class="data">
+              <div>
+                <p>Integrator</p>
+                <p class="sub">one ticket at a time</p>
+                <p class="sub" style="margin-right: 6px"><i class="m s"></i> 3 landed</p>
+                <p class="sub"><i class="m"></i> 2 queued</p>
+                <p class="sub"><i class="m h"></i> 1 blocked</p>
+              </div>
+              <div class="fine">
+                <p><b>1</b> revision = HEAD</p>
+                <p><b>2</b> clean tree &nbsp;<b>3</b> scope</p>
+                <p><b>4</b> verify &nbsp;<b>5</b> to cold review</p>
+              </div>
+            </div>
+            <div class="draw">
+              <svg viewBox="0 0 139 68" aria-hidden="true">
+                <g class="da">
+                  <rect x="4" y="3" width="37" height="27" />
+                  <rect x="51" y="3" width="37" height="27" />
+                  <rect x="98" y="3" width="37" height="27" />
+                  <rect x="4" y="38" width="37" height="27" />
+                  <rect x="51" y="38" width="37" height="27" />
+                  <rect x="98" y="38" width="37" height="27" />
+                </g>
+                <g stroke-width="2.2">
+                  <path d="M15 17l5 6 10-13" />
+                  <path d="M62 17l5 6 10-13" />
+                  <path d="M109 17l5 6 10-13" />
+                  <path d="M15 52l5 6 10-13" />
+                  <path d="M62 52l5 6 10-13" />
+                  <path d="M109 52l5 6 10-13" />
+                </g>
+                <path class="cl" d="M41 16.500h10M88 16.500h10M41 51.500h10M88 51.500h10" />
+              </svg>
+              <span class="cap">6 checks in verify</span>
+            </div>
+            <div class="foot">
+              <div class="bcw">
+                <span class="code">STN 04</span><svg class="bc" aria-hidden="true"><use href="#bars2" /></svg>
+              </div>
+              <div class="end"><i class="dash"></i><span class="idx">04/007</span></div>
+            </div>
+          </article>
+
+          <article class="spine label b here">
+            <div class="word"><h2 id="w5" style="--fs: 125px; --wd: 62%">Review</h2></div>
+            <p class="key">Att. 2</p>
+            <div class="data">
+              <div>
+                <p>Cold review</p>
+                <p class="sub"><i class="m n"></i> running now</p>
+                <p class="sub" style="margin-right: 6px">Active here:</p>
+                <p class="id">v1-ticket2, builder 1</p>
+              </div>
+              <div class="fine">
+                <p>opposite model family</p>
+                <p>small 1st tries skip</p>
+              </div>
+            </div>
+            <div class="draw">
+              <svg viewBox="0 0 139 68" aria-hidden="true">
+                <path class="cl" d="M0 34h139M35 2v64M104 2v64" />
+                <circle cx="35" cy="34" r="24" />
+                <circle cx="35" cy="34" r="9" />
+                <rect x="80" y="10" width="48" height="48" />
+                <rect x="95" y="25" width="18" height="18" />
+                <path d="M61 28h14M71 24.500l4.500 3.500-4.500 3.500" />
+                <path d="M78 40h-14M68 36.500l-4.500 3.500 4.500 3.500" />
+              </svg>
+              <span class="cap">2 model families</span>
+            </div>
+            <div class="foot">
+              <div class="bcw">
+                <span class="code">STN 05</span><svg class="bc" aria-hidden="true"><use href="#bars" /></svg>
+              </div>
+              <div class="end"><i class="dash"></i><span class="idx">05/007</span></div>
+            </div>
+          </article>
+
+          <article class="spine label g">
+            <div class="word"><h2 id="w6" style="--fs: 136px; --wd: 88.4%">Main</h2></div>
+            <p class="key hash">b649c8a</p>
+            <div class="data">
+              <div>
+                <p>Target branch: main</p>
+                <p class="sub" style="margin-right: 6px"><i class="m s"></i> <span class="lc">b649c8a</span></p>
+                <p class="id">backup-adoption-ticket1</p>
+                <p class="sub"><i class="m s"></i> <span class="lc">af0ae26</span></p>
+                <p class="id">v1-ticket1</p>
+                <p class="sub"><i class="m s"></i> <span class="lc">cd75e02</span></p>
+                <p class="id">feature-06</p>
+              </div>
+              <div class="fine">
+                <p>newest first, ff-only</p>
+              </div>
+            </div>
+            <div class="draw">
+              <svg viewBox="0 0 139 68" aria-hidden="true">
+                <path d="M4 36h126" />
+                <rect class="fill" x="130" y="20" width="5" height="32" />
+                <circle cx="14" cy="36" r="10" class="stock" />
+                <circle cx="14" cy="36" r="6.500" class="fill" />
+                <circle cx="34" cy="36" r="6.500" class="fill" />
+                <circle cx="53" cy="36" r="6.500" class="fill" />
+                <circle cx="72" cy="36" r="5.500" class="stock" />
+                <circle cx="89" cy="36" r="5.500" class="stock" />
+                <circle cx="105" cy="36" r="5.500" class="stock" />
+                <circle cx="120" cy="36" r="5.500" class="stock" />
+                <path class="cl" d="M14 6v18M14 48v8" />
+                <path d="M7.500 58h52M7.500 54.500v7M59.500 54.500v7" stroke-width="0.800" />
+              </svg>
+              <span class="cap">7 positions - 3 lit</span>
+            </div>
+            <div class="foot">
+              <div class="bcw">
+                <span class="code">STN 06</span><svg class="bc" aria-hidden="true"><use href="#bars2" /></svg>
+              </div>
+              <div class="end"><i class="dash"></i><span class="idx">06/007</span></div>
+            </div>
+          </article>
+
+          <article class="spine label w">
+            <div class="word"><h2 id="w7" style="--fs: 95px; --wd: 62%">Full gate</h2></div>
+            <p class="key" id="k7" style="font-stretch: 66%">Scheduled</p>
+            <div class="data">
+              <div>
+                <p>Planned - replay only</p>
+                <p class="sub" style="margin-right: 6px"><i class="m h"></i> red</p>
+                <p class="id">main-red ticket filed</p>
+                <p class="sub"><i class="m s"></i> green</p>
+                <p class="id">revision verified</p>
+              </div>
+              <div class="fine">
+                <p>checks main after a landing</p>
+              </div>
+            </div>
+            <div class="draw">
+              <svg viewBox="0 0 139 68" aria-hidden="true">
+                <rect class="da" x="3" y="3" width="133" height="62" rx="5" />
+                <circle cx="37" cy="34" r="23" />
+                <path
+                  d="M37 13v5M37 50v5M16 34h5M53 34h5M26.500 15.800l2.500 4.300M45 47.900l2.500 4.300M18.800 23.500l4.300 2.500M50.900 42l4.300 2.500M18.800 44.500l4.300-2.500M50.900 26l4.300-2.500M26.500 52.200l2.500-4.300M45 20.100l2.500-4.300"
+                  stroke-width="0.800"
+                />
+                <path d="M37 34V20M37 34l10 6" stroke-width="1.800" />
+                <circle cx="37" cy="34" r="2" class="fill" />
+                <path class="cl" d="M68 34h62" />
+                <path d="M74 22h50M74 46h34" />
+                <rect class="fill" x="74" y="29" width="10" height="10" />
+                <rect x="90" y="29" width="10" height="10" fill="url(#hatch)" />
+              </svg>
+              <span class="cap">planned - not live</span>
+            </div>
+            <div class="foot">
+              <div class="bcw">
+                <span class="code">STN 07</span><svg class="bc" aria-hidden="true"><use href="#bars" /></svg>
+              </div>
+              <div class="end"><i class="dash"></i><span class="idx">07/007</span></div>
+            </div>
+          </article>
+        </section>
+
+        <!-- return path, drawn on the paper under the rack -->
+        <div class="return">
+          <svg viewBox="0 0 1284 42" preserveAspectRatio="none" role="img" aria-label="Return path">
+            <path d="M642 0v15M829.500 -30v45M1203.500 0v15M1203.500 15.500H267.500V5" />
+            <path d="M263 10l4.500-7 4.500 7" />
+            <path d="M267.500 15.500H80.500V5" stroke-dasharray="4 3" />
+            <path d="M76 10l4.500-7 4.500 7" />
+            <text x="282" y="32">back to the builder that wrote it</text>
+            <text x="14" y="32">reports also reach the foreman</text>
+            <text x="652" y="32">gate failed - log</text>
+            <text x="839" y="32">review findings</text>
+            <text x="1194" y="32" text-anchor="end">main-red ticket</text>
+          </svg>
+        </div>
+
+        <!-- All tickets: the barcode strip -->
+        <section class="tickets label g" aria-label="All tickets">
+          <div>
+            <div>
+              <h2 class="hl-head">All tickets</h2>
+              <p class="monot" style="margin-top: 5px">8 of 10 positions</p>
+            </div>
+            <p class="keyset">
+              <span><i class="m s"></i> accepted</span><span><i class="m n"></i> working</span>
+              <span><i class="m h"></i> blocked</span><span><i class="m"></i> queued</span>
+              <span><i class="m"></i> idle</span><span><i class="m e"></i> empty</span>
+            </p>
+          </div>
+          <div class="tk">
+            <p class="top"><span>01</span> accepted</p>
+            <svg viewBox="0 0 84 40" preserveAspectRatio="none" aria-hidden="true"><use href="#bars" /></svg>
+            <p class="name">feature-06</p>
+            <p class="det">landed cd75e02</p>
+          </div>
+          <div class="tk">
+            <p class="top"><span>02</span> accepted</p>
+            <svg viewBox="0 0 84 40" preserveAspectRatio="none" aria-hidden="true"><use href="#bars2" /></svg>
+            <p class="name">v1-ticket1</p>
+            <p class="det">landed af0ae26</p>
+          </div>
+          <div class="tk">
+            <p class="top"><span>03</span> accepted</p>
+            <svg viewBox="0 0 84 40" preserveAspectRatio="none" aria-hidden="true"><use href="#bars" /></svg>
+            <p class="name">backup-adoption-ticket1</p>
+            <p class="det">landed b649c8a</p>
+          </div>
+          <div class="tk">
+            <p class="top"><span>04</span> working</p>
+            <svg viewBox="0 0 84 40" preserveAspectRatio="none" aria-hidden="true">
+              <rect x="1.500" y="1.500" width="81" height="37" fill="#efeee9" stroke="#131313" stroke-width="3" vector-effect="non-scaling-stroke" />
+              <use href="#bars2" x="8" y="7" width="68" height="26" />
+            </svg>
+            <p class="name">v1-ticket2</p>
+            <p class="det">ACTIVE - attempt 2</p>
+          </div>
+          <div class="tk">
+            <p class="top"><span>05</span> idle</p>
+            <svg viewBox="0 0 84 40" preserveAspectRatio="none" aria-hidden="true" style="fill: none; stroke: #131313">
+              <path
+                vector-effect="non-scaling-stroke"
+                d="M.5.5h5v39h-5zM11 .5h8v39h-8zM24.500.5h4v39h-4zM34 .5h9v39h-9zM48.500.5h5v39h-5zM59 .5h8v39h-8zM72.500.5h4v39h-4zM80 .5h3.500v39h-3.500z"
+              />
+            </svg>
+            <p class="name">foreman-watchdog-ticket1</p>
+            <p class="det">builder 2, reported</p>
+          </div>
+          <div class="tk">
+            <p class="top"><span>06</span> blocked</p>
+            <svg viewBox="0 0 84 40" preserveAspectRatio="none" aria-hidden="true">
+              <rect x=".750" y=".750" width="82.500" height="38.500" fill="url(#hatch)" stroke="#131313" stroke-width="1.500" vector-effect="non-scaling-stroke" />
+            </svg>
+            <p class="name">v1-ticket7</p>
+            <p class="det">builder 3</p>
+          </div>
+          <div class="tk">
+            <p class="top"><span>07</span> queued</p>
+            <svg viewBox="0 0 84 40" preserveAspectRatio="none" aria-hidden="true" style="fill: none; stroke: #131313">
+              <path
+                vector-effect="non-scaling-stroke"
+                d="M.5.5h8v39h-8zM13 .5h4v39h-4zM22.500.5h5v39h-5zM33 .5h9v39h-9zM47.500.5h4v39h-4zM57 .5h8v39h-8zM70.500.5h5v39h-5zM80 .5h3.500v39h-3.500z"
+              />
+            </svg>
+            <p class="name">v1-ticket8</p>
+            <p class="det">builder 4</p>
+          </div>
+          <div class="tk">
+            <p class="top"><span>08</span> queued</p>
+            <svg viewBox="0 0 84 40" preserveAspectRatio="none" aria-hidden="true" style="fill: none; stroke: #131313">
+              <path
+                vector-effect="non-scaling-stroke"
+                d="M.5.5h4v39h-4zM10 .5h9v39h-9zM24.500.5h5v39h-5zM35 .5h8v39h-8zM48.500.5h4v39h-4zM58 .5h5v39h-5zM68.500.5h9v39h-9zM80 .5h3.500v39h-3.500z"
+              />
+            </svg>
+            <p class="name">v1-ticket9</p>
+            <p class="det">no builder yet</p>
+          </div>
+          <div class="tk empty">
+            <p class="top"><span>09</span> empty</p>
+            <svg viewBox="0 0 84 40" preserveAspectRatio="none" aria-hidden="true">
+              <rect x=".5" y=".5" width="83" height="39" fill="none" stroke="#131313" stroke-dasharray="3 3" vector-effect="non-scaling-stroke" />
+            </svg>
+            <p class="name">-</p>
+          </div>
+          <div class="tk empty">
+            <p class="top"><span>10</span> empty</p>
+            <svg viewBox="0 0 84 40" preserveAspectRatio="none" aria-hidden="true">
+              <rect x=".5" y=".5" width="83" height="39" fill="none" stroke="#131313" stroke-dasharray="3 3" vector-effect="non-scaling-stroke" />
+            </svg>
+            <p class="name">-</p>
+          </div>
+          <div class="last"><i class="dash"></i><span class="idx">08/010</span></div>
+        </section>
+
+        <div class="lower">
+          <!-- gate detail -->
+          <section class="gate label w" aria-label="Gate detail">
+            <p class="side">Gate detail</p>
+            <div class="part first">
+              <h3><i>1</i> candidate</h3>
+              <p class="monot from">from report.json</p>
+              <ul>
+                <li>revision = HEAD, not the base</li>
+                <li>tree clean</li>
+                <li>every path in scope</li>
+              </ul>
+            </div>
+            <div class="part">
+              <h3><i>2</i> verify</h3>
+              <p class="monot from">project check command - 10 min cap</p>
+              <ul class="checks">
+                <li><svg aria-hidden="true"><use href="#tick" /></svg>test</li>
+                <li><svg aria-hidden="true"><use href="#tick" /></svg>lint</li>
+                <li><svg aria-hidden="true"><use href="#tick" /></svg>typecheck</li>
+                <li><svg aria-hidden="true"><use href="#tick" /></svg>format</li>
+                <li><svg aria-hidden="true"><use href="#tick" /></svg>fallow</li>
+                <li><svg aria-hidden="true"><use href="#tick" /></svg>diff-check</li>
+              </ul>
+              <p class="ill">illustrative ticks, not live</p>
+            </div>
+            <div class="part">
+              <h3><i>3</i> unchanged</h3>
+              <p class="monot from">after the check ran</p>
+              <ul>
+                <li>HEAD still the candidate</li>
+                <li>tree still clean</li>
+              </ul>
+            </div>
+            <p class="out">
+              <i class="m s"></i><b>pass</b><i class="ar"></i>cold review <i class="sep"></i> <i class="m h"></i><b>fail</b
+              ><i class="ar"></i>same builder with the log <i class="sep"></i> <b>2nd fail</b><i class="ar"></i>escalated
+            </p>
+          </section>
+
+          <!-- COMING, in order -->
+          <section class="coming" aria-label="Coming, in order">
+            <article class="next label k">
+              <p class="side">Coming 1</p>
+              <div class="who">
+                <b>foreman-watchdog-ticket1</b>
+                <span class="monot"><i class="m"></i> idle - builder 2</span>
+              </div>
+              <ol>
+                <li><i>1</i>Record durable stop incidents</li>
+                <li><i>2</i>Notify the owner once</li>
+                <li><i>3</i>Wake the foreman</li>
+              </ol>
+            </article>
+            <article class="next label k">
+              <p class="side">Coming 2</p>
+              <div class="who">
+                <b>v1-ticket7</b>
+                <span class="monot"><i class="m h"></i> blocked - builder 3</span>
+              </div>
+              <ol>
+                <li><i>1</i>Validate the backup</li>
+                <li><i>2</i>Restore before dispatch</li>
+              </ol>
+            </article>
+          </section>
+        </div>
+      </main>
+    </div>
+  </body>
+</html>

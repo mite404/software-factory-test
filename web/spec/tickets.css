@@ -1,0 +1,508 @@
+/*
+ * Layout for the SPEC-01 parts on the spec skin (?theme=spec&kit): the device under the pipeline
+ * SVG and the hover triggers over it. The kit styles its own parts; this file places them and adds
+ * what it has no part for: a "now" badge in the key color and status LEDs for the ticket queue.
+ */
+
+/* Both devices start at the top of the page and take the height their content needs; the page
+   scrolls. Width alone sets the diagram's scale, capped at its drawn size. */
+:root[data-theme="spec"][data-kit] {
+  --u: calc(min(96vw, 1280px) / 1280);
+}
+
+:root[data-theme="spec"][data-kit] body {
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 18px;
+  box-sizing: border-box;
+  height: auto;
+  min-height: 100vh;
+  padding: 20px 0 48px;
+  overflow: auto;
+}
+
+:root[data-theme="spec"][data-kit] #play {
+  position: absolute;
+  top: calc(20px + var(--u) * 20);
+}
+
+#kit-stage {
+  position: relative;
+  flex: none;
+}
+
+/* The SVG is cropped under its return wire; mount() in tickets.tsx sets the aspect ratio to match. */
+:root[data-theme="spec"][data-kit] #stage {
+  height: auto;
+  /* its printed layers stay where the full-height body put them */
+  background-size: 100% calc(var(--u) * 1152);
+  background-repeat: no-repeat;
+}
+
+/* ---------- hover triggers over the diagram ---------- */
+#kit-over {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+#kit-over [data-spot] {
+  position: absolute;
+  display: grid;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+/* The trigger fills its spot and draws nothing: the SVG under it is the visible control. */
+#kit-over
+  :is(
+    [data-kit="tooltip-wrap"],
+    [data-kit="tooltip-trigger"],
+    [data-kit="spot"]
+  ):not(#_):not(#_) {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 6px;
+  background: none;
+  box-shadow: none;
+}
+
+/* A landed commit is a 6px LED, so its trigger reaches a little past it. */
+#kit-over [data-kit="spot"]:not(#_):not(#_) {
+  position: absolute;
+  inset: -6px;
+  width: auto;
+  height: auto;
+}
+
+/* A ticket's tooltip is two long lines, so it hangs from the edge of its control that faces
+   into the page instead of centring on it and running off the side. */
+:is(#kit, #kit-over) [data-kit="tooltip-legend"]:not(#_):not(#_) {
+  left: 0;
+  line-height: 1.5;
+  translate: 0 4px;
+}
+
+#kit [data-kit="tooltip-legend"]:not(#_):not(#_) {
+  left: auto;
+  right: 0;
+}
+
+:is(#kit, #kit-over) [data-kit="tooltip-legend"][data-open]:not(#_):not(#_) {
+  translate: 0 0;
+}
+
+/* One landed card at a time: the outgoing card leaves at once, so the next never opens over it. */
+#kit-over [data-hover-card][data-ending-style] {
+  display: none;
+}
+
+/* The landed card: the kit's hover LCD, wider and in one column, for a ticket's record. */
+#kit-over [data-kit="hover-lcd"][data-variant="ticket"]:not(#_):not(#_) {
+  grid-template-columns: minmax(0, 1fr);
+  row-gap: 8px;
+  width: 340px;
+  padding: 16px 18px;
+}
+
+#kit-over [data-variant="ticket"] > :is(strong, p, small, dl, ol):not(#_) {
+  grid-column: 1;
+}
+
+#kit-over [data-variant="ticket"] strong {
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+#kit-over [data-variant="ticket"] strong span {
+  font-weight: 400;
+  color: rgb(20 20 19 / 0.6);
+}
+
+#kit-over [data-variant="ticket"] :is(small, dt) {
+  font: 500 8.5px/1 var(--mono, monospace);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgb(20 20 19 / 0.65);
+}
+
+#kit-over [data-variant="ticket"] dl {
+  display: grid;
+  grid-template-columns: repeat(2, auto);
+  justify-content: space-between;
+  padding: 8px 0;
+  border-block: 1px dashed rgb(20 20 19 / 0.25);
+}
+
+#kit-over [data-variant="ticket"] dd {
+  margin: 5px 0 0;
+  font-size: 13px;
+}
+
+#kit-over [data-variant="ticket"] ol {
+  padding-left: 22px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: rgb(20 20 19 / 0.72);
+}
+
+/* ---------- the ticket device ---------- */
+#kit {
+  --device-w: 100%;
+  --done: oklch(0.72 0.19 150); /* the kit's success green */
+  --fail: oklch(0.65 0.23 28); /* the kit's danger red */
+  flex: none;
+  width: calc(
+    var(--u) * 1280
+  ); /* the SVG body's width, so the two devices stack flush */
+}
+
+/* No shadow under type: at these sizes the kit's 1px offset copy reads as double vision. The kit
+   sets it in rules of every weight, so this is the one place !important earns its keep. */
+:is(#kit, #kit-over) *,
+:is(#kit, #kit-over) *::before,
+:is(#kit, #kit-over) *::after {
+  text-shadow: none !important;
+}
+
+/* Content runs from 39 to 1233, the margins the diagram's rules use. */
+#kit [data-device]:not(#_):not(#_) {
+  box-sizing: border-box;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  column-gap: 28px;
+  row-gap: 18px;
+  padding: 18px 39px 26px;
+}
+
+#kit :is([data-device-plate], [data-bar], [data-area="active"]),
+#kit [data-device] > [data-kit="alert"] {
+  grid-column: 1 / -1;
+}
+
+/* The plate and the bar share the first row: maker's mark left, controls right. */
+#kit :is([data-device-plate], [data-bar]) {
+  grid-row: 1;
+}
+
+#kit [data-device-plate]:not(#_) {
+  justify-self: start;
+}
+
+#kit [data-bar] {
+  display: flex;
+  align-items: center;
+  justify-self: end;
+  gap: 14px;
+}
+
+#kit [data-bar] [data-kit="field"] {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+#kit [data-bar] [data-kit="input-group"] {
+  width: 240px;
+}
+
+#kit [data-kit="option"] small {
+  margin-inline-start: auto;
+  padding-inline-start: 16px;
+  opacity: 0.6;
+}
+
+/* The kit stacks :not(#_) to rank its own rules; a rule that must beat them does the same. */
+#kit
+  [data-kit="popover"]:has(> [data-notices]):not(#_):not(#_):not(#_):not(#_) {
+  width: 380px;
+}
+
+#kit [data-notices]:not(#_):not(#_):not(#_):not(#_) {
+  box-sizing: border-box;
+  width: 100%;
+}
+
+/* The list scrolls inside the screen. The surface itself must not: its screen is painted on it. */
+#kit [data-notices] > [data-scroll] {
+  position: relative; /* above the surface's painted screen */
+  display: grid;
+  gap: 22px;
+  max-height: 380px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+#kit [data-notices] p {
+  margin: 0;
+  font: 400 11px/1.4 var(--mono, monospace);
+  color: var(--dim);
+}
+
+/* ACTIVE: the ticket on the dark screen, its stages as badges, its sheet on the gray LCD. */
+#kit [data-area="active"] {
+  grid-template-columns: 320px minmax(0, 1fr);
+  column-gap: 20px;
+}
+
+#kit [data-area="active"] > h2 {
+  grid-column: 1 / -1;
+}
+
+#kit [data-area="active"] > h2 > :first-child {
+  order: 1; /* the legend badges sit after the hairline */
+}
+
+#kit [data-area="active"] > h2 > :last-child {
+  order: 2;
+}
+
+#kit [data-kit="display"] {
+  grid-row: 2 / span 2;
+  margin: 0;
+}
+
+#kit [data-kit="display-screen"] {
+  height: 100%;
+}
+
+#kit [data-dash-view] {
+  position: static;
+  height: 100%;
+  grid-template-rows: auto 1fr;
+  gap: 16px;
+  box-sizing: border-box;
+}
+
+#kit [data-dash-detail] {
+  padding-top: 0;
+}
+
+#kit [data-dash-detail] strong {
+  overflow-wrap: anywhere;
+}
+
+#kit [data-dash-detail] p {
+  margin: 0;
+  font-size: 11px;
+  color: rgb(242 242 238 / 0.45);
+}
+
+#kit [data-dash-detail] dl:not(#_) {
+  margin-top: 8px;
+}
+
+#kit [data-ticket="blocked"] > [data-status] {
+  color: var(--fail);
+}
+
+#kit [data-dash-view] > figure {
+  align-self: end;
+  display: grid;
+  gap: 7px;
+  margin: 0;
+}
+
+#kit [data-dash-view] figcaption {
+  font: 500 8.5px/1 var(--mono, monospace);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgb(242 242 238 / 0.45);
+}
+
+#kit [data-kit="bar-graph"] {
+  --pitch: 8px; /* 7 segments, one per stage, tall enough to count */
+}
+
+#kit [data-stages] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  white-space: nowrap;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The printed arrow between two stages. */
+#kit [data-stages] > li + li {
+  position: relative;
+}
+
+#kit [data-stages] > li + li::before {
+  content: "→";
+  position: absolute;
+  left: -11px;
+  top: 4px;
+  font: 400 11px/1 var(--mono, monospace);
+  color: var(--dim);
+}
+
+#kit [data-s="now"] > [data-kit="badge"]:not(#_):not(#_) {
+  --status: var(--key-color);
+  --glow: color-mix(in oklch, var(--key-color) 55%, transparent);
+}
+
+#kit [data-kit="lcd"][data-size="lg"] {
+  display: grid;
+}
+
+#kit [data-size="lg"] > [data-kit="lcd-body"] {
+  font-size: 11px;
+}
+
+#kit [data-kit="lcd"] dl {
+  display: grid;
+  grid-template-columns: 1fr 1.25fr 0.6fr;
+  gap: 28px;
+  margin: 0 0 10px;
+}
+
+#kit [data-kit="lcd"] dt {
+  margin-bottom: 5px;
+  font-weight: 600;
+}
+
+#kit [data-kit="lcd"] :is(dd, p) {
+  margin: 0;
+  color: var(--gray-dim);
+}
+
+/* A hanging label: step number, check number or field name. */
+#kit [data-kit="lcd"] dd {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+}
+
+#kit [data-kit="lcd"] dl > :last-child > dd {
+  grid-template-columns: 76px minmax(0, 1fr);
+}
+
+#kit [data-kit="lcd"] dd > span {
+  opacity: 0.7;
+}
+
+#kit [data-kit="lcd"] [data-on] > dt {
+  color: var(--key-ink);
+}
+
+#kit [data-kit="lcd"] p {
+  padding-top: 8px;
+  border-top: 1px dashed rgb(20 20 19 / 0.22);
+}
+
+#kit [data-kit="lcd"] :is(b, a) {
+  color: var(--gray-ink);
+}
+
+#kit [data-checks] {
+  display: block !important;
+  padding-left: 22px;
+  text-indent: -22px;
+}
+
+#kit [data-checks] > span {
+  display: inline-block;
+  width: 22px;
+  text-indent: 0;
+}
+
+#kit [data-checks] > i {
+  font-style: normal;
+}
+
+#kit [data-checks] > i + i::before {
+  content: " → ";
+}
+
+/* The six checks tick while the landing's marker sits on verify, as in style.css. */
+:root:has(#stage.landing) #kit [data-checks] > i {
+  animation: kit-tick 0.3s calc(2.35s + var(--i) * 75ms);
+}
+
+@keyframes kit-tick {
+  50% {
+    color: var(--gray-ink);
+    background: rgb(20 20 19 / 0.12);
+  }
+}
+
+#kit [data-section] > p {
+  margin: 0;
+  font: 400 11px/1 var(--mono, monospace);
+  color: var(--dim);
+}
+
+#kit [data-kit="page-wheel-row"] {
+  justify-self: end;
+}
+
+/* ALL TICKETS: one LED per ticket in order, then the tally on three small LCDs. */
+#kit [data-queue] {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  justify-items: center;
+  margin: 0;
+  padding: 4px 0 0;
+  list-style: none;
+}
+
+#kit [data-queue] > li {
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  gap: 2px;
+  height: 40px;
+}
+
+#kit [data-queue] > [data-status="empty"] {
+  visibility: hidden;
+}
+
+#kit [data-queue] [data-kit="led"]:not(#_):not(#_) {
+  width: 9px;
+  height: 9px;
+  box-shadow:
+    inset 0 0.5px 1px rgb(0 0 0 / 0.25),
+    0 0.5px 0 rgb(255 255 255 / 0.9);
+}
+
+#kit [data-queue] > [data-status="accepted"] [data-kit="led"]:not(#_):not(#_) {
+  background: var(--done);
+  box-shadow: 0 0 4px 1px color-mix(in oklch, var(--done) 50%, transparent);
+}
+
+#kit
+  [data-queue]
+  > :is([data-status="working"], [data-status="idle"])
+  [data-kit="led"]:not(#_):not(#_) {
+  background: var(--key-lamp);
+  box-shadow: 0 0 4px 1px color-mix(in oklch, var(--key-lamp) 50%, transparent);
+}
+
+/* Blocked is red and square, so it does not rest on hue alone next to the orange. */
+#kit [data-queue] > [data-status="blocked"] [data-kit="led"]:not(#_):not(#_) {
+  border-radius: 1px;
+  background: var(--fail);
+  box-shadow: 0 0 4px 1px color-mix(in oklch, var(--fail) 50%, transparent);
+}
+
+#kit [data-queue] small,
+#kit [data-area="queue"] > small {
+  font: 500 8.5px/1 var(--mono, monospace);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--dim);
+}
+
+#kit [data-area="queue"] > small {
+  justify-self: end;
+}
+
+#kit [data-counts] {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
