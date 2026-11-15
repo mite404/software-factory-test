@@ -13,6 +13,7 @@ import {
 import { isAbsolute, join, relative, resolve } from "node:path";
 import definitionSchema from "./definition.schema.json";
 import type { Executor } from "./executor";
+import type { DeliveryIntent } from "./delivery";
 import {
   deliverAlerts,
   reconcileSchedule,
@@ -139,6 +140,11 @@ export type NativeHost = {
     role?: "reviewer",
     executor?: Executor,
   ): Promise<ThreadID>;
+  /** Inspect exact user-message delivery; incomplete or ambiguous reads are inconclusive. */
+  lookupDelivery?(
+    thread: ThreadID,
+    message: string,
+  ): Promise<"present" | "absent" | "inconclusive">;
   send(thread: ThreadID, message: string): Promise<void>;
   /** Observe activity; unavailable evidence is unknown and preserves running ownership. */
   state(
@@ -1604,6 +1610,7 @@ export function createFactory(
         return createWorker(task, run.base, run.worktree);
       }
       if (action === "retry-create") return await retryCreate();
+      await recoverUncertainDeliveries();
       if (
         Object.values(state.runs).some(
           (run) =>
@@ -1613,15 +1620,103 @@ export function createFactory(
         )
       )
         return state;
+      function deliveryIntent(
+        task: Task,
+        attempt: number,
+        role: "worker" | "reviewer",
+        message: string,
+      ): DeliveryIntent {
+        const key = createHash("sha256")
+          .update(
+            JSON.stringify([
+              directory,
+              state.owner,
+              task.id,
+              attempt,
+              role,
+              "delivery",
+              message,
+            ]),
+          )
+          .digest("hex");
+        return {
+          key,
+          message: `factory-key: ${key}\n${message}`,
+          repeated: false,
+        };
+      }
+
+      async function recoverDelivery(
+        task: Task,
+        thread: ThreadID,
+        intent: DeliveryIntent | undefined,
+      ) {
+        if (!intent || !host.lookupDelivery) return false;
+        let found: Awaited<
+          ReturnType<NonNullable<NativeHost["lookupDelivery"]>>
+        >;
+        try {
+          found = await host.lookupDelivery(thread, intent.message);
+        } catch {
+          return false;
+        }
+        if (found === "inconclusive") return false;
+        if (found === "absent") {
+          if (intent.repeated) return false;
+          intent.repeated = true;
+          commit(
+            task.id,
+            "delivery-repeat-reserved",
+            JSON.stringify({ thread, key: intent.key, evidence: found }),
+          );
+          await host.send(thread, intent.message);
+        }
+        commit(
+          task.id,
+          "delivery-recovered",
+          JSON.stringify({ thread, key: intent.key, evidence: found }),
+        );
+        return true;
+      }
+
+      async function recoverWorkerDelivery(
+        task: Task,
+        run: Extract<Run, { kind: "running" }>,
+      ) {
+        if (!(await recoverDelivery(task, run.thread, run.deliveryIntent)))
+          return false;
+        run.delivery = "sent";
+        delete run.feedback;
+        delete run.incident;
+        state.runs[task.id] = run;
+        commit(task.id, "sent", run.thread);
+        await watch(run.thread);
+        return true;
+      }
+
+      async function recoverUncertainDeliveries() {
+        for (const task of queue) {
+          const run = state.runs[task.id];
+          if (run?.kind !== "uncertain" || !run.checkpoint) continue;
+          if (await recoverWorkerDelivery(task, run.checkpoint)) return;
+        }
+      }
+
       async function send(
         task: Task,
         run: Extract<Run, { kind: "running" }>,
         message: string,
       ) {
         if (run.feedback) await verifyRepair(run);
+        run.deliveryIntent = deliveryIntent(
+          task,
+          run.attempt,
+          "worker",
+          message,
+        );
         run.delivery = "sending";
         commit(task.id, "sending", run.thread);
-        await host.send(run.thread, message);
+        await host.send(run.thread, run.deliveryIntent.message);
         run.delivery = "sent";
         delete run.feedback;
         commit(task.id, "sent", run.thread);
@@ -1752,9 +1847,15 @@ export function createFactory(
             ? `${run.requirements}\n${runDefinition(run, config, directory).instructions}`
             : run.requirements!,
         );
+        review.deliveryIntent = deliveryIntent(
+          task,
+          run.attempt,
+          "reviewer",
+          message,
+        );
         review.delivery = "sending";
         commit(task.id, "review-sending", JSON.stringify(review));
-        await host.send(review.thread, message);
+        await host.send(review.thread, review.deliveryIntent.message);
         review.delivery = "sent";
         commit(task.id, "review-sent", JSON.stringify(review));
       }
@@ -1925,11 +2026,7 @@ export function createFactory(
         run: Extract<Run, { kind: "running" }>,
       ) {
         const review = run.review!;
-        // Unknown creation/delivery remains owned and parked, including after a reload.
-        if (review.delivery !== "sent") {
-          if (review.delivery === "queued") await deliverReview(task, run);
-          return;
-        }
+        if (review.delivery !== "sent") return settleReviewDelivery(task, run);
         if (!reviewIdentity(root, run.worktree, review)) {
           state.runs[task.id] = {
             kind: "blocked",
@@ -1970,26 +2067,47 @@ export function createFactory(
         );
       }
 
+      async function settleReviewDelivery(
+        task: Task,
+        run: Extract<Run, { kind: "running" }>,
+      ) {
+        const review = run.review!;
+        if (review.delivery === "queued") return deliverReview(task, run);
+        if (review.delivery !== "sending") return;
+        if (
+          !(await recoverDelivery(task, review.thread!, review.deliveryIntent))
+        )
+          return;
+        review.delivery = "sent";
+        delete run.incident;
+        commit(task.id, "review-sent", JSON.stringify(review));
+      }
+
+      async function settleWorkerDelivery(
+        task: Task,
+        run: Extract<Run, { kind: "running" }>,
+      ) {
+        if (run.delivery === "queued")
+          return send(task, run, await prompt(task, run, config));
+        if (await recoverWorkerDelivery(task, run)) return state;
+        state.runs[task.id] = {
+          kind: "uncertain",
+          definition: run.definition,
+          incident: run.incident,
+          thread: run.thread,
+          reason: "Delivery outcome unknown; inspect thread before recovery",
+          executor: run.executor,
+          checkpoint: run.deliveryIntent ? run : undefined,
+        };
+        commit(task.id, "uncertain", "delivery-unknown");
+        return state;
+      }
+
       async function settle(
         task: Task,
         run: Extract<Run, { kind: "running" }>,
       ) {
-        if (run.delivery === "sending") {
-          state.runs[task.id] = {
-            kind: "uncertain",
-            definition: run.definition,
-            incident: run.incident,
-            thread: run.thread,
-            reason: "Delivery outcome unknown; inspect thread before recovery",
-            executor: run.executor,
-          };
-          commit(task.id, "uncertain", "delivery-unknown");
-          return state;
-        }
-        if (run.delivery === "queued") {
-          await send(task, run, await prompt(task, run, config));
-          return;
-        }
+        if (run.delivery !== "sent") return settleWorkerDelivery(task, run);
         const activity = await runActivity(task, run, run.thread);
         if (activity === "running" || activity === "unknown") return;
         if (activity !== "idle") {

@@ -379,6 +379,13 @@ owning Foreman can call `retry-create` with `ticket`, the current `incident` ID 
 `decision`. This repeats that one creation in place, on the executor pinned for the run. A stale
 incident ID, a missing decision, or a run in any other state is refused.
 
+The installed plugin API exposes only `threads.get(id)`, not thread listing or search.
+`CreateAgentThreadOptions` accepts a parent but no title, label, or initial message. Agent display
+labels are not verified searchable keys. Although the Foreman's `find_thread` can list children,
+its search index freshness and availability through the plugin are unverified. Creation therefore
+stays parked for workers and reviewers. The factory does not infer absence from titles, keyword
+hits, elapsed time, or assistant prose, and does not ask the Foreman to perform automatic lookups.
+
 The operator can supervise the runner from the factory repository root with:
 
 ```sh
@@ -391,6 +398,30 @@ The Foreman observed a runner-created test thread execute commands again after t
 restarted. Tool continuity across a Foreman CLI or mid-turn runner restart remains unproven live.
 Fixture hosts test the plugin request and durable records without creating real threads or
 running a real runner.
+
+### Recover unclear assignment delivery
+
+New worker briefs, same-worker corrections, and reviewer briefs persist a `deliveryIntent` before
+sending. Its deterministic SHA-256 key binds the factory directory, owner, ticket, attempt, role,
+delivery purpose, and exact message. The outbound user message starts with `factory-key: <key>`.
+The saved message and one-repeat reservation survive reload. Legacy records open unchanged;
+uncertain deliveries without a saved intent still require manual inspection.
+
+Enabled reconciliation with execution permission reads the target thread using the supported
+`PluginThread.messages({ full: true, from: "start", offset, limit: 20 })` API. It reads through the
+end of the transcript, including compacted history. Exactly one matching user message confirms
+delivery without another send. A complete read with no match permits one repeat of the saved
+message, reserved in SQLite before sending. An uncertain repeat is never repeated again, but a
+later matching read can confirm it. `delivery-recovered` records the key, target and deciding
+evidence; `delivery-repeat-reserved` records the absence that authorized the repeat.
+
+Failed or unavailable reads, multiple matches, altered messages containing the key, duplicate page
+IDs, and histories reaching the 2,000-message scan cap remain inconclusive. The original incident
+and inspect recovery remain held. Increase the scan cap only with bounded pagination coverage.
+Pause, disabled execution, and status reads never perform delivery recovery. Delivery confirmation
+does not accept a candidate or replace a worker or reviewer. Provider-limit continuations, alerts,
+and Foreman notices keep their existing delivery rules. Fixtures prove these decisions, not live
+plugin transcript freshness or end-to-end remote recovery.
 
 ## Prepare worker worktrees
 
@@ -441,8 +472,8 @@ An interrupted command's recorded process group must have exited before retry ca
 coordinator exits during setup, inspect any surviving process before stopping it or retrying. A
 reopened coordinator never assumes an interrupted command succeeded. A command observed closing
 clears its saved process group, so a later retry does not mistake a reused PID for live setup. Once
-preparation succeeds, worker creation starts at implementation attempt one. Ambiguous thread
-creation or delivery remains parked and cannot be retried with `retry-setup`.
+preparation succeeds, worker creation starts at implementation attempt one. Ambiguous creation
+and inconclusive delivery remain parked and cannot be retried with `retry-setup`.
 
 ## Conditional post-graft review
 
@@ -489,10 +520,10 @@ state cannot approve a candidate.
 
 Review identity, delivery, verdict evidence, and events live in the existing SQLite run state.
 The dashboard's existing title, thread, revision, and activity fields project the pending review.
-Reloads reattach reviewers without replacements. Unknown creation or delivery stays parked for
-operator reconciliation; missing, invalid, blocked, stale, or unavailable verdicts cannot land or
-consume corrections. Issues return to the original worker, with Foreman escalation after every
-two verification or review rejections. Owner-only `resume` records the next repair decision.
+Reloads reattach reviewers without replacements. Unknown creation or inconclusive delivery stays
+parked for operator reconciliation; missing, invalid, blocked, stale, or unavailable verdicts cannot
+land or consume corrections. Issues return to the original worker, with Foreman escalation after
+every two verification or review rejections. Owner-only `resume` records the next repair decision.
 A gate rejection sends the worker the exit status, marked stdout and stderr tails of at most 8,192
 bytes combined cut on line boundaries, and the full log path, or names the precondition that
 prevented the run.

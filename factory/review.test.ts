@@ -5,8 +5,8 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createFactory, tasks, type NativeHost } from "./native";
-import { openStore } from "./bookkeeping.fixture";
-import type { Task } from "./persistence";
+import { deliveryFixture, openStore } from "./bookkeeping.fixture";
+import { factoryStatus, type Task } from "./persistence";
 import { reviewPrompt, type Review } from "./review";
 
 const git = (cwd: string, ...args: string[]) =>
@@ -134,6 +134,7 @@ async function fixture(
   return {
     root,
     worktree,
+    host,
     settings,
     messages,
     notices,
@@ -343,8 +344,16 @@ test.each([
         attempt: 2,
       });
       expect(f.messages.at(-1)?.thread).toBe("T-1");
-      expect(f.messages.at(-1)!.message).toStartWith(
+      const correction = f.messages.at(-1)!.message;
+      expect(correction).toMatch(/^factory-key: [a-f0-9]{64}\n/);
+      expect(correction.split("\n").slice(1).join("\n")).toStartWith(
         `Verification rejected attempt 1. Evidence: ${evidence}. Repair the candidate and submit report attempt 2.\n`,
+      );
+      expect(correction.split("\n")[0]).not.toBe(
+        f.messages[0]!.message.split("\n")[0],
+      );
+      expect(correction.split("\n")[0]).not.toBe(
+        f.messages[1]!.message.split("\n")[0],
       );
       expect(f.messages.at(-1)?.message).toContain("src/value:1");
       await f.submit(2);
@@ -657,6 +666,64 @@ test.each(["base", "code", "stage"])(
         },
       });
       expect(f.settings).toHaveLength(2);
+    } finally {
+      await f.close();
+    }
+  },
+);
+
+test.each([
+  ["present", 1, 1, "sent"],
+  ["absent", 2, 1, "sent"],
+  ["inconclusive", 1, 0, "sending"],
+  ["failed", 1, 0, "sending"],
+  ["repeat-unknown", 2, 0, "sending"],
+  ["repeat-present", 2, 1, "sent"],
+] as const)(
+  "review delivery recovery is bounded across reload with %s evidence",
+  async (evidence, sends, deliveries, delivery) => {
+    const f = await fixture();
+    const remote = deliveryFixture(evidence);
+    f.host.send = async (thread, message) => {
+      if (thread === "T-owner") return;
+      if (remote.messages.length === 1) {
+        const saved = factoryStatus(join(f.root, ".git/factory")).runs.A;
+        expect(saved).toMatchObject({
+          review: { deliveryIntent: { repeated: true } },
+        });
+      }
+      return remote.send(thread, message);
+    };
+    f.host.lookupDelivery = async (thread, message) => {
+      expect(thread).toBe("T-2");
+      expect(message).toBe(remote.messages[0]!);
+      return remote.lookupDelivery(thread, message);
+    };
+    try {
+      await f.submit(1);
+      expect(f.tick()).rejects.toThrow("lost send response");
+      f.reload();
+      if (evidence.startsWith("repeat-"))
+        expect(f.tick()).rejects.toThrow("lost send response");
+      await f.tick();
+      const incident = (await f.status()).runs.A?.incident?.id;
+      f.reload();
+      const state = await f.tick();
+      expect(state.runs.A).toMatchObject({
+        kind: "running",
+        review: { thread: "T-2", delivery },
+      });
+      expect(state.runs.A?.incident?.id).toBe(incident);
+      if (delivery === "sending")
+        expect(state.runs.A?.incident).toMatchObject({
+          reason: "delivery-unknown",
+          recovery: "inspect",
+        });
+      expect(f.settings).toHaveLength(2);
+      expect(remote.messages).toHaveLength(sends);
+      expect(new Set(remote.messages).size).toBe(1);
+      expect(remote.delivered).toHaveLength(deliveries);
+      expect(state.runs.B).toBeUndefined();
     } finally {
       await f.close();
     }

@@ -183,6 +183,50 @@ afterEach(async () => {
     await rm(root, { recursive: true, force: true });
 });
 
+test("delivery intents validate and reopen without adding keys to legacy runs", async () => {
+  const f = await fixture();
+  const storage = openPersistence(f.directory, queue);
+  storage.commit(parked, "A", "fixture", "");
+  storage.close();
+  const before = await readFile(join(f.directory, "state.sqlite"));
+  const reopened = openPersistence(f.directory, queue);
+  expect(reopened.state).toEqual(parked);
+  reopened.close();
+  expect(await readFile(join(f.directory, "state.sqlite"))).toEqual(before);
+  const key = "b".repeat(64);
+  const intent = {
+    key,
+    message: `factory-key: ${key}\nAssignment`,
+    repeated: true,
+  };
+  const state = structuredClone(parked);
+  const run = state.runs.A;
+  if (run?.kind !== "running") throw new Error("Missing fixture worker");
+  run.deliveryIntent = intent;
+  const writer = openPersistence(f.directory, queue);
+  try {
+    writer.commit(state, "A", "fixture", "");
+    for (const invalid of [
+      null,
+      { ...intent, key: "other" },
+      { ...intent, message: "Missing marker" },
+      { ...intent, repeated: "false" },
+    ]) {
+      const broken = {
+        ...state,
+        runs: { A: { ...run, deliveryIntent: invalid } },
+      } as unknown as State;
+      expect(() => writer.commit(broken, "A", "invalid", "")).toThrow();
+      expect(factoryStatus(f.directory).runs.A).toEqual(run);
+    }
+  } finally {
+    writer.close();
+  }
+  const confirmed = openPersistence(f.directory, queue);
+  expect(confirmed.state.runs.A).toEqual(run);
+  confirmed.close();
+});
+
 test("merge records validate on save and reopen without changing legacy runs", async () => {
   const f = await fixture();
   const storage = openPersistence(f.directory, queue);

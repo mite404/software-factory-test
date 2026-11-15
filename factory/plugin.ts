@@ -2,6 +2,7 @@ import type {
   PluginAPI,
   PluginTools,
   PluginToolContext,
+  ThreadMessage,
 } from "@ampcode/plugin";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
@@ -30,6 +31,21 @@ const controlActions = [
   "admit",
   "record-merge",
 ] as const;
+
+function matchingDeliveries(page: ThreadMessage[], message: string) {
+  const marker = message.slice(0, message.indexOf("\n"));
+  let matches = 0;
+  for (const row of page) {
+    if (row.role !== "user") continue;
+    const text = row.content
+      .map((block) => (block.type === "text" ? block.text : ""))
+      .join("");
+    if (!text.includes(marker)) continue;
+    if (text !== message) return undefined;
+    matches++;
+  }
+  return matches;
+}
 
 function activity(value: unknown): Awaited<ReturnType<NativeHost["state"]>> {
   switch (value) {
@@ -253,6 +269,32 @@ export default function registerFactory(
       await amp.threads
         .get(id)
         .appendUserMessage({ type: "user-message", content });
+    },
+    async lookupDelivery(id, message) {
+      const thread = amp.threads.get(id);
+      const seen = new Set<number | string>();
+      let matches = 0;
+      // ponytail: cap transcript reads at 2,000 messages; longer histories stay parked.
+      for (let offset = 0; offset < 2000; offset += 20) {
+        const page = await thread.messages({
+          full: true,
+          from: "start",
+          offset,
+          limit: 20,
+        });
+        const duplicate = page.some((row) => {
+          if (seen.has(row.id)) return true;
+          seen.add(row.id);
+          return false;
+        });
+        if (duplicate) return "inconclusive";
+        const found = matchingDeliveries(page, message);
+        if (found === undefined) return "inconclusive";
+        matches += found;
+        if (matches > 1) return "inconclusive";
+        if (page.length < 20) return matches === 1 ? "present" : "absent";
+      }
+      return "inconclusive";
     },
     state: observe,
     watch(id, wake) {
