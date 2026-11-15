@@ -43,6 +43,8 @@ prerequisites, not permission to dispatch every draft against today's base.
 | [F020-reviewer-uses-ce-code-review](feats/worker-feedback/F020-reviewer-uses-ce-code-review.md) | Cold review uses the review skill               | None                                                                     | F03, operator quality priority            |
 | [F021-merge-record](feats/done/F021-merge-record.md)                                            | Each landed ticket records its pull request     | None                                                                     | F07, operator observability priority      |
 | [F022-ticket-file-sync](feats/planned-intake/F022-ticket-file-sync.md)                          | Saved tickets appear as planned on their own    | planned-intake-ticket1                                                   | F02, F07, operator observability priority |
+| [F023-public-stop-reasons](feats/lifecycle-view/F023-public-stop-reasons.md)                    | A blocked or rejected ticket says why           | None                                                                     | F07, operator observability priority      |
+| [F024-serial-test-runs](feats/worker-feedback/F024-serial-test-runs.md)                         | Test runs on one machine take turns             | None                                                                     | F03, operator autonomy priority           |
 | [v1-ticket4](feats/v1/v1-ticket4.md)                                                            | Durable private evidence records                | v1-ticket2                                                               | F02, F07, R6-R7                           |
 | [v1-ticket11](feats/v1/v1-ticket11.md)                                                          | Required and advisory verification tools        | v1-ticket2                                                               | F12, AC28, AC35-AC36                      |
 | [v1-ticket12](feats/v1/v1-ticket12.md)                                                          | Permission-bound native hooks                   | v1-ticket11                                                              | F12, AC27, AC29                           |
@@ -160,10 +162,12 @@ independent and the operator ranked it highest; F009 to F012 follow F007. F014 a
 approved the same day: F014 runs after F009 and before F012, and F015 follows F013. Also that day
 the operator chose the kit page as the only dashboard: F016 runs right after F008 and before F013,
 and F017 follows F012. F021, which the operator asked to land first so it can be tested, runs right
-after F016; F019, F018 and F020 follow in that order, then F013. v1-ticket10 keeps the recovery of
-outages that still happen, and v1-ticket8 keeps exclusive ownership across orbs. Keep preserved
-backup owners until required evidence preservation is confirmed. Native acceptance does not
-authorize retirement.
+after F016; F019 follows. Then come F024, which stops overlapping test runs, and F010, which the
+operator moved up to stop workers starting on an incomplete brief. F018 and F020 follow in that
+order, then F013. F022 and F023 are not placed yet.
+v1-ticket10 keeps the recovery of outages that still happen, and v1-ticket8 keeps exclusive
+ownership across orbs. Keep preserved backup owners until required evidence preservation is
+confirmed. Native acceptance does not authorize retirement.
 
 Local sequential steel-thread evidence exists in workflow trials 8 and 9 and subsequent native
 acceptances. Cross-orb transfer, replacement restore, remote monitoring, and retirement still need
