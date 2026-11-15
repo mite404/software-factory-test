@@ -47,13 +47,14 @@ Make the links real anchors. Wrap the landed dot's trigger and the card in one
 says which ticket and that it opens the thread. Do the same for the builder spots. Remove the
 `open` helper when nothing calls it.
 
-Beside the revision in `Landed`, render a second, nested-safe control: a small arrow link to the
-pull request, with the accessible name "Open pull request #N on GitHub". HTML forbids an anchor
-inside an anchor, so place the arrow as a sibling positioned over the card, or stop the card
-being an anchor around it; a click on the arrow must open only the pull request. Show the arrow
-only when the feed carries a pull request URL of the form
-`https://github.com/<owner>/<repo>/pull/<number>`. Until F014 lands, no ticket has one, so no
-arrow shows; "Page placeholders" in `docs/v1-execution.md` lists it.
+Print the pull request as text, "PR #N", beside the revision in `Landed`, so a landed ticket can be
+found by the number the Foreman reports. Next to it, render a second, nested-safe control: a small
+arrow link to the pull request, with the accessible name "Open pull request #N on GitHub". HTML
+forbids an anchor inside an anchor, so place the arrow as a sibling positioned over the card, or
+stop the card being an anchor around it; a click on the arrow must open only the pull request. Show
+the arrow only when the feed carries a pull request URL of the form
+`https://github.com/<owner>/<repo>/pull/<number>`. Until F014 lands, no ticket has one, so no arrow
+shows; "Page placeholders" in `docs/v1-execution.md` lists it.
 
 Fix the feed for landed tickets: an accepted ticket keeps its own title and its worker's thread.
 A ticket still in review keeps today's review title and reviewer thread. The landed card then
@@ -136,6 +137,7 @@ Run the shared preflight in `docs/v1-execution.md`. Baseline gates have not run 
 - [ ] A landed ticket shows its own title and opens its worker's thread, not a reviewer's.
 - [ ] A click anywhere on a landed card, except the arrow, follows a real `<a target="_blank">`
       to the ticket's thread, as the previous dashboard did.
+- [ ] The card shows "PR #N" beside the revision when the feed has a pull request.
 - [ ] The arrow beside the revision opens the pull request and shows only when the feed has a
       valid pull request URL.
 - [ ] Both links work by keyboard and have accessible names.
