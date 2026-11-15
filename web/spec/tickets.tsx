@@ -429,16 +429,6 @@ function Everything({ view }: { view: View }) {
   return (
     <section data-section data-area="queue">
       <h2>All tickets</h2>
-      <ol data-queue>
-        {view.queue.map((cell, i) => (
-          <li key={i} data-status={cell.status}>
-            <Tooltip label={cell.label}>
-              <span data-kit="led" />
-            </Tooltip>
-            <small>{cell.tag}</small>
-          </li>
-        ))}
-      </ol>
       <div data-counts>
         {Object.entries(view.counts).map(([name, count]) => (
           <Lcd key={name} size="sm" tag={name}>

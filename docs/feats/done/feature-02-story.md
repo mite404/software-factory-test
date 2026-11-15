@@ -1,7 +1,7 @@
 # Story: choose worker model and reasoning effort explicitly
 
 Status: locally verified, 2026-11-13. Backend tool configuration under F01 and F03 in
-[the backlog](../../backlog.md). Depends on [feature 01](feature-01-story.md).
+[the stories](../../stories.md). Depends on [feature 01](feature-01-story.md).
 
 ## 1. Set reasoning effort on native workers
 

@@ -276,12 +276,16 @@ function news(
 
 // The feed says "blocked" for a few seconds while a cold review is being dispatched. A pending
 // review is work in progress, so it counts as working everywhere on the page.
+// The feed lists an admitted ticket after the planned ones it was picked from; every admitted
+// ticket runs before any planned one, so planned tickets go last and the rest keep their order.
 function settle(feed: Feed): Feed {
+  const tasks = feed.tasks.map((task): Task =>
+    task.evidence?.review?.pending ? { ...task, status: "working" } : task,
+  );
+  const planned = (task: Task) => task.status === "planned";
   return {
     ...feed,
-    tasks: feed.tasks.map((task) =>
-      task.evidence?.review?.pending ? { ...task, status: "working" } : task,
-    ),
+    tasks: [...tasks.filter((t) => !planned(t)), ...tasks.filter(planned)],
   };
 }
 

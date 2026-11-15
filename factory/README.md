@@ -1,8 +1,8 @@
 # Factory prototype
 
 The dispatcher uses Bun SQLite persistence and native Amp thread APIs. Cross-orb code transfer,
-worker retirement, and dashboard chat are not implemented. Requirements and remaining
-stories live in [the backlog](../docs/backlog.md).
+worker retirement, and dashboard chat are not implemented. Remaining stories live in
+[stories.md](../docs/stories.md) and their tickets in [the backlog](../docs/backlog.md).
 
 The [Foreman prompt](foreman.md) defines the current sequential orchestration procedure. It is a
 reusable prompt, not an automatically installed agent mode or a change to worker instructions.

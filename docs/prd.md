@@ -18,8 +18,8 @@ separate threads, and starts the next eligible ticket without reminder threads.
 The first proving ground is `mite404/software-factory-test`. The motivating application is
 `mite404/design-workshop`, whose own `docs/prd.md` describes the application, not this factory.
 Architectural choices belong in [adr.md](adr.md); experiment results belong in
-[workflow-trials.md](workflow-trials.md).
-Implementation stories and dependencies are tracked in [backlog.md](backlog.md).
+[workflow-trials.md](workflow-trials.md). Implementation stories are in [stories.md](stories.md) and
+their tickets in [backlog.md](backlog.md).
 
 ## Implementation status
 
