@@ -18,7 +18,7 @@ Merged, but at least one box, usually a live proof, is still open.
 | [foreman-watchdog-ticket3](feats/foreman-watchdog/foreman-watchdog-ticket3.md) | Outside-orb wake-up and alert delivery        | 2/4       |
 | [F003-provider-limit-resume](feats/durability/F003-provider-limit-resume.md)   | Same threads resume after a provider limit    | 5/6       |
 
-## Not started (43)
+## Not started (44)
 
 In dispatch order.
 
@@ -39,6 +39,7 @@ In dispatch order.
 | [F010-brief-fact-check](feats/worker-feedback/F010-brief-fact-check.md)                         | No worker starts on an incomplete brief         | 0/4       |
 | [F012-lifecycle-graph-view](feats/lifecycle-view/F012-lifecycle-graph-view.md)                  | Lifecycle drawn with tickets on their states    | 0/6       |
 | [F017-remove-public-status](feats/lifecycle-view/F017-remove-public-status.md)                  | Feed carries the stage only                     | 0/3       |
+| [F025-config-directory](feats/config-layout/F025-config-directory.md)                           | Factory settings live in one file per concern   | 0/7       |
 | [F022-ticket-file-sync](feats/planned-intake/F022-ticket-file-sync.md)                          | Saved tickets appear as planned on their own    | 0/6       |
 | [F023-public-stop-reasons](feats/lifecycle-view/F023-public-stop-reasons.md)                    | A blocked or rejected ticket says why           | 0/6       |
 | [F024-serial-test-runs](feats/worker-feedback/F024-serial-test-runs.md)                         | Test runs on one machine take turns             | 0/5       |
