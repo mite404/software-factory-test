@@ -7,8 +7,8 @@
 - Initial priority: P1. Effort: Medium.
 - Risk: elevated; event details hold private briefs, review findings and file paths, and this
   ticket publishes part of the log over HTTP.
-- Depends on: nothing accepted later than planned-intake-ticket1. v1-ticket23 extends the same
-  endpoint with curated details and replay guarantees.
+- Depends on: F016-kit-page-default, whose page the drawer is added to. v1-ticket23 extends the
+  same endpoint with curated details and replay guarantees.
 - Planned at: `36fed66ba4cd40bbcd7d066fbcd0709532e0059d`, 2026-11-15. Local only.
 
 ## Why this matters
@@ -39,12 +39,16 @@ carries `id`, `at`, `ticket`, `action`, and only these values taken from `detail
 validate: an attempt number, a 40-character revision, and a thread ID. Everything else in
 `detail` is dropped. An unknown action still appears, with no detail.
 
-Add a drawer to the existing page: a bar fixed to the bottom edge that opens upward to show
-the log, newest at the bottom, following new rows while the reader is at the end. Each row
-shows the time, ticket, action and attempt, and links a thread ID to its thread. A filter
-narrows the rows to one ticket. The drawer polls the endpoint with the last seen `id` on the
-page's existing timer. It opens and closes from the keyboard and remembers nothing between
-loads.
+Stage changes are events too: once F014 lands, each change of stage appears as a row. The kit
+page's notification list, which `web/derive.ts` now infers by comparing two polls (`View.news`),
+reads these rows and the comparison is deleted. Add events to the `web/replay.ts` recording.
+
+Add a drawer to the kit page (`web/spec/tickets.tsx`): a bar fixed to the bottom edge that
+opens upward to show the log, newest at the bottom, following new rows while the reader is at
+the end. Each row shows the time, ticket, action and attempt, and links a thread ID to its
+thread. A filter narrows the rows to one ticket. The drawer polls the endpoint with the last
+seen `id` on the page's existing timer. It opens and closes from the keyboard and remembers
+nothing between loads.
 
 Agents use the same endpoint; the README documents its fields as the supported way to trace the
 factory without opening the state file.
@@ -92,14 +96,14 @@ closed, and reachable and dismissible from the keyboard.
 
 ## Files You'll Touch
 
-| Path                                                    | Role       | Contains                         | Edit or Read |
-| ------------------------------------------------------- | ---------- | -------------------------------- | ------------ |
-| `factory/persistence.ts`, `factory/persistence.test.ts` | Records    | The events table and its readers | Edit         |
-| `factory/dashboard.ts`, `factory/dashboard.test.ts`     | HTTP       | Routes and the public projection | Edit         |
-| `web/derive.ts`, `web/derive.test.ts`                   | Page model | Feed to display rows             | Edit         |
-| `web/main.ts`, `web/index.html`, `web/style.css`        | Page       | Polling and drawing              | Edit         |
-| `factory/native.ts`                                     | Exemplar   | Which actions are written        | Read         |
-| `factory/README.md`                                     | Operation  | Dashboard API                    | Edit         |
+| Path                                                                           | Role       | Contains                         | Edit or Read |
+| ------------------------------------------------------------------------------ | ---------- | -------------------------------- | ------------ |
+| `factory/persistence.ts`, `factory/persistence.test.ts`                        | Records    | The events table and its readers | Edit         |
+| `factory/dashboard.ts`, `factory/dashboard.test.ts`                            | HTTP       | Routes and the public projection | Edit         |
+| `web/derive.ts`, `web/derive.test.ts`                                          | Page model | Feed to display rows             | Edit         |
+| `web/main.ts`, `web/spec/tickets.tsx`, `web/spec/tickets.css`, `web/replay.ts` | Page       | Polling and drawing              | Edit         |
+| `factory/native.ts`                                                            | Exemplar   | Which actions are written        | Read         |
+| `factory/README.md`                                                            | Operation  | Dashboard API                    | Edit         |
 
 Build order: query, endpoint, model, drawer, rendered check, documents.
 

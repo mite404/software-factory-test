@@ -31,11 +31,13 @@ prerequisites, not permission to dispatch every draft against today's base.
 | [F008-gate-failure-feedback](feats/worker-feedback/F008-gate-failure-feedback.md)       | A failed gate returns its output to the worker  | F003-provider-limit-resume                                               | F03, operator leverage priority        |
 | [F009-attempt-cap-parking](feats/repair-escalation/F009-attempt-cap-parking.md)         | Twice-escalated ticket parks; queue continues   | F007-run-transition-table                                                | F03, operator autonomy priority        |
 | [F010-brief-fact-check](feats/worker-feedback/F010-brief-fact-check.md)                 | No worker starts on an incomplete brief         | F007-run-transition-table                                                | F02, F03                               |
-| [F011-step-actor-labels](feats/lifecycle-view/F011-step-actor-labels.md)                | Each step and exit names who performs it        | F007-run-transition-table                                                | F07                                    |
+| [F011-step-actor-labels](feats/lifecycle-view/F011-step-actor-labels.md)                | Each step and exit names who performs it        | F007, F016-kit-page-default                                              | F07                                    |
 | [F012-lifecycle-graph-view](feats/lifecycle-view/F012-lifecycle-graph-view.md)          | Lifecycle drawn with tickets on their states    | F011, F014-lifecycle-stages                                              | F07                                    |
-| [F013-event-log-drawer](feats/lifecycle-view/F013-event-log-drawer.md)                  | Live event log drawer and read-only trace API   | planned-intake-ticket1                                                   | F07, operator observability priority   |
+| [F013-event-log-drawer](feats/lifecycle-view/F013-event-log-drawer.md)                  | Live event log drawer and read-only trace API   | F016-kit-page-default                                                    | F07, operator observability priority   |
 | [F014-lifecycle-stages](feats/lifecycle-view/F014-lifecycle-stages.md)                  | One named stage and actor for every run         | F007, F009-attempt-cap-parking                                           | F07, operator observability priority   |
 | [F015-weekly-failure-audit](feats/failure-audit/F015-weekly-failure-audit.md)           | Weekly bucketed failures and a Fable audit      | F002-worker-runner-executor                                              | F04, operator quality priority         |
+| [F016-kit-page-default](feats/lifecycle-view/F016-kit-page-default.md)                  | The kit page is the only dashboard              | None                                                                     | F07, operator observability priority   |
+| [F017-remove-public-status](feats/lifecycle-view/F017-remove-public-status.md)          | Feed carries the stage only                     | F012, F014-lifecycle-stages                                              | F07                                    |
 | [v1-ticket4](feats/v1/v1-ticket4.md)                                                    | Durable private evidence records                | v1-ticket2                                                               | F02, F07, R6-R7                        |
 | [v1-ticket11](feats/v1/v1-ticket11.md)                                                  | Required and advisory verification tools        | v1-ticket2                                                               | F12, AC28, AC35-AC36                   |
 | [v1-ticket12](feats/v1/v1-ticket12.md)                                                  | Permission-bound native hooks                   | v1-ticket11                                                              | F12, AC27, AC29                        |
@@ -146,7 +148,9 @@ limit stopped the factory for two hours. F003-provider-limit-resume is first. Th
 ticket at a time from merged main. On 2026-11-15 the operator approved five more units, F008 to
 F012, and then F013, which follows F008. The Foreman places F008 right after F003, because it is
 independent and the operator ranked it highest; F009 to F012 follow F007. F014 and F015 were
-approved the same day: F014 runs after F009 and before F012, and F015 follows F013. v1-ticket10
+approved the same day: F014 runs after F009 and before F012, and F015 follows F013. Also that day
+the operator chose the kit page as the only dashboard: F016 runs right after F008 and before
+F013, and F017 follows F012. v1-ticket10
 keeps the recovery of outages that still happen, and v1-ticket8 keeps exclusive ownership across
 orbs. Keep preserved backup owners until required evidence preservation is confirmed. Native
 acceptance does not authorize retirement.
@@ -175,3 +179,20 @@ than adding a parallel feed or allowing browser inference:
 
 New feed field names must be published after their implementation and tests, not promised as already
 available. Public reasons and findings need curation; raw private reports stay private.
+
+## Page placeholders
+
+The dashboard is the kit page (F016). The operator's rule, 2026-11-15: anything on the page that
+the factory does not report yet stays as a labelled placeholder until its ticket wires it. Do not
+delete a placeholder and do not make one look live.
+
+| Placeholder on the page                     | Shown today from              | Wired by                |
+| ------------------------------------------- | ----------------------------- | ----------------------- |
+| Gate check ticks in the ticket sheet        | A fixed animation             | v1-ticket23             |
+| Stages done per ticket                      | Inferred from `status`        | F014-lifecycle-stages   |
+| Actor on each stage                         | Not shown                     | F011-step-actor-labels  |
+| Notification list                           | Two polls compared            | F013-event-log-drawer   |
+| Cold review with findings in the diagram    | The replay button only        | F014, then v1-ticket23  |
+| Reports reaching the Foreman in the diagram | The replay button only        | v1-ticket23             |
+| Full gate box in the diagram                | The replay button only        | scheduled-gates-ticket1 |
+| Second line of a ticket tooltip             | The ticket's first step label | v1-ticket23             |
