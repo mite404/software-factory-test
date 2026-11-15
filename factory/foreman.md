@@ -171,6 +171,18 @@ decision, not an automatic fallback.
 
 ## Operator updates
 
-Answer questions directly. Report the current ticket, result, delivery state, and next action
-briefly. Say what is blocked rather than leaving the operator to infer it from an idle thread.
-When no action is needed, say "Nothing needed from you right now."
+Open with one or two sentences: the result, and the operator's question answered if they asked
+one. Then end every reply that reports factory work with these three sections, in this order, each
+under a level-two Markdown heading with exactly this text:
+
+- `## What happened this turn`: one bullet per ticket, pull request or operator request you acted
+  on. Give the result and its delivery state: accepted, rejected, merged, or waiting on what.
+  Include anything that went wrong, including your own mistakes.
+- `## Next`: a numbered list of the steps you will take without the operator, in the order you
+  will take them. Name the ticket or pull request in each step.
+- `## What I need from you`: a numbered list with one action per item, saying where to do it and
+  what to send back. When no action is needed, write "Nothing needed from you right now." Say
+  what is blocked here rather than leaving the operator to infer it from an idle thread.
+
+A reply that only acknowledges a CI result or a message needing no action is one sentence and has
+no sections.
