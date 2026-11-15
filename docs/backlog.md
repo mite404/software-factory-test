@@ -18,7 +18,7 @@ Merged, but at least one box, usually a live proof, is still open.
 | [foreman-watchdog-ticket3](feats/foreman-watchdog/foreman-watchdog-ticket3.md) | Outside-orb wake-up and alert delivery        | 2/4       |
 | [F003-provider-limit-resume](feats/durability/F003-provider-limit-resume.md)   | Same threads resume after a provider limit    | 5/6       |
 
-## Not started (44)
+## Not started (48)
 
 In dispatch order.
 
@@ -40,6 +40,10 @@ In dispatch order.
 | [F012-lifecycle-graph-view](feats/lifecycle-view/F012-lifecycle-graph-view.md)                  | Lifecycle drawn with tickets on their states    | 0/6       |
 | [F017-remove-public-status](feats/lifecycle-view/F017-remove-public-status.md)                  | Feed carries the stage only                     | 0/3       |
 | [F025-config-directory](feats/config-layout/F025-config-directory.md)                           | Factory settings live in one file per concern   | 0/7       |
+| [F029-gate-check-files](feats/config-layout/F029-gate-check-files.md)                           | The gate reports every check on its own         | 0/6       |
+| [F026-factory-automations](feats/config-layout/F026-factory-automations.md)                     | Automations switch on, off and run on demand    | 0/5       |
+| [F027-dashboard-controls](feats/config-layout/F027-dashboard-controls.md)                       | The dashboard switches and runs automations     | 0/5       |
+| [F028-role-credentials](feats/config-layout/F028-role-credentials.md)                           | Each role sees only its own credentials         | 0/3       |
 | [F022-ticket-file-sync](feats/planned-intake/F022-ticket-file-sync.md)                          | Saved tickets appear as planned on their own    | 0/6       |
 | [F023-public-stop-reasons](feats/lifecycle-view/F023-public-stop-reasons.md)                    | A blocked or rejected ticket says why           | 0/6       |
 | [F024-serial-test-runs](feats/worker-feedback/F024-serial-test-runs.md)                         | Test runs on one machine take turns             | 0/5       |
