@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { validReview, type Review } from "./review";
 import { validExecutor, type Executor } from "./executor";
+import { validDeliveryIntent, type DeliveryIntent } from "./delivery";
 
 export type ThreadID = `T-${string}`;
 export type MergeRecord = {
@@ -116,6 +117,7 @@ export type Run = (
       workerModel?: string;
       requirements?: string;
       feedback?: string;
+      deliveryIntent?: DeliveryIntent;
     }
   | {
       kind: "blocked";
@@ -124,7 +126,12 @@ export type Run = (
       repair?: Extract<Run, { kind: "running" }>;
       checkpoint?: Extract<Run, { kind: "running" }>;
     }
-  | { kind: "uncertain"; reason: string; thread: ThreadID }
+  | {
+      kind: "uncertain";
+      reason: string;
+      thread: ThreadID;
+      checkpoint?: Extract<Run, { kind: "running" }>;
+    }
   | {
       kind: "done";
       revision: string;
@@ -315,6 +322,7 @@ const runValidators: Record<string, (run: Record<string, unknown>) => boolean> =
       positiveInteger(run.attempt) &&
       typeof run.delivery === "string" &&
       ["queued", "sending", "sent"].includes(run.delivery) &&
+      validDeliveryIntent(run.deliveryIntent) &&
       reviewFields(run),
     blocked: (run) =>
       text(run.reason) &&
@@ -324,7 +332,11 @@ const runValidators: Record<string, (run: Record<string, unknown>) => boolean> =
           validRepair(run.checkpoint, run.thread))) &&
       (run.repair === undefined ||
         (validRepair(run.repair, run.thread) && run.repair.attempt % 2 === 0)),
-    uncertain: (run) => text(run.reason) && thread(run.thread),
+    uncertain: (run) =>
+      text(run.reason) &&
+      thread(run.thread) &&
+      (run.checkpoint === undefined ||
+        validRepair(run.checkpoint, run.thread, "sending")),
     done: (run) =>
       text(run.revision) &&
       (run.acceptedBase === undefined ||
@@ -338,6 +350,7 @@ const runValidators: Record<string, (run: Record<string, unknown>) => boolean> =
 function validRepair(
   value: unknown,
   originalThread: unknown,
+  delivery = "sent",
 ): value is Extract<Run, { kind: "running" }> {
   const run = record(value);
   return (
@@ -346,7 +359,7 @@ function validRepair(
     validExecutor(run.executor) &&
     run.thread === originalThread &&
     Number.isSafeInteger(Number(run.attempt) + 1) &&
-    run.delivery === "sent" &&
+    run.delivery === delivery &&
     run.review === undefined &&
     (run.definition === undefined || validDigest(run.definition))
   );

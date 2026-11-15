@@ -21,7 +21,11 @@ import {
   tasks,
   type NativeHost,
 } from "./native";
-import { openStore, watchdogFixture } from "./bookkeeping.fixture";
+import {
+  deliveryFixture,
+  openStore,
+  watchdogFixture,
+} from "./bookkeeping.fixture";
 import { startDashboard } from "./dashboard";
 import { factoryRecords, factoryStatus, openPersistence } from "./persistence";
 
@@ -2778,6 +2782,79 @@ test("setup preserves application files and disabled configuration across two re
     await rm(home, { recursive: true, force: true });
   }
 }, 30_000);
+
+test.each([
+  ["present", 1, 1, { kind: "running", attempt: 1, delivery: "sent" }],
+  ["absent", 2, 1, { kind: "running", attempt: 1, delivery: "sent" }],
+  [
+    "inconclusive",
+    1,
+    0,
+    {
+      kind: "uncertain",
+      incident: { reason: "delivery-unknown", recovery: "inspect" },
+    },
+  ],
+  [
+    "failed",
+    1,
+    0,
+    {
+      kind: "uncertain",
+      incident: { reason: "delivery-unknown", recovery: "inspect" },
+    },
+  ],
+  [
+    "repeat-unknown",
+    2,
+    0,
+    {
+      kind: "uncertain",
+      incident: { reason: "delivery-unknown", recovery: "inspect" },
+    },
+  ],
+  ["repeat-present", 2, 1, { kind: "running", attempt: 1, delivery: "sent" }],
+] as const)(
+  "worker delivery recovery is bounded across reload with %s evidence",
+  async (evidence, sends, deliveries, expected) => {
+    const f = await preparationFixture(() => "");
+    const remote = deliveryFixture(evidence);
+    f.host.send = async (thread, message) => {
+      if (thread === "T-owner") return;
+      if (remote.messages.length === 1) {
+        const saved = factoryStatus(join(f.root, ".git/factory")).runs.A;
+        const checkpoint =
+          saved?.kind === "uncertain" ? saved.checkpoint : saved;
+        expect(checkpoint).toMatchObject({
+          deliveryIntent: { repeated: true },
+        });
+      }
+      return remote.send(thread, message);
+    };
+    f.host.lookupDelivery = async (thread, message) => {
+      expect(thread).toBe("T-prepared");
+      expect(message).toBe(remote.messages[0]!);
+      return remote.lookupDelivery(thread, message);
+    };
+    expect(f.factory().tick("start", "T-owner")).rejects.toThrow(
+      "lost send response",
+    );
+    if (evidence.startsWith("repeat-"))
+      expect(f.factory().tick("reconcile")).rejects.toThrow(
+        "lost send response",
+      );
+    let state = await f.factory().tick("reconcile");
+    const incident = state.runs.A?.incident?.id;
+    state = await f.factory().tick("reconcile");
+    expect(state.runs.A).toMatchObject({ ...expected, thread: "T-prepared" });
+    expect(state.runs.A?.incident?.id).toBe(incident);
+    expect(f.counts().creates).toBe(1);
+    expect(remote.messages).toHaveLength(sends);
+    expect(new Set(remote.messages).size).toBe(1);
+    expect(remote.delivered).toHaveLength(deliveries);
+    expect(remote.messages[0]).toMatch(/^factory-key: [a-f0-9]{64}\n/);
+  },
+);
 
 test("unknown remote creation or delivery never starts replacement or independent workers", async () => {
   for (const failure of ["create", "send"]) {

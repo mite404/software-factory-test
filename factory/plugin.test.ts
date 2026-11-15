@@ -13,6 +13,211 @@ import { watchdogFixture } from "./bookkeeping.fixture";
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 
+function deliveryTranscript(history: string, message: string) {
+  const transcript = Array.from(
+    { length: history === "truncated" ? 2000 : 21 },
+    (_, index) => ({
+      role: "assistant",
+      id: `M-${index}`,
+      content: [{ type: "text", text: message }],
+    }),
+  );
+  if (history === "present" || history === "ambiguous")
+    transcript[20]!.role = "user";
+  if (history === "ambiguous")
+    transcript.push({
+      role: "user",
+      id: "M-duplicate",
+      content: [{ type: "text", text: message }],
+    });
+  if (history === "partial-key")
+    transcript.push({
+      role: "user",
+      id: "M-partial",
+      content: [
+        { type: "text", text: `${message.split("\n")[0]}\nAltered assignment` },
+      ],
+    });
+  if (history === "duplicate-row") transcript[1]!.id = "M-0";
+  return transcript;
+}
+
+test.each([
+  ["present", { kind: "running", delivery: "sent" }, 0, 1],
+  ["absent", { kind: "running", delivery: "sent" }, 1, 1],
+  ["ambiguous", { kind: "uncertain" }, 0, 2],
+  ["failed", { kind: "uncertain" }, 0, 0],
+  ["truncated", { kind: "uncertain" }, 0, 0],
+  ["partial-key", { kind: "uncertain" }, 0, 0],
+  ["duplicate-page", { kind: "uncertain" }, 0, 0],
+  ["duplicate-row", { kind: "uncertain" }, 0, 0],
+  ["legacy", { kind: "uncertain" }, 0, 0],
+  ["paused", { kind: "running", delivery: "sending" }, 0, 0],
+  ["denied", { kind: "running", delivery: "sending" }, 0, 0],
+  ["status", { kind: "running", delivery: "sending" }, 0, 0],
+] as const)(
+  "delivery transcript lookup preserves duplicate safety with %s history",
+  async (history, expected, expectedSends, deliveries) => {
+    const root = await mkdtemp(join(tmpdir(), "factory-delivery-"));
+    const directory = join(root, ".git/factory");
+    const key = "a".repeat(64);
+    const message = `factory-key: ${key}\nPrivate assignment`;
+    const transcript = deliveryTranscript(history, message);
+    let reads = 0;
+    let sends = 0;
+    let creates = 0;
+    let execute!: (
+      input: Record<string, unknown>,
+      ctx: PluginToolContext,
+    ) => Promise<unknown>;
+    let dispose = () => {};
+    try {
+      git(root, "init", "-qb", "main");
+      git(root, "config", "user.name", "Fixture");
+      git(root, "config", "user.email", "fixture@example.invalid");
+      await writeFile(join(root, "prd.md"), "Delivery fixture");
+      const queue = [{ id: "A", brief: "Private assignment", after: [] }];
+      await writeFile(join(root, "tickets.json"), JSON.stringify(queue));
+      await writeFile(
+        join(root, ".factory.json"),
+        JSON.stringify({
+          version: 1,
+          capacity: 1,
+          workerModel: "openai/gpt-6.1-sol",
+          prd: "prd.md",
+          tickets: "tickets.json",
+          scope: ["src/"],
+          verify: "true",
+          permissions: {
+            execute: history !== "denied",
+            publish: false,
+            externalTickets: false,
+          },
+        }),
+      );
+      git(root, "add", ".");
+      git(root, "commit", "-qm", "fixture");
+      const storage = openPersistence(directory, queue);
+      storage.commit(
+        {
+          enabled: history !== "paused",
+          owner: "T-owner",
+          runs: {
+            A: {
+              kind: "running",
+              thread: "T-worker",
+              base: git(root, "rev-parse", "HEAD"),
+              worktree: root,
+              attempt: 1,
+              delivery: "sending",
+              ...(history === "legacy"
+                ? {}
+                : { deliveryIntent: { key, message, repeated: false } }),
+            },
+          },
+        },
+        "A",
+        "fixture",
+        "",
+      );
+      storage.close();
+      const amp = {
+        createAgent() {
+          creates++;
+          throw new Error("No replacement allowed");
+        },
+        threads: {
+          get(id: string) {
+            return {
+              async appendUserMessage(value: { content: string }) {
+                if (id === "T-owner") return;
+                expect(id).toBe("T-worker");
+                expect(value.content).toBe(message);
+                sends++;
+                transcript.push({
+                  role: "user",
+                  id: "M-sent",
+                  content: [{ type: "text", text: value.content }],
+                });
+              },
+              async messages(options: {
+                full: boolean;
+                from: string;
+                offset: number;
+                limit: number;
+              }) {
+                expect(id).toBe("T-worker");
+                expect(options).toEqual({
+                  full: true,
+                  from: "start",
+                  offset: options.offset,
+                  limit: 20,
+                });
+                reads++;
+                if (history === "failed")
+                  throw new Error("History unavailable");
+                const offset =
+                  history === "duplicate-page" ? 0 : options.offset;
+                return transcript.slice(offset, offset + options.limit);
+              },
+              state: {
+                async get() {
+                  return "running";
+                },
+                subscribe() {
+                  return { unsubscribe() {} };
+                },
+              },
+              title: {
+                subscribe() {
+                  return { unsubscribe() {} };
+                },
+              },
+            };
+          },
+        },
+        logger: { log() {} },
+        on() {},
+        registerTool(tool: { execute: typeof execute }) {
+          execute = tool.execute;
+        },
+        onDispose(fn: () => void) {
+          dispose = fn;
+        },
+      } as unknown as PluginAPI;
+      registerFactory(amp, root, () => ({
+        async init() {},
+        async close() {},
+        ledger: { async record() {} },
+      }));
+      const ctx = { thread: { id: "T-owner" } } as unknown as PluginToolContext;
+      const action = history === "status" ? "status" : "reconcile";
+      await execute({ action }, ctx);
+      await execute({ action }, ctx);
+      const state = factoryStatus(directory);
+      expect(state.runs.A).toMatchObject({ ...expected, thread: "T-worker" });
+      if (expected.kind === "uncertain")
+        expect(state.runs.A?.incident).toMatchObject({
+          reason: "delivery-unknown",
+          recovery: "inspect",
+        });
+      expect(sends).toBe(expectedSends);
+      expect(creates).toBe(0);
+      expect(
+        transcript.filter(
+          (row) => row.role === "user" && row.content[0]?.text === message,
+        ),
+      ).toHaveLength(deliveries);
+      if (["legacy", "paused", "denied", "status"].includes(history))
+        expect(reads).toBe(0);
+      if (history === "truncated") expect(reads).toBe(200);
+    } finally {
+      dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
 test("owner records a cherry-picked merge across changed adjacent context and publishes only curated metadata", async () => {
   const root = await mkdtemp(join(tmpdir(), "factory-merge-"));
   const directory = join(root, ".git/factory");

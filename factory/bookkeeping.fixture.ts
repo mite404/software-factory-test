@@ -1,5 +1,31 @@
-import type { Bookkeeping } from "./native";
+import type { Bookkeeping, NativeHost } from "./native";
 import type { PluginTools } from "@ampcode/plugin";
+
+/** Inject lost delivery responses without creating threads or contacting Amp. */
+export function deliveryFixture(outcome: string) {
+  const messages: string[] = [];
+  const delivered: string[] = [];
+  const send: NativeHost["send"] = async (thread, message) => {
+    if (thread === "T-owner") return;
+    messages.push(message);
+    if (
+      outcome === "present" ||
+      (messages.length === 2 && outcome !== "repeat-unknown")
+    )
+      delivered.push(message);
+    if (messages.length === 1 || outcome.startsWith("repeat-"))
+      throw new Error("lost send response");
+  };
+  const lookupDelivery: NonNullable<NativeHost["lookupDelivery"]> = async (
+    _thread,
+    message,
+  ) => {
+    if (outcome === "failed") throw new Error("read unavailable");
+    if (outcome === "inconclusive") return "inconclusive";
+    return delivered.includes(message) ? "present" : "absent";
+  };
+  return { messages, delivered, send, lookupDelivery };
+}
 
 function checkNotification(input: Record<string, unknown>) {
   if (

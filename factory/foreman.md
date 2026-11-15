@@ -64,6 +64,12 @@ review feedback, or an answer to a question. Find its current stage and continue
    preparation after resolving its cause. Inspect uncertain creation or delivery without repeating
    the remote action. Only when the evidence shows that a parked creation produced no thread, use
    `retry-create` with the ticket, the current incident ID, and that finding as the decision.
+   Reconcile keyed assignment deliveries before manual recovery. The factory confirms one exact
+   user message or reserves one repeat after a complete transcript read proves absence. Failed,
+   ambiguous, or capped reads retain the incident. A held repeat is never repeated again.
+   Creation still needs inspection because the installed plugin has no thread listing or search
+   API, and generated titles or keyword hits cannot identify a creation. Legacy uncertain
+   deliveries without a saved key also stay parked. Do not send a second brief yourself.
    Retain the original worker and increasing attempt numbers.
    A paused factory still needs `start` after `resume`. Every candidate must pass its normal gates;
    escalation never grants acceptance. Delivery uncertainty, executor recovery, changed
