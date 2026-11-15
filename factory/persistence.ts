@@ -680,6 +680,29 @@ export function factoryStatus(directory: string): State {
   }
 }
 
+/** Read events in cursor order without creating, importing or migrating storage. @throws On invalid bounds or storage. */
+export function factoryEvents(directory: string, after = 0, limit = 100) {
+  if (
+    !Number.isSafeInteger(after) ||
+    after < 0 ||
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > 500
+  )
+    throw new Error("Invalid event bounds");
+  if (!existsSync(join(directory, "state.sqlite"))) return null;
+  const db = database(directory, true);
+  try {
+    return db
+      .query<Event & { id: number }, [number, number]>(
+        "SELECT id, at, ticket, action, detail FROM events WHERE id > ? ORDER BY id ASC LIMIT ?",
+      )
+      .all(after, limit);
+  } finally {
+    db.close();
+  }
+}
+
 /** Read curated SQLite tickets and state together; never import legacy files. @throws On invalid storage. */
 export function factoryRecords(directory: string) {
   if (!existsSync(join(directory, "state.sqlite"))) return null;

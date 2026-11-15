@@ -123,12 +123,12 @@ Run the shared preflight in `docs/v1-execution.md`. Baseline gates have not run 
 
 ## Done when
 
-- [ ] `/api/events` returns ordered, bounded, allowlisted rows after a cursor and never writes.
-- [ ] No brief, path, verdict or other free text from `detail` reaches the response.
-- [ ] The drawer opens from the bottom, follows new events and filters by ticket.
-- [ ] Thread IDs in rows open their threads.
-- [ ] Rendered screenshots and a recording of the drawer are inspected and attached to the report.
-- [ ] Full gates, guard and fresh cold review pass on the exact candidate.
+- [x] `/api/events` returns ordered, bounded, allowlisted rows after a cursor and never writes.
+- [x] No brief, path, verdict or other free text from `detail` reaches the response.
+- [x] The drawer opens from the bottom, follows new events and filters by ticket.
+- [x] Thread IDs in rows open their threads.
+- [x] Rendered screenshots and a recording of the drawer are inspected and attached to the report.
+- [x] Full gates, guard and fresh cold review pass on the exact candidate.
 
 ## Notes
 

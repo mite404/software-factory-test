@@ -488,3 +488,137 @@
   grid-template-columns: repeat(3, 1fr);
   gap: 12px;
 }
+
+#kit [data-kit="toast-region"] {
+  inset-block-end: 64px;
+}
+
+#kit:has(.event-log[open]) [data-kit="toast-region"] {
+  visibility: hidden;
+}
+
+.event-log {
+  position: fixed;
+  z-index: 40;
+  inset: auto 0 0;
+  background: #eeeae3;
+  color: #302e2b;
+  border-top: 1px solid #b8b2a8;
+  box-shadow: 0 -4px 18px #302e2b18;
+  font: 12px/1.5 var(--mono, monospace);
+}
+
+.event-log summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 24px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.event-log summary::-webkit-details-marker {
+  display: none;
+}
+.event-log small {
+  color: #625d55;
+}
+.event-log summary:focus-visible,
+.event-log select:focus-visible,
+.event-log a:focus-visible,
+.event-log-rows:focus-visible {
+  outline: 2px solid #aa4b12;
+  outline-offset: -2px;
+}
+
+.event-log[open] section {
+  animation: log-open 180ms ease-out;
+}
+.event-log-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 24px;
+  border-block: 1px solid #ccc5ba;
+}
+.event-log label {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.event-log select {
+  max-width: min(55vw, 360px);
+  font: inherit;
+  padding: 6px;
+}
+.event-log-rows {
+  height: min(36vh, 320px);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.event-log ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.event-log li {
+  display: grid;
+  grid-template-columns: 110px minmax(140px, 1fr) minmax(180px, 2fr) 80px;
+  gap: 12px;
+  padding: 10px 24px;
+  border-bottom: 1px solid #d8d1c7;
+  overflow-wrap: anywhere;
+}
+.event-log time {
+  color: #625d55;
+}
+.event-log a {
+  color: #95410e;
+}
+.event-log-rows > p {
+  padding: 12px 24px;
+}
+@keyframes log-open {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+}
+@media (max-width: 600px) {
+  .event-log summary {
+    padding-inline: 16px;
+  }
+  .event-log-tools {
+    padding: 10px 16px;
+    flex-wrap: wrap;
+  }
+  .event-log li {
+    grid-template-columns: 1fr auto;
+    gap: 4px 12px;
+    padding: 10px 16px;
+  }
+  .event-log-ticket {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    font-weight: 600;
+  }
+  .event-log time {
+    grid-column: 1;
+  }
+  .event-log li > span:not(.event-log-ticket) {
+    grid-column: 1;
+  }
+  .event-log a {
+    grid-column: 2;
+    grid-row: 2 / 4;
+    align-self: end;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .event-log[open] section {
+    animation: none;
+  }
+}

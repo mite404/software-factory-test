@@ -593,14 +593,44 @@ amp orb service start factory-dashboard --command 'bun factory/dashboard.ts' --p
 ```
 
 The same service serves `web/dist/index.html` at `/` and `/index.html`, generated files under
-`/assets/`, and the unchanged read-only `/api/status`. No Vite server, relay, cross-orb proxy, or
-sign-in cookie refresh is needed. Restart the service after rebuilding. Without a build, the
-existing activity page remains available.
+`/assets/`, and the read-only `/api/status` and `/api/events`. No Vite server, relay,
+cross-orb proxy, or sign-in cookie refresh is needed. Restart the service after rebuilding.
+Without a build, the existing activity page remains available.
 
 For frontend development, `amp orb services ensure` starts the recorded replay and Vite services
 from `.amp/services.yaml`. That preview is labeled recorded data, not a live factory. To develop
 against a local dashboard, run `bun run web`; `FACTORY_API` overrides its default API proxy target
-`http://127.0.0.1:4310`. The built page always reads `/api/status` on its own origin.
+`http://127.0.0.1:4310`. The built page reads both APIs on its own origin.
+
+### Event trace
+
+`GET /api/events?after=0&limit=100` is the supported trace for operators and agents without
+opening private state. The response is `{ durable, events }`. Rows are oldest first, strictly after
+the integer `id` cursor. `after` defaults to 0 and must be a nonnegative safe integer. `limit`
+defaults to 100 and must be an integer from 1 through 500. Invalid bounds return HTTP 400.
+Pass the last returned `id` as `after` on the next request.
+
+Each row has `id`, `at` (the stored timestamp), `ticket`, and `action`. Optional fields are
+`attempt` (a positive safe integer), `revision` (40 lowercase hexadecimal characters), and `thread`
+(a `T-` ID containing letters, digits, underscores, or hyphens). JSON details for preparation,
+setup-spawned, repair-resumed, and review creation or delivery supply only these validated fields.
+Legacy accepted revisions and created, sent, sending, or provider-continuation thread references
+are validated too. Unknown actions remain visible without any detail-derived fields.
+Briefs, paths, verdicts, arbitrary text, nested objects, and all other detail fields stay private.
+
+Missing storage returns HTTP 200 with `durable: "missing"` and `events: []`, like `/api/status`.
+Invalid storage returns HTTP 503 with `durable: "invalid"`; exhausted lock waits return 503 with
+`durable: "unavailable"`. Reads never initialize, import, migrate, or write storage.
+
+The bottom **Event log** bar opens upward with a click, Enter, or Space. Escape closes it and
+returns focus to the bar. The list shows time, ticket, action, attempt, and available thread links.
+The ticket selector filters locally. New rows arrive on the existing five-second timer and scroll
+into view only while the reader is at the end. Scrolling up keeps the reading position.
+The drawer and filter reset on reload. Notices use received events, not inferred poll differences.
+The replay includes labelled illustrative event rows; it is not a private event-log export.
+Stage-change events are not available yet. Replay guarantees and curated reasons remain future work.
+
+### Pipeline motion
 
 Motion is derived by comparing consecutive polls: a ticket that becomes accepted plays the landing
 (packet, press, screen shake, cold review, new commit on main), one that becomes blocked sends a
@@ -679,9 +709,10 @@ when a bound review record exists. References include revision, base, and post-g
 also includes attempt, pending state, and the available reviewer thread. An absent reference is
 `null`, not an inferred success. Legacy gate-only acceptance has no retained gate reference.
 Private report/log paths, commands, requirements, verdict contents, worker rationale, configuration,
-and event details are not served. Review titles omit paths, including in older observation files.
-Only the selected HTML, built assets, and GET `/api/status` are served. Source files, private
-factory files, other paths, and write methods are rejected.
+and raw event details are not served. Review titles omit paths, including in older observation
+files.
+Only the selected HTML, built assets, and GET `/api/status`, `/api/events`, and `/api/definition`
+are served. Source files, private factory files, other paths, and write methods are rejected.
 No model call is used for observation, HTTP reads, or rendering.
 
 **Sample preview** switches to clearly labeled illustrative data. It never starts workers or

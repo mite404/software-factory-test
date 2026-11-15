@@ -4,7 +4,132 @@ import { readFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { effectiveDefinition } from "./native";
-import { factoryRecords, taskSteps, type Run } from "./persistence";
+import {
+  factoryEvents,
+  factoryRecords,
+  taskSteps,
+  type Run,
+} from "./persistence";
+
+export type DashboardEvent = {
+  id: number;
+  at: string;
+  ticket: string;
+  action: string;
+  attempt?: number;
+  revision?: string;
+  thread?: string;
+};
+
+const DETAIL_ACTIONS = new Set([
+  "preparing",
+  "setup-spawned",
+  "repair-resumed",
+  "review-creating",
+  "review-created",
+  "review-sending",
+  "review-sent",
+]);
+const THREAD_ACTIONS = new Set([
+  "created",
+  "sending",
+  "sent",
+  "provider-continuation-intended",
+  "provider-continuation-unknown",
+  "provider-continuation-sent",
+  "provider-recovered",
+]);
+
+function eventDetail(action: string, detail: string): Record<string, unknown> {
+  if (action === "accepted") return { revision: detail };
+  if (THREAD_ACTIONS.has(action)) return { thread: detail };
+  if (!DETAIL_ACTIONS.has(action)) return {};
+  try {
+    return record(JSON.parse(detail));
+  } catch {
+    return {};
+  }
+}
+
+function matchingString(value: unknown, pattern: RegExp): string | undefined {
+  return typeof value === "string" && pattern.exec(value)?.[0] === value
+    ? value
+    : undefined;
+}
+
+function publicEvent(
+  row: NonNullable<ReturnType<typeof factoryEvents>>[number],
+): DashboardEvent {
+  const event: DashboardEvent = {
+    id: row.id,
+    at: row.at,
+    ticket: row.ticket,
+    action: row.action,
+  };
+  const detail = eventDetail(row.action, row.detail);
+  if (
+    typeof detail.attempt === "number" &&
+    Number.isSafeInteger(detail.attempt) &&
+    detail.attempt > 0
+  )
+    event.attempt = detail.attempt;
+  event.revision = matchingString(detail.revision, /^[a-f0-9]{40}$/);
+  event.thread = matchingString(detail.thread, /^T-[\w-]+$/);
+  return event;
+}
+
+function eventBounds(url: URL) {
+  const after = url.searchParams.get("after") ?? "0";
+  const limit = url.searchParams.get("limit") ?? "100";
+  if (
+    !matchingString(after, /^\d+$/) ||
+    !Number.isSafeInteger(Number(after)) ||
+    !matchingString(limit, /^\d+$/) ||
+    Number(limit) < 1 ||
+    Number(limit) > 500
+  )
+    return null;
+  return { after: Number(after), limit: Number(limit) };
+}
+
+function eventsResponse(
+  directory: string,
+  url: URL,
+  headers: Record<string, string>,
+) {
+  const bounds = eventBounds(url);
+  if (!bounds)
+    return Response.json(
+      { error: "Invalid event cursor or limit" },
+      { status: 400, headers },
+    );
+  try {
+    const rows = factoryEvents(
+      join(directory, "factory"),
+      bounds.after,
+      bounds.limit,
+    );
+    return Response.json(
+      {
+        durable: rows ? "available" : "missing",
+        events: rows?.map(publicEvent) ?? [],
+      },
+      { headers },
+    );
+  } catch (error) {
+    const busy = new Set(["SQLITE_BUSY", "SQLITE_LOCKED"]).has(
+      String(errorCode(error)),
+    );
+    return Response.json(
+      {
+        durable: busy ? "unavailable" : "invalid",
+        events: [],
+        error: "Durable status unavailable.",
+      },
+      { status: 503, headers },
+    );
+  }
+}
 
 export type DashboardSnapshot = {
   project: string;
@@ -296,7 +421,9 @@ export function startDashboard({ root, port }: { root: string; port: number }) {
     "cache-control": "no-store",
     "x-content-type-options": "nosniff",
   };
-  async function staticPage(path: string) {
+  async function staticPage(url: URL) {
+    const path = url.pathname;
+    if (path === "/api/events") return eventsResponse(directory, url, headers);
     if (path === "/" || path === "/index.html")
       return new Response(html, {
         headers: { ...headers, "content-type": "text/html; charset=utf-8" },
@@ -317,8 +444,9 @@ export function startDashboard({ root, port }: { root: string; port: number }) {
           status: 405,
           headers: { ...headers, allow: "GET" },
         });
-      const path = new URL(request.url).pathname;
-      const page = await staticPage(path);
+      const url = new URL(request.url);
+      const path = url.pathname;
+      const page = await staticPage(url);
       if (page) return page;
       if (path !== "/api/status")
         return new Response("Not found", { status: 404, headers });

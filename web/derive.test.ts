@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { derive, type Feed, type Task } from "./derive";
-import { feedAt, FRAMES } from "./replay";
+import { derive, eventBatch, eventRows, type Feed, type Task } from "./derive";
+import { eventsAt, feedAt, FRAMES } from "./replay";
 
 const NOW = Date.parse("2026-11-13T12:00:10Z");
 
@@ -317,9 +317,16 @@ test("the recorded replay draws one reviewed landing, one rejection and one bloc
   expect(views[4]!.next).toBe("BACKUP-ADOPTION-TICKET1, WORKING · ATTEMPT 6");
   expect(views[4]!.reviewing).toBe(true);
   expect(views[9]!.tally).toBe("3 landed · 0 queued · 1 blocked");
+  expect(eventsAt(0).map((row) => row.action)).toEqual([
+    "accepted",
+    "created",
+    "sent",
+  ]);
+  expect(eventsAt(4, 3, 2).map((row) => row.id)).toEqual([4, 5]);
+  expect(eventsAt(100, 10)).toEqual([]);
 });
 
-test("the kit device gets every ticket, the tally as numbers, and one notice per change", () => {
+test("the kit device gets every ticket and only notifies from recorded events", () => {
   const before = feed(["accepted", "idle", "queued", "working"]);
   const after = feed(["accepted", "accepted", "working", "blocked"]);
   const view = derive(before, after, NOW);
@@ -332,12 +339,109 @@ test("the kit device gets every ticket, the tally as numbers, and one notice per
     review: "none",
     steps: Array(7).fill("done"),
   });
-  expect(view.news.map((item) => `${item.tone}: ${item.title}`)).toEqual([
-    "success: T2 landed",
-    "danger: T4 blocked",
-    "info: T3 started",
-  ]);
+  expect(view.news).toEqual([]);
   expect(view.main[0]!.id).toBe("T2");
-  // The first poll has nothing to compare with, so it announces nothing.
-  expect(derive(null, after, NOW).news).toEqual([]);
+  expect(
+    derive(after, after, NOW, [
+      {
+        id: 5,
+        at: "2026-11-13T12:00:03Z",
+        ticket: "T2",
+        action: "accepted",
+        attempt: 2,
+      },
+      { id: 6, at: "2026-11-13T12:00:04Z", ticket: "T4", action: "rejected" },
+    ]).news,
+  ).toEqual([
+    {
+      at: "2026-11-13T12:00:03Z",
+      tone: "success",
+      title: "T2 accepted",
+      text: "2026-11-13T12:00:03Z · attempt 2",
+    },
+    {
+      at: "2026-11-13T12:00:04Z",
+      tone: "danger",
+      title: "T4 rejected",
+      text: "2026-11-13T12:00:04Z",
+    },
+  ]);
+});
+
+test("notices wait for catch-up across full pages and a failed first request", () => {
+  const history = Array.from({ length: 502 }, (_, i) => ({
+    id: i + 1,
+    at: "2000-01-01T00:00:00Z",
+    ticket: "T1",
+    action: "sent",
+  }));
+  const scenarios = [
+    [history.slice(0, 500), history.slice(500)],
+    [null, history.slice(0, 3)],
+    [history.slice(0, 500), null, []],
+  ];
+  for (const pages of scenarios) {
+    let caughtUp = false;
+    for (const page of pages) {
+      const batch = eventBatch(caughtUp, page, 500);
+      caughtUp = batch.caughtUp;
+      expect(derive(null, feed([]), NOW, batch.news).news).toEqual([]);
+    }
+    const live = eventBatch(
+      caughtUp,
+      [
+        {
+          id: 503,
+          at: "2026-11-13T12:00:03Z",
+          ticket: "T1",
+          action: "accepted",
+        },
+      ],
+      500,
+    );
+    expect(derive(null, feed([]), NOW, live.news).news).toEqual([
+      {
+        at: "2026-11-13T12:00:03Z",
+        tone: "success",
+        title: "T1 accepted",
+        text: "2026-11-13T12:00:03Z",
+      },
+    ]);
+    expect(eventBatch(live.caughtUp, null, 500)).toEqual({
+      caughtUp: true,
+      news: [],
+    });
+  }
+});
+
+test("event rows keep cursor order, exact ticket filters and safe thread links", () => {
+  const events = [
+    {
+      id: 1,
+      at: "2026-11-13T12:00:03Z",
+      ticket: "A",
+      action: "sent",
+      thread: "T-worker",
+    },
+    {
+      id: 2,
+      at: "2026-11-13T12:00:04Z",
+      ticket: "AB",
+      action: "future-action",
+    },
+    {
+      id: 3,
+      at: "2026-11-13T12:00:05Z",
+      ticket: "A",
+      action: "review-sent",
+      thread: "T-unsafe\n",
+    },
+  ];
+  expect(eventRows(events).map((row) => row.id)).toEqual([1, 2, 3]);
+  expect(eventRows(events, "A").map(({ id, href }) => ({ id, href }))).toEqual([
+    { id: 1, href: "https://ampcode.com/threads/T-worker" },
+    { id: 3, href: null },
+  ]);
+  expect(eventRows(events, "missing")).toEqual([]);
+  expect(eventRows(events, "AB")[0]?.href).toBeNull();
 });

@@ -1,4 +1,39 @@
-import type { DashboardSnapshot } from "../factory/dashboard";
+import type { DashboardEvent, DashboardSnapshot } from "../factory/dashboard";
+
+export type EventRow = DashboardEvent & {
+  time: string;
+  href: string | null;
+};
+
+/**
+ * Suppress historical notices until an earlier successful page exhausted the event log.
+ * @param received Null for a failed request, which must not establish catch-up.
+ * @param limit The requested page size; a full page does not prove catch-up.
+ */
+export function eventBatch(
+  caughtUp: boolean,
+  received: DashboardEvent[] | null,
+  limit: number,
+) {
+  return {
+    caughtUp: caughtUp || (received !== null && received.length < limit),
+    news: caughtUp ? (received ?? []) : [],
+  };
+}
+
+/** Derive oldest-first log rows, optionally restricted to one exact ticket ID. */
+export function eventRows(events: DashboardEvent[], ticket = ""): EventRow[] {
+  return events
+    .filter((event) => !ticket || event.ticket === ticket)
+    .map((event) => ({
+      ...event,
+      time: new Date(event.at).toLocaleTimeString(),
+      href:
+        event.thread && /^T-[\w-]+$/.exec(event.thread)?.[0] === event.thread
+          ? `https://ampcode.com/threads/${event.thread}`
+          : null,
+    }));
+}
 
 // evidence is added per task by GET /api/status but is not part of the exported snapshot type.
 // evidence.review is the cold review record bound to the task's current revision; null means none
@@ -42,8 +77,9 @@ export type Ticket = Cell & {
   attempt: number | null;
 };
 
-// One change between two polls, worded for a notification.
+// One recorded event, worded for a notification.
 type News = {
+  at: string;
   tone: "success" | "danger" | "info";
   title: string;
   text: string;
@@ -58,7 +94,7 @@ export type View = {
   tally: string;
   counts: { landed: number; queued: number; blocked: number }; // the tally, as numbers
   tickets: Ticket[]; // every ticket in feed order, for search, paging and the landed card
-  news: News[]; // what changed since the previous poll; empty on the first one
+  news: News[]; // newly received durable events
   head: string;
   next: string;
   reviewing: boolean; // a fresh pending review, including the first and repeated polls
@@ -256,46 +292,6 @@ function tally({ landed, queued, blocked }: View["counts"]): string {
   ].join(" · ");
 }
 
-// One notice per ticket that changed. A failed review is also a block, so it is said once.
-function news(
-  tickets: Ticket[],
-  changed: {
-    landed?: string;
-    rejected?: string;
-    blocked?: string;
-    started?: string;
-  },
-): News[] {
-  const say = (
-    id: string | undefined,
-    tone: News["tone"],
-    what: string,
-    text = "",
-  ) => (id ? [{ tone, title: `${id} ${what}`, text }] : []);
-  const landed = tickets.find((t) => t.id === changed.landed);
-  return [
-    ...say(
-      changed.landed,
-      "success",
-      "landed",
-      `${landed?.revision} · cold review ${landed?.review === "none" ? "not recorded" : "recorded"}`,
-    ),
-    ...say(
-      changed.rejected,
-      "danger",
-      "failed cold review",
-      "back to its builder",
-    ),
-    ...say(
-      changed.rejected ? undefined : changed.blocked,
-      "danger",
-      "blocked",
-      "the feed gives no reason",
-    ),
-    ...say(changed.started, "info", "started", "handed to a builder"),
-  ];
-}
-
 // The feed says "blocked" for a few seconds while a cold review is being dispatched. A pending
 // review is work in progress, so it counts as working everywhere on the page.
 // The feed lists an admitted ticket after the planned ones it was picked from; every admitted
@@ -325,7 +321,12 @@ function nextLabel(active: Task | undefined, total: number): string {
  * @param prev The previous poll, or null on the first one, which replays no transitions.
  * @param now Epoch milliseconds used to age the observation.
  */
-export function derive(prev: Feed | null, raw: Feed, now: number): View {
+export function derive(
+  prev: Feed | null,
+  raw: Feed,
+  now: number,
+  events: DashboardEvent[] = [],
+): View {
   const next = settle(raw);
   const tasks = next.tasks;
   const earlier = settle(prev ?? raw).tasks;
@@ -377,9 +378,23 @@ export function derive(prev: Feed | null, raw: Feed, now: number): View {
     tally: tally(count),
     counts: count,
     tickets,
-    news: prev
-      ? news(tickets, { landed: landing, rejected, blocked, started })
-      : [],
+    news: events.map((event) => ({
+      at: event.at,
+      tone:
+        event.action === "accepted"
+          ? "success"
+          : ["rejected", "blocked", "escalated"].includes(event.action)
+            ? "danger"
+            : "info",
+      title: `${event.ticket} ${event.action}`,
+      text: [
+        event.at,
+        event.attempt ? `attempt ${event.attempt}` : "",
+        event.revision?.slice(0, 7),
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    })),
     head: main[0]?.revision?.slice(0, 7) ?? "nothing landed yet",
     next: label,
     reviewing: next.fresh && pending[0]?.evidence?.review?.pending === true,
