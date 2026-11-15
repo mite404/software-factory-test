@@ -1,7 +1,7 @@
 @import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&display=swap");
 
 /*
- * spec skin: the synth layout rebuilt from the parts of the SPEC-01/HARDWARE kit
+ * spec skin: the pipeline view rebuilt from the parts of the SPEC-01/HARDWARE kit
  * (https://github.com/shuding/spec-01, MIT). A light moulded body, keys standing on a solid
  * 3px edge, a dark display, grey LCD glass, 5px LEDs, a flat knob, a slider track with a printed
  * tick scale, and badges with a status stripe. Values are the kit's unless a comment says why not.
