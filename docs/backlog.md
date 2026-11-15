@@ -18,13 +18,12 @@ Merged, but at least one box, usually a live proof, is still open.
 | [foreman-watchdog-ticket3](feats/foreman-watchdog/foreman-watchdog-ticket3.md) | Outside-orb wake-up and alert delivery        | 2/4       |
 | [F003-provider-limit-resume](feats/durability/F003-provider-limit-resume.md)   | Same threads resume after a provider limit    | 5/6       |
 
-## Not started (42)
+## Not started (41)
 
 In dispatch order.
 
 | Ticket                                                                                          | Outcome                                         | Done when |
 | ----------------------------------------------------------------------------------------------- | ----------------------------------------------- | --------- |
-| [F021-merge-record](feats/lifecycle-view/F021-merge-record.md)                                  | Each landed ticket records its pull request     | 0/5       |
 | [F019-gate-rerun-before-rejection](feats/worker-feedback/F019-gate-rerun-before-rejection.md)   | A load flake in the gate does not reject        | 0/6       |
 | [F018-landed-card-links](feats/lifecycle-view/F018-landed-card-links.md)                        | Landed card opens its thread and pull request   | 0/7       |
 | [F020-reviewer-uses-ce-code-review](feats/worker-feedback/F020-reviewer-uses-ce-code-review.md) | Cold review uses the review skill               | 0/5       |
@@ -67,7 +66,7 @@ In dispatch order.
 | [v1-ticket21](feats/v1/v1-ticket21.md)                                                          | Read-only effectiveness views                   | 0/3       |
 | [v1-ticket22](feats/v1/v1-ticket22.md)                                                          | Cross-orb v1 acceptance trial                   | 0/3       |
 
-## Done (12)
+## Done (13)
 
 | Ticket                                                                           | Outcome                                        | Done when |
 | -------------------------------------------------------------------------------- | ---------------------------------------------- | --------- |
@@ -77,6 +76,7 @@ In dispatch order.
 | [planned-intake-ticket1](feats/done/planned-intake-ticket1.md)                   | Planned backlog without accidental dispatch    | 4/4       |
 | [F008-gate-failure-feedback](feats/done/F008-gate-failure-feedback.md)           | A failed gate returns its output to the worker | 5/5       |
 | [F016-kit-page-default](feats/done/F016-kit-page-default.md)                     | The kit page is the only dashboard             | 5/5       |
+| [F021-merge-record](feats/done/F021-merge-record.md)                             | Each landed ticket records its pull request    | 5/5       |
 | [noninteractive-launcher-ticket1](feats/done/noninteractive-launcher-ticket1.md) |                                                | 4/4       |
 | [repair-escalation-ticket1](feats/done/repair-escalation-ticket1.md)             |                                                | 5/5       |
 | [ticket-step-labels-ticket1](feats/done/ticket-step-labels-ticket1.md)           |                                                | 6/6       |
