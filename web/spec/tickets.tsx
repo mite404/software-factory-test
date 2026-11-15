@@ -28,11 +28,11 @@ import { PageWheel } from "@/components/ui/page-wheel";
 import { ItemList, type Column } from "@/components/ui/item-list";
 import { Lcd, LcdDigits } from "@/components/ui/lcd";
 import { Toasts, notify } from "@/components/ui/toaster";
-import type { Ticket, View } from "../derive";
+import { eventRows, type EventRow, type Ticket, type View } from "../derive";
 import "./kit.css";
 import "./tickets.css";
 
-type Note = View["news"][number] & { at: string };
+type Note = View["news"][number];
 // Where the diagram's builders and landed commits sit, as CSS boxes over the SVG.
 type Spots = { builders: CSSProperties[]; main: CSSProperties[] };
 type Choose = (id: string | null) => void;
@@ -308,7 +308,7 @@ function Notices({ log }: { log: Note[] }) {
               <Alert
                 key={log.length - i}
                 tone={note.tone}
-                title={`${note.at} · ${note.title}`}
+                title={`${new Date(note.at).toLocaleTimeString()} · ${note.title}`}
               >
                 {note.text}
               </Alert>
@@ -637,6 +637,104 @@ function Landings({ view, spots }: { view: View; spots: Spots }) {
   });
 }
 
+function EventLog({ events, status }: { events: EventRow[]; status: string }) {
+  const [open, setOpen] = useState(false);
+  const [ticket, setTicket] = useState("");
+  const list = useRef<HTMLDivElement>(null);
+  const toggle = useRef<HTMLElement>(null);
+  const following = useRef(true);
+  const rows = eventRows(events, ticket);
+  useEffect(() => {
+    if (open && following.current && list.current)
+      list.current.scrollTop = list.current.scrollHeight;
+  }, [events, ticket, open]);
+  return (
+    <details
+      className="event-log"
+      open={open}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          setOpen(false);
+          toggle.current?.focus();
+          event.stopPropagation();
+        }
+      }}
+    >
+      <summary
+        ref={toggle}
+        onClick={(event) => {
+          event.preventDefault();
+          following.current = true;
+          setOpen(!open);
+        }}
+        aria-controls="event-log-panel"
+        aria-expanded={open}
+      >
+        <span>
+          Event log <small>· {events.length} rows</small>
+        </span>
+        <span aria-hidden="true">{open ? "▾" : "▴"}</span>
+      </summary>
+      <section id="event-log-panel" aria-label="Factory event log">
+        <div className="event-log-tools">
+          <label>
+            Ticket{" "}
+            <select
+              aria-label="Filter events by ticket"
+              value={ticket}
+              onChange={(event) => {
+                following.current = true;
+                setTicket(event.target.value);
+              }}
+            >
+              <option value="">All tickets</option>
+              {[...new Set(events.map((row) => row.ticket))].map((id) => (
+                <option key={id}>{id}</option>
+              ))}
+            </select>
+          </label>
+          <small role="status">
+            {status === "available" ? "Oldest first · live updates" : status}
+          </small>
+        </div>
+        <div
+          className="event-log-rows"
+          ref={list}
+          tabIndex={0}
+          role="region"
+          aria-label="Event rows"
+          onScroll={() => {
+            const node = list.current!;
+            following.current =
+              node.scrollHeight - node.scrollTop - node.clientHeight < 24;
+          }}
+        >
+          {!rows.length && <p>No recorded events match this filter.</p>}
+          <ol>
+            {rows.map((row) => (
+              <li key={row.id}>
+                <time dateTime={row.at} title={row.at}>
+                  {row.time}
+                </time>
+                <span className="event-log-ticket">{row.ticket}</span>
+                <span>
+                  {row.action}
+                  {row.attempt ? ` · attempt ${row.attempt}` : ""}
+                </span>
+                {row.href && (
+                  <a href={row.href} target="_blank" rel="noreferrer">
+                    Thread ↗
+                  </a>
+                )}
+              </li>
+            ))}
+          </ol>
+        </div>
+      </section>
+    </details>
+  );
+}
+
 // The pipeline SVG stays above; this is everything that was below its ACTIVE rule, as one device.
 function Tickets({
   view,
@@ -644,12 +742,16 @@ function Tickets({
   log,
   spots,
   over,
+  events,
+  eventStatus,
 }: {
   view: View;
   stages: string[];
   log: Note[];
   spots: Spots;
   over: Element;
+  events: EventRow[];
+  eventStatus: string;
 }) {
   // The feed picks the active ticket; the reader can pick another to inspect until they let go.
   const [chosen, setChosen] = useState<string | null>(null);
@@ -679,6 +781,7 @@ function Tickets({
           <Everything view={view} />
         </Device>
         <Toasts />
+        <EventLog events={events} status={eventStatus} />
       </Hardware>
     </>
   );
@@ -729,9 +832,9 @@ export function mount(stage: SVGElement, stages: string[]) {
     [...stage.querySelectorAll(selector)].map(spot);
   const log: Note[] = [];
   const root = createRoot(host);
-  return (view: View) => {
+  return (view: View, events: EventRow[], eventStatus: string) => {
     for (const item of view.news) {
-      log.unshift({ ...item, at: new Date().toLocaleTimeString() });
+      log.unshift(item);
       notify[TOAST[item.tone]](item.title, { description: item.text });
     }
     log.length = Math.min(log.length, LOG);
@@ -742,6 +845,8 @@ export function mount(stage: SVGElement, stages: string[]) {
         log={[...log]}
         spots={{ builders: spots(".builder .card"), main: spots(".landed") }}
         over={over}
+        events={events}
+        eventStatus={eventStatus}
       />,
     );
   };

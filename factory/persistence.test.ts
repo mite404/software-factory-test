@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createFactory, tasks, type NativeHost } from "./native";
 import {
+  factoryEvents,
   factoryRecords,
   factoryStatus,
   openPersistence,
@@ -22,6 +23,44 @@ import {
 
 const roots: string[] = [];
 const queue = [{ id: "A", brief: "Repair value", after: [] }];
+
+test("event reads never initialize legacy storage or upgrade a version-one database", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "factory-event-reader-"));
+  roots.push(directory);
+  await writeFile(join(directory, "events.jsonl"), "legacy private text");
+  expect(factoryEvents(directory)).toBeNull();
+  expect(await readdir(directory)).toEqual(["events.jsonl"]);
+  const path = join(directory, "state.sqlite");
+  const db = new Database(path);
+  db.run(
+    "CREATE TABLE events (id INTEGER PRIMARY KEY, at TEXT, ticket TEXT, action TEXT, detail TEXT); PRAGMA user_version = 1;",
+  );
+  db.run(
+    "INSERT INTO events VALUES (4, '2026-11-15T00:00:00Z', 'A', 'sent', 'T-worker')",
+  );
+  db.close();
+  const before = await readFile(path);
+  expect(factoryEvents(directory, 3, 1)).toEqual([
+    {
+      id: 4,
+      at: "2026-11-15T00:00:00Z",
+      ticket: "A",
+      action: "sent",
+      detail: "T-worker",
+    },
+  ]);
+  for (const [after, limit] of [
+    [-1, 1],
+    [0, 0],
+    [0, 501],
+    [1.5, 1],
+  ])
+    expect(() => factoryEvents(directory, after, limit)).toThrow(
+      "Invalid event bounds",
+    );
+  expect(await readFile(path)).toEqual(before);
+});
+
 const parked: State = {
   enabled: true,
   owner: "T-owner",

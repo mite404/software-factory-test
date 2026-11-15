@@ -1,7 +1,9 @@
-import { derive, type Feed, type View } from "./derive";
+import type { DashboardEvent } from "../factory/dashboard";
+import { derive, eventBatch, eventRows, type Feed, type View } from "./derive";
 import { mount } from "./spec/tickets";
 
 const POLL_MS = 5000;
+const EVENT_LIMIT = 500;
 // Must match the landing and return timelines in style.css.
 const LANDING_MS = 5800;
 const RETURN_MS = 2800;
@@ -125,7 +127,7 @@ function animate(view: View) {
     if (row) cycle(one(`.${kind}.r${row}`), "go", ms);
 }
 
-function render(view: View) {
+function render(view: View, events: DashboardEvent[], eventStatus: string) {
   stage.dataset.state = view.state;
   stage.toggleAttribute("data-reviewing", view.reviewing);
   write(document, "#state", DEMO ? "DEMO" : view.state.toUpperCase());
@@ -138,7 +140,7 @@ function render(view: View) {
   slots.forEach((slot, i) => slot.toggleAttribute("data-on", i < view.slots));
   paintBuilders(view);
   paintMain(view);
-  paintKit(view);
+  paintKit(view, eventRows(events), eventStatus);
   if (view.reviewFinished)
     cycle(stage, `review-${view.reviewFinished}`, RETURN_MS + 240);
   else animate(view);
@@ -146,23 +148,54 @@ function render(view: View) {
 
 let previous: Feed | null = null;
 let tick = Number(PARAMS.get("tick")) || 0; // ?demo&tick=7 starts the sample feed at a later poll
+const events: DashboardEvent[] = [];
+let caughtUp = false;
+
+async function get<T>(url: string): Promise<T> {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.json();
+}
+
+async function pollEvents() {
+  let received: DashboardEvent[] | null = null;
+  let status = "Event service unavailable. Showing retained rows.";
+  try {
+    const last = events.at(-1) ?? { id: 0 };
+    const body = await get<{ events: DashboardEvent[]; durable: string }>(
+      `/api/events?after=${last.id}&limit=${EVENT_LIMIT}`,
+    );
+    events.push(...body.events);
+    received = body.events;
+    status = body.durable === "missing" ? "No event storage yet" : "available";
+  } catch {
+    // Retain the cursor and catch-up state when the event service fails.
+  }
+  const batch = eventBatch(caughtUp, received, EVENT_LIMIT);
+  caughtUp = batch.caughtUp;
+  return { received: batch.news, status };
+}
 
 async function poll() {
   try {
     // Feed validated by factory/dashboard.ts before it is served.
-    const feed: Feed = DEMO
-      ? demoFeed(tick++)
-      : await fetch("/api/status").then((response) => {
-          if (!response.ok) throw new Error(`Status ${response.status}`);
-          return response.json();
-        });
-    render(derive(previous, feed, Date.now()));
+    const feed: Feed = DEMO ? demoFeed(tick++) : await get<Feed>("/api/status");
+    const log = DEMO
+      ? { received: [], status: "Sample data has no recorded events" }
+      : await pollEvents();
+    render(
+      derive(previous, feed, Date.now(), log.received),
+      events,
+      log.status,
+    );
     previous = feed;
   } catch {
     stage.dataset.state = "offline";
     stage.removeAttribute("data-reviewing");
     write(document, "#state", "OFFLINE");
     write(document, "#observed", "status service unreachable");
+  } finally {
+    setTimeout(() => void poll(), POLL_MS);
   }
 }
 
@@ -212,4 +245,3 @@ document.addEventListener("pointermove", (event) => {
 });
 
 void poll();
-setInterval(() => void poll(), POLL_MS);

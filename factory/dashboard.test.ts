@@ -15,6 +15,123 @@ import { startDashboard } from "./dashboard";
 import { tasks } from "./native";
 import { openPersistence } from "./persistence";
 
+test("events are cursor ordered, bounded, read-only and expose only validated references", async () => {
+  const root = await mkdtemp(join(tmpdir(), "factory-events-"));
+  execFileSync("git", ["init", "-q", root]);
+  const directory = join(root, ".git/factory");
+  const server = startDashboard({ root, port: 0 });
+  const url = `http://localhost:${server.port}/api/events`;
+  const at = "2026-11-15T12:34:56.000Z";
+  const revision = "abcdef12".repeat(5);
+  const secret = {
+    brief: "PRIVATE-EVENT-CANARY",
+    path: "/private/worktree/report.json",
+    verdict: "REJECT because private finding",
+  };
+  try {
+    expect(await (await fetch(url)).json()).toEqual({
+      durable: "missing",
+      events: [],
+    });
+    expect(await readdir(join(root, ".git"))).not.toContain("factory");
+    const storage = openPersistence(directory, [], () => Date.parse(at));
+    storage.event(
+      "A",
+      "review-sent",
+      JSON.stringify({
+        ...secret,
+        attempt: 2,
+        revision,
+        thread: "T-event-review",
+      }),
+    );
+    storage.event(
+      "B",
+      "future-action",
+      JSON.stringify({ ...secret, attempt: 3, revision, thread: "T-hidden" }),
+    );
+    storage.event(
+      "A",
+      "review-sent",
+      JSON.stringify({
+        ...secret,
+        attempt: "2",
+        revision: `${revision}\n`,
+        thread: "T-escape\n",
+      }),
+    );
+    storage.event("A", "accepted", revision);
+    storage.event("B", "sent", "T-worker");
+    storage.event("A", "review-verdict", secret.verdict);
+    storage.event("A", "review-sent", "not JSON PRIVATE-EVENT-CANARY");
+    storage.close();
+    const path = join(directory, "state.sqlite");
+    const before = await readFile(path);
+    const files = await readdir(directory);
+    const response = await fetch(`${url}?after=0&limit=2`);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual({
+      durable: "available",
+      events: [
+        {
+          id: 1,
+          at,
+          ticket: "A",
+          action: "review-sent",
+          attempt: 2,
+          revision,
+          thread: "T-event-review",
+        },
+        { id: 2, at, ticket: "B", action: "future-action" },
+      ],
+    });
+    const rest = await (await fetch(`${url}?after=2&limit=500`)).json();
+    expect(rest.events).toEqual([
+      { id: 3, at, ticket: "A", action: "review-sent" },
+      { id: 4, at, ticket: "A", action: "accepted", revision },
+      { id: 5, at, ticket: "B", action: "sent", thread: "T-worker" },
+      { id: 6, at, ticket: "A", action: "review-verdict" },
+      { id: 7, at, ticket: "A", action: "review-sent" },
+    ]);
+    const text = await (await fetch(url)).text();
+    for (const value of Object.values(secret))
+      expect(text).not.toContain(value);
+    expect(await (await fetch(`${url}?after=7`)).json()).toEqual({
+      durable: "available",
+      events: [],
+    });
+    for (const query of [
+      "after=-1",
+      "after=1.5",
+      "after=NaN",
+      "after=",
+      "after=1%0a",
+      "after=9007199254740992",
+      "limit=0",
+      "limit=501",
+      "limit=1.5",
+      "limit=Infinity",
+      "limit=",
+      "limit=1%0a",
+    ])
+      expect((await fetch(`${url}?${query}`)).status).toBe(400);
+    expect((await fetch(url, { method: "POST" })).status).toBe(405);
+    expect(await readFile(path)).toEqual(before);
+    expect(await readdir(directory)).toEqual(files);
+    await writeFile(path, "invalid database");
+    const invalid = await fetch(url);
+    expect(invalid.status).toBe(503);
+    expect(await invalid.json()).toEqual({
+      durable: "invalid",
+      events: [],
+      error: "Durable status unavailable.",
+    });
+  } finally {
+    await server.stop(true);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("dashboard serves the built pipeline and assets alongside its read-only API", async () => {
   const root = await mkdtemp(join(tmpdir(), "factory-web-"));
   execFileSync("git", ["init", "-q", root]);
