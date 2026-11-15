@@ -69,6 +69,10 @@ review feedback, or an answer to a question. Find its current stage and continue
    [AGENTS.md](../AGENTS.md) requires. Put it on an integration branch from `main`, run the full
    local gate on the branch head, and open a pull request. Merge with a merge commit only when
    every check on the pull request's exact head has succeeded. Never push to `main` directly.
+   After the merge, fetch the root checkout's configured upstream and call `record-merge` with
+   the accepted ticket ID, integer `pr` number, and full merge `commit` hash. Do not pass a URL.
+   Confirm the feed's merge record before moving on. Backfill tickets merged before this action
+   existed once from the pull request list. Recording works while the factory is paused.
    Then update the ticket, the dispatch order, and the workflow lessons through a second pull
    request. Once every box under the ticket's "Done when" is ticked, move its file to
    `docs/feats/done/` with `git mv` and fix the links to it. A ticket with an open box, such as a

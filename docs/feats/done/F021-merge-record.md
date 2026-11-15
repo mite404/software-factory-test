@@ -106,8 +106,8 @@ Run the shared preflight in `docs/v1-execution.md`. Baseline gates have not run 
 
 ## Done when
 
-- [ ] `record-merge` stores a pull request number and merge commit only after Git confirms them.
-- [ ] The feed publishes the record with a URL built from configuration, or null.
-- [ ] A wrong commit, a wrong ticket state and a non-owner caller are refused.
-- [ ] Saved state opens unchanged.
-- [ ] Full gates, guard and fresh cold review pass on the exact candidate.
+- [x] `record-merge` stores a pull request number and merge commit only after Git confirms them.
+- [x] The feed publishes the record with a URL built from configuration, or null.
+- [x] A wrong commit, a wrong ticket state and a non-owner caller are refused.
+- [x] Saved state opens unchanged.
+- [x] Full gates, guard and fresh cold review pass on the exact candidate.

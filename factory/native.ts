@@ -573,6 +573,88 @@ function git(root: string, ...args: string[]) {
   }).trim();
 }
 
+function patchID(root: string, patch: string) {
+  return execFileSync("git", ["-C", root, "patch-id", "--stable"], {
+    input: patch,
+    encoding: "utf8",
+  }).split(/\s/)[0];
+}
+
+function parseMergeRequest(value: unknown) {
+  const request = object(value);
+  const ticket = text(request.ticket);
+  const { pr, commit } = request;
+  if (
+    typeof pr !== "number" ||
+    !Number.isSafeInteger(pr) ||
+    pr <= 0 ||
+    typeof commit !== "string" ||
+    !/^[a-f0-9]{40}$/.test(commit)
+  )
+    throw new Error("Expected a positive PR number and full merge commit");
+  return { ticket, pr, commit };
+}
+
+function verifyMerge(
+  root: string,
+  run: Extract<Run, { kind: "done" }>,
+  commit: string,
+) {
+  const upstream = git(
+    root,
+    "rev-parse",
+    "--symbolic-full-name",
+    "@{upstream}",
+  );
+  if (!upstream.startsWith("refs/remotes/"))
+    throw new Error("Merge recording requires a fetched remote upstream");
+  git(root, "merge-base", "--is-ancestor", commit, upstream);
+  if (!/^[a-f0-9]{40}$/.test(run.revision))
+    throw new Error("Invalid accepted revision");
+  const base = run.acceptedBase ?? run.review?.base ?? `${run.revision}^`;
+  const accepted = patchID(
+    root,
+    git(
+      root,
+      "diff",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--binary",
+      "-U0",
+      base,
+      run.revision,
+      "--",
+    ),
+  );
+  if (
+    !accepted ||
+    !git(root, "rev-list", "--no-merges", `${base}..${commit}`)
+      .split("\n")
+      .filter(Boolean)
+      .some(
+        (revision) =>
+          patchID(
+            root,
+            git(
+              root,
+              "show",
+              "--format=",
+              "--no-ext-diff",
+              "--no-textconv",
+              "--binary",
+              "-U0",
+              revision,
+              "--",
+            ),
+          ) === accepted,
+      )
+  )
+    throw new Error("Merge commit does not contain the accepted change");
+  return new Date(
+    git(root, "show", "-s", "--format=%cI", commit),
+  ).toISOString();
+}
+
 function requireWorktree(root: string, worktree: string) {
   if (
     !git(root, "worktree", "list", "--porcelain", "-z")
@@ -879,9 +961,9 @@ function assertWatchdogCaller(
     throw new Error("Watchdog effects require the connected owning Foreman");
 }
 
-function assertAdmissionOwner(state: State, owner?: ThreadID) {
+function assertOwner(state: State, owner?: ThreadID) {
   if (!owner || state.owner !== owner)
-    throw new Error("Admission requires the owning Foreman");
+    throw new Error("Control requires the owning Foreman");
 }
 
 function controlState(
@@ -1561,6 +1643,7 @@ export function createFactory(
           thread: run.thread,
           executor: run.executor,
           revision,
+          acceptedBase: run.base,
           review: run.review,
           insight:
             typeof report.insight === "string"
@@ -2125,6 +2208,50 @@ export function createFactory(
     }
   }
 
+  async function saveMerge(request: unknown, owner?: ThreadID) {
+    const initial = factoryStatus(directory);
+    assertControlCaller(initial, owner);
+    assertOwner(initial, owner);
+    const { ticket, pr, commit } = parseMergeRequest(request);
+    const store = openStore(join(directory, "bookkeeping"));
+    try {
+      await store.init();
+      const persistence = openPersistence(directory, [], now);
+      try {
+        const state = persistence.state;
+        assertControlCaller(state, owner);
+        assertOwner(state, owner);
+        const run = Object.hasOwn(state.runs, ticket)
+          ? state.runs[ticket]
+          : undefined;
+        if (run?.kind !== "done")
+          throw new Error("Merge recording requires a done ticket");
+        if (run.merge) {
+          if (run.merge.pr !== pr || run.merge.commit !== commit)
+            throw new Error("Conflicting merge record");
+          return state;
+        }
+        const at = verifyMerge(root, run, commit);
+        run.merge = { pr, commit, at };
+        persistence.commit(state, ticket, "merge-recorded", commit);
+        return state;
+      } finally {
+        persistence.close();
+      }
+    } finally {
+      await store.close();
+    }
+  }
+
+  /** Record an owner's verified merge without lifecycle or watchdog effects. @throws On invalid evidence, conflicts, or failed I/O. */
+  function recordMerge(request: unknown, owner?: ThreadID): Promise<State> {
+    const result = pending
+      .catch(() => {})
+      .then(() => saveMerge(request, owner));
+    pending = result;
+    return result;
+  }
+
   /** Serialize local callbacks; the poteto lock excludes other plugin processes. @throws On unsafe state or failed I/O. */
   function tick(
     action:
@@ -2155,7 +2282,7 @@ export function createFactory(
         }
         assertControlCaller(initial, owner);
         assertWatchdogCaller(initial, action, owner, tools);
-        if (action === "admit") assertAdmissionOwner(initial, owner);
+        if (action === "admit") assertOwner(initial, owner);
         if (action === "reload" || action === "admit") {
           assertControlCaller(factoryStatus(directory), owner);
           await configuration(root);
@@ -2174,7 +2301,7 @@ export function createFactory(
             try {
               assertWatchdogCaller(persistence.state, action, owner, tools);
               if (action === "admit") {
-                assertAdmissionOwner(persistence.state, owner);
+                assertOwner(persistence.state, owner);
                 persistence.admit(text(admissionTicket));
                 return persistence.state;
               }
@@ -2224,5 +2351,5 @@ export function createFactory(
     pending = result;
     return result;
   }
-  return { tick, directory };
+  return { tick, recordMerge, directory };
 }
