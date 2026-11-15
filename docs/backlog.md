@@ -18,13 +18,12 @@ Merged, but at least one box, usually a live proof, is still open.
 | [foreman-watchdog-ticket3](feats/foreman-watchdog/foreman-watchdog-ticket3.md) | Outside-orb wake-up and alert delivery        | 2/4       |
 | [F003-provider-limit-resume](feats/durability/F003-provider-limit-resume.md)   | Same threads resume after a provider limit    | 5/6       |
 
-## Not started (48)
+## Not started (47)
 
 In dispatch order.
 
 | Ticket                                                                                          | Outcome                                         | Done when |
 | ----------------------------------------------------------------------------------------------- | ----------------------------------------------- | --------- |
-| [F019-gate-rerun-before-rejection](feats/worker-feedback/F019-gate-rerun-before-rejection.md)   | A load flake in the gate does not reject        | 0/6       |
 | [F018-landed-card-links](feats/lifecycle-view/F018-landed-card-links.md)                        | Landed card opens its thread and pull request   | 0/7       |
 | [F020-reviewer-uses-ce-code-review](feats/worker-feedback/F020-reviewer-uses-ce-code-review.md) | Cold review uses the review skill               | 0/5       |
 | [F013-event-log-drawer](feats/lifecycle-view/F013-event-log-drawer.md)                          | Live event log drawer and read-only trace API   | 0/6       |
@@ -73,20 +72,21 @@ In dispatch order.
 | [v1-ticket21](feats/v1/v1-ticket21.md)                                                          | Read-only effectiveness views                   | 0/3       |
 | [v1-ticket22](feats/v1/v1-ticket22.md)                                                          | Cross-orb v1 acceptance trial                   | 0/3       |
 
-## Done (13)
+## Done (14)
 
-| Ticket                                                                           | Outcome                                        | Done when |
-| -------------------------------------------------------------------------------- | ---------------------------------------------- | --------- |
-| [foreman-watchdog-ticket2](feats/done/foreman-watchdog-ticket2.md)               | Progress-based nudges and alert intent         | 4/4       |
-| [F001-backup-commit-identity](feats/done/F001-backup-commit-identity.md)         | Backup works under orb commit signing          | 5/5       |
-| [F002-worker-runner-executor](feats/done/F002-worker-runner-executor.md)         | Workers survive a Foreman CLI restart          | 6/6       |
-| [planned-intake-ticket1](feats/done/planned-intake-ticket1.md)                   | Planned backlog without accidental dispatch    | 4/4       |
-| [F008-gate-failure-feedback](feats/done/F008-gate-failure-feedback.md)           | A failed gate returns its output to the worker | 5/5       |
-| [F016-kit-page-default](feats/done/F016-kit-page-default.md)                     | The kit page is the only dashboard             | 5/5       |
-| [F021-merge-record](feats/done/F021-merge-record.md)                             | Each landed ticket records its pull request    | 5/5       |
-| [noninteractive-launcher-ticket1](feats/done/noninteractive-launcher-ticket1.md) |                                                | 4/4       |
-| [repair-escalation-ticket1](feats/done/repair-escalation-ticket1.md)             |                                                | 5/5       |
-| [ticket-step-labels-ticket1](feats/done/ticket-step-labels-ticket1.md)           |                                                | 6/6       |
-| [v1-ticket1](feats/done/v1-ticket1.md)                                           |                                                | 3/3       |
-| [v1-ticket2](feats/done/v1-ticket2.md)                                           |                                                | 4/4       |
-| [worktree-setup-ticket1](feats/done/worktree-setup-ticket1.md)                   |                                                | 5/5       |
+| Ticket                                                                             | Outcome                                        | Done when |
+| ---------------------------------------------------------------------------------- | ---------------------------------------------- | --------- |
+| [foreman-watchdog-ticket2](feats/done/foreman-watchdog-ticket2.md)                 | Progress-based nudges and alert intent         | 4/4       |
+| [F001-backup-commit-identity](feats/done/F001-backup-commit-identity.md)           | Backup works under orb commit signing          | 5/5       |
+| [F002-worker-runner-executor](feats/done/F002-worker-runner-executor.md)           | Workers survive a Foreman CLI restart          | 6/6       |
+| [planned-intake-ticket1](feats/done/planned-intake-ticket1.md)                     | Planned backlog without accidental dispatch    | 4/4       |
+| [F008-gate-failure-feedback](feats/done/F008-gate-failure-feedback.md)             | A failed gate returns its output to the worker | 5/5       |
+| [F016-kit-page-default](feats/done/F016-kit-page-default.md)                       | The kit page is the only dashboard             | 5/5       |
+| [F021-merge-record](feats/done/F021-merge-record.md)                               | Each landed ticket records its pull request    | 5/5       |
+| [F019-gate-rerun-before-rejection](feats/done/F019-gate-rerun-before-rejection.md) | A load flake in the gate does not reject       | 6/6       |
+| [noninteractive-launcher-ticket1](feats/done/noninteractive-launcher-ticket1.md)   |                                                | 4/4       |
+| [repair-escalation-ticket1](feats/done/repair-escalation-ticket1.md)               |                                                | 5/5       |
+| [ticket-step-labels-ticket1](feats/done/ticket-step-labels-ticket1.md)             |                                                | 6/6       |
+| [v1-ticket1](feats/done/v1-ticket1.md)                                             |                                                | 3/3       |
+| [v1-ticket2](feats/done/v1-ticket2.md)                                             |                                                | 4/4       |
+| [worktree-setup-ticket1](feats/done/worktree-setup-ticket1.md)                     |                                                | 5/5       |
