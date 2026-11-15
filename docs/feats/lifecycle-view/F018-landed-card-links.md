@@ -7,8 +7,8 @@
 - Initial priority: P1. Effort: Small.
 - Risk: normal; read-only links. A wrong URL built from feed data would be a link to an
   attacker-chosen site, so each URL is built from validated parts only.
-- Depends on: F016-kit-page-default. The arrow shows only once F014-lifecycle-stages puts the
-  pull request URL in the feed; this ticket does not wait for F014.
+- Depends on: F016-kit-page-default. F021-merge-record puts the pull request number and URL in
+  the feed; without it no number or arrow shows.
 - Planned at: `1902ba1a141a2a46cea40f879d855a7cacf3687d`, 2026-11-15. Local only.
 
 ## Why this matters
@@ -32,7 +32,7 @@ it.
   open against a real link. A real link is also reachable by keyboard and middle click.
 - `Builders` uses the same `onClick` pattern for the working ticket.
 - `Landed` prints `{ticket.title} <span>{ticket.revision}</span>`. Nothing links to GitHub.
-- The feed has no pull request for a ticket. F014 adds a merge record with the pull request
+- The feed has no pull request for a ticket. F021 adds a merge record with the pull request
   number and URL. A factory acceptance is a local fast-forward; the pull request is opened and
   merged by the Foreman afterwards.
 - For an accepted ticket `projectTask` in `factory/dashboard.ts` replaces the worker's thread
@@ -53,7 +53,7 @@ arrow link to the pull request, with the accessible name "Open pull request #N o
 forbids an anchor inside an anchor, so place the arrow as a sibling positioned over the card, or
 stop the card being an anchor around it; a click on the arrow must open only the pull request. Show
 the arrow only when the feed carries a pull request URL of the form
-`https://github.com/<owner>/<repo>/pull/<number>`. Until F014 lands, no ticket has one, so no arrow
+`https://github.com/<owner>/<repo>/pull/<number>`. Until F021 lands, no ticket has one, so no arrow
 shows; "Page placeholders" in `docs/v1-execution.md` lists it.
 
 Fix the feed for landed tickets: an accepted ticket keeps its own title and its worker's thread.

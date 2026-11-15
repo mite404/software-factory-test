@@ -145,5 +145,8 @@ Run the shared preflight in `docs/v1-execution.md`. Baseline gates have not run 
 
 ## Notes
 
+F021-merge-record adds the merge action and record first. This ticket reads that record for the
+`merged` stage and does not add a second action.
+
 v1-ticket23 plans a waiting-for-Foreman marker. `escalated` here is that fact; whichever ticket
 lands second reuses the first one's field.
