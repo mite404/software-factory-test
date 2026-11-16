@@ -96,8 +96,8 @@ A baseline failure goes back to the Foreman; it does not widen the worker's scop
 
 ## Done when
 
-- [ ] A worker or reviewer stopped by a rate limit in the nested reply shape takes the
+- [x] A worker or reviewer stopped by a rate limit in the nested reply shape takes the
       provider-limit wait or fallback path.
-- [ ] Other errors still stop with `worker-error`.
-- [ ] No fixture returns a top-level `agentError`.
-- [ ] Full gates, guard and a fresh cold review pass on the accepted revision.
+- [x] Other errors still stop with `worker-error`.
+- [x] No fixture returns a top-level `agentError`.
+- [x] Full gates, guard and a fresh cold review pass on the accepted revision.
