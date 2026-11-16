@@ -189,9 +189,21 @@ require the normal gates.
 
 Actionable stops persist an `incident` in the run, in the same SQLite transaction as the stop event.
 Its ID identifies the ticket, attempt and base; its owner names the current recovery recipient.
-Preparation uses `retry-setup`; ambiguous creation or delivery and changed integration or review
-identity require inspection. Only a saved worker checkpoint supports `resume`. Permission blockers
-grant no authority.
+Control `status` adds a compact, static `lifecycle` reference from `runLifecycle` in
+`persistence.ts`.
+It lists each kind's admitted actions, admission holds, stops, incident reasons, recovery values and
+conditional exits. The same table supplies native stop, interruption, activity and kind-admission
+rules. It is not saved in SQLite and includes no private briefs, report paths or thread content.
+Exit conditions describe required evidence; they do not grant permission or bypass validation.
+`record-landing` includes checkpoint-less target changes and multi-commit candidates.
+`record-merge` records an already done ticket without reopening it.
+
+The walking test pins five exitless stops by name: `blocked.withoutWorker`,
+`running.reviewerCreation`, `running.reviewerDeliveryLegacy`, `running.workerDeliveryLegacy` and
+`uncertain.legacy`. They stay parked for Foreman inspection because the original worker identity,
+creation lookup or saved delivery key is absent. No new recovery is implied. Reviewer error and
+approval incidents remain on `running`; only observed recovery of that reviewer clears them, not
+`resume`. Provider waits retain their reset, continuation and pinned reviewer-fallback rules.
 Serialized reconciliation sends queued notices to the owning Foreman through `host.send`, including
 after adapter restart and while execution is paused. Failed or ambiguous sends remain queued for the
 next reconciliation. A successful append with a lost acknowledgment can produce duplicate notices.

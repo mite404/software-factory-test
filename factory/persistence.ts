@@ -173,6 +173,429 @@ export type Run = (
   watchdog?: Watchdog;
   executor?: Executor;
 };
+
+type RunAction =
+  "retry-setup" | "retry-create" | "resume" | "record-landing" | "record-merge";
+type LifecycleExit =
+  { action: RunAction; when: string } | { event: string; when: string };
+type LifecycleStop = {
+  trigger: "stopped" | "interrupted" | "activity" | "provider";
+  reasons: readonly [StopIncident["reason"], ...StopIncident["reason"][]];
+  recovery: StopIncident["recovery"];
+  exits: readonly LifecycleExit[];
+  foremanOnly?: string;
+  activity?: "error" | "awaiting-approval";
+  matches?: (run: Run, reason?: StopIncident["reason"]) => boolean;
+};
+type LifecycleKind = {
+  actions: readonly RunAction[];
+  blocks: readonly ("resume" | "retry-setup" | "reconcile" | "dispatch")[];
+  repairBlocks?: readonly "dispatch"[];
+  exits: readonly LifecycleExit[];
+  stops: Record<string, LifecycleStop>;
+  reasonOverride?: boolean;
+};
+
+/** Existing lifecycle rules only. Conditions describe evidence, never grant authority. */
+export const runLifecycle = {
+  preparing: {
+    actions: ["retry-setup"],
+    blocks: ["resume", "reconcile"],
+    exits: [
+      { event: "setup-finished", when: "the owned setup process finishes" },
+    ],
+    stops: {
+      interrupted: {
+        trigger: "interrupted",
+        reasons: ["preparation-interrupted"],
+        recovery: "retry-setup",
+        exits: [
+          {
+            action: "retry-setup",
+            when: "the saved setup process has stopped",
+          },
+        ],
+      },
+    },
+  },
+  "preparation-failed": {
+    actions: ["retry-setup"],
+    blocks: ["resume", "reconcile"],
+    exits: [],
+    stops: {
+      failed: {
+        trigger: "stopped",
+        reasons: ["preparation-failed"],
+        recovery: "retry-setup",
+        exits: [
+          {
+            action: "retry-setup",
+            when: "the saved setup process has stopped",
+          },
+        ],
+      },
+    },
+  },
+  creating: {
+    actions: ["retry-create"],
+    blocks: ["resume", "retry-setup", "reconcile"],
+    exits: [
+      {
+        event: "created",
+        when: "the original create call returns its thread identity",
+      },
+    ],
+    stops: {
+      unknown: {
+        trigger: "interrupted",
+        reasons: ["creation-unknown"],
+        recovery: "inspect",
+        exits: [
+          {
+            action: "retry-create",
+            when: "the owner proves no thread exists and supplies the exact incident and decision",
+          },
+        ],
+      },
+    },
+  },
+  running: {
+    actions: [],
+    blocks: ["resume", "dispatch"],
+    exits: [
+      {
+        event: "accepted",
+        when: "the candidate passes its pinned gates and any required review",
+      },
+    ],
+    stops: {
+      workerDelivery: {
+        trigger: "interrupted",
+        reasons: ["delivery-unknown"],
+        recovery: "inspect",
+        matches: (run) =>
+          run.kind === "running" &&
+          run.delivery === "sending" &&
+          !!run.deliveryIntent,
+        exits: [
+          {
+            event: "delivery-recovered",
+            when: "a complete keyed transcript lookup proves presence or permits one reserved repeat",
+          },
+        ],
+      },
+      workerDeliveryLegacy: {
+        trigger: "interrupted",
+        reasons: ["delivery-unknown"],
+        recovery: "inspect",
+        matches: (run) =>
+          run.kind === "running" &&
+          run.delivery === "sending" &&
+          !run.deliveryIntent,
+        exits: [],
+        foremanOnly:
+          "No saved assignment key; manual delivery inspection cannot authorize a factory retry.",
+      },
+      reviewerDelivery: {
+        trigger: "interrupted",
+        reasons: ["delivery-unknown"],
+        recovery: "inspect",
+        matches: (run) =>
+          run.kind === "running" &&
+          run.review?.delivery === "sending" &&
+          !!run.review.deliveryIntent,
+        exits: [
+          {
+            event: "delivery-recovered",
+            when: "a complete keyed transcript lookup proves presence or permits one reserved repeat",
+          },
+        ],
+      },
+      reviewerDeliveryLegacy: {
+        trigger: "interrupted",
+        reasons: ["delivery-unknown"],
+        recovery: "inspect",
+        matches: (run) =>
+          run.kind === "running" &&
+          run.review?.delivery === "sending" &&
+          !run.review.deliveryIntent,
+        exits: [],
+        foremanOnly: "No saved review assignment key; manual inspection only.",
+      },
+      reviewerCreation: {
+        trigger: "interrupted",
+        reasons: ["creation-unknown"],
+        recovery: "inspect",
+        matches: (run) =>
+          run.kind === "running" && run.review?.delivery === "creating",
+        exits: [],
+        foremanOnly:
+          "The host cannot look up an ambiguous reviewer creation; retry-create admits only worker creation.",
+      },
+      reviewerError: {
+        trigger: "activity",
+        activity: "error",
+        reasons: ["worker-error"],
+        recovery: "inspect",
+        exits: [
+          {
+            event: "review-recovered",
+            when: "the same reviewer is observed idle or running",
+          },
+        ],
+      },
+      reviewerApproval: {
+        trigger: "activity",
+        activity: "awaiting-approval",
+        reasons: ["approval-required"],
+        recovery: "inspect",
+        exits: [
+          {
+            event: "review-recovered",
+            when: "the same reviewer is observed idle or running",
+          },
+        ],
+      },
+      providerLimit: {
+        trigger: "provider",
+        reasons: ["provider-limit"],
+        recovery: "wait",
+        exits: [
+          {
+            event: "provider-continuation-sent",
+            when: "connected owner reaches the saved reset or 30-minute fallback, or observes idle/running before the first continuation",
+          },
+          {
+            event: "provider-recovered",
+            when: "after any reserved continuation the same thread is observed idle or running",
+          },
+          {
+            event: "review-fallback-creating",
+            when: "a pinned valid reviewer fallback exists and has not been used; workers keep waiting",
+          },
+          {
+            event: "blocked",
+            when: "the worker reports a generic error or approval request instead of a provider limit",
+          },
+          {
+            event: "review-stopped",
+            when: "the reviewer reports a generic error or approval request instead of a provider limit",
+          },
+        ],
+      },
+    },
+  },
+  blocked: {
+    actions: ["resume", "record-landing"],
+    blocks: [],
+    repairBlocks: ["dispatch"],
+    exits: [],
+    reasonOverride: true,
+    stops: {
+      repair: {
+        trigger: "stopped",
+        reasons: ["verification-rejected"],
+        recovery: "resume",
+        matches: (run) => run.kind === "blocked" && !!run.repair,
+        exits: [
+          {
+            action: "resume",
+            when: "the exact incident, owner decision and idle clean unchanged original worker checkpoint validate",
+          },
+          {
+            action: "record-landing",
+            when: "the exact incident and upstream patch and merge proofs validate",
+          },
+        ],
+      },
+      checkpoint: {
+        trigger: "stopped",
+        reasons: ["worker-blocked", "worker-error", "approval-required"],
+        recovery: "resume",
+        matches: (run) => run.kind === "blocked" && !!run.checkpoint,
+        exits: [
+          {
+            action: "resume",
+            when: "the exact incident, owner decision and idle clean unchanged original worker checkpoint validate",
+          },
+          {
+            action: "record-landing",
+            when: "the exact incident and upstream patch and merge proofs validate",
+          },
+          {
+            event: "stop-recorded",
+            when: "a connected owner observes a provider limit for a saved worker-error checkpoint and no other active work exists",
+          },
+        ],
+      },
+      targetChanged: {
+        trigger: "stopped",
+        reasons: ["target-changed"],
+        recovery: "inspect",
+        matches: (run, reason) =>
+          run.kind === "blocked" && !!run.thread && reason === "target-changed",
+        exits: [
+          {
+            action: "record-landing",
+            when: "durable incident base and attempt, original thread and registered worktree prove an externally landed candidate, including multi-commit patch proof",
+          },
+        ],
+      },
+      reviewIdentityChanged: {
+        trigger: "stopped",
+        reasons: ["review-identity-changed"],
+        recovery: "inspect",
+        matches: (run, reason) =>
+          run.kind === "blocked" &&
+          !!run.thread &&
+          reason === "review-identity-changed",
+        exits: [
+          {
+            action: "record-landing",
+            when: "durable incident base and attempt, original thread and registered worktree prove an externally landed candidate, including multi-commit patch proof",
+          },
+        ],
+      },
+      uncheckpointed: {
+        trigger: "stopped",
+        reasons: ["worker-blocked"],
+        recovery: "inspect",
+        matches: (run) => run.kind === "blocked" && !!run.thread,
+        exits: [
+          {
+            action: "record-landing",
+            when: "durable incident base and attempt, original thread and registered worktree prove an externally landed candidate, including multi-commit patch proof",
+          },
+          {
+            event: "stop-recorded",
+            when: "matching legacy report and durable events reconstruct the original checkpoint before admission",
+          },
+        ],
+      },
+      withoutWorker: {
+        trigger: "stopped",
+        reasons: ["worker-blocked"],
+        recovery: "inspect",
+        exits: [],
+        foremanOnly:
+          "No original worker identity or resumable checkpoint; inspection grants no execution authority.",
+      },
+    },
+  },
+  uncertain: {
+    actions: [],
+    blocks: ["resume", "retry-setup", "reconcile"],
+    exits: [],
+    stops: {
+      keyed: {
+        trigger: "stopped",
+        reasons: ["delivery-unknown"],
+        recovery: "inspect",
+        matches: (run) =>
+          run.kind === "uncertain" && !!run.checkpoint?.deliveryIntent,
+        exits: [
+          {
+            event: "delivery-recovered",
+            when: "a complete keyed transcript lookup proves presence or permits one reserved repeat",
+          },
+        ],
+      },
+      legacy: {
+        trigger: "stopped",
+        reasons: ["delivery-unknown"],
+        recovery: "inspect",
+        exits: [],
+        foremanOnly:
+          "No keyed checkpoint; no factory action can resolve the ambiguous delivery.",
+      },
+    },
+  },
+  done: { actions: ["record-merge"], blocks: [], exits: [], stops: {} },
+} as const satisfies Record<Run["kind"], LifecycleKind>;
+
+type AdmittedRun<A extends RunAction> = Extract<
+  Run,
+  {
+    kind: {
+      [
+        K in keyof typeof runLifecycle
+      ]: A extends (typeof runLifecycle)[K]["actions"][number] ? K : never;
+    }[keyof typeof runLifecycle];
+  }
+>;
+
+/** Check kind admission only; callers still validate ownership, identity and evidence. */
+export function admitsRun<A extends RunAction>(
+  run: Run | undefined,
+  action: A,
+): run is AdmittedRun<A> {
+  if (!run) return false;
+  const entry: LifecycleKind = runLifecycle[run.kind];
+  return entry.actions.includes(action);
+}
+
+/** Whether a saved kind holds this action before its evidence-specific checks. */
+export function runBlocks(
+  run: Run,
+  action: "resume" | "retry-setup" | "reconcile" | "dispatch",
+) {
+  const entry: LifecycleKind = runLifecycle[run.kind];
+  return (
+    entry.blocks.includes(action) ||
+    (action === "dispatch" &&
+      "repair" in run &&
+      !!run.repair &&
+      !!entry.repairBlocks?.includes(action))
+  );
+}
+
+/** Resolve persisted stops and interruptions in declared precedence order. */
+export function lifecycleStop(
+  run: Run,
+  trigger: "stopped" | "interrupted",
+  reason?: StopIncident["reason"],
+): [StopIncident["reason"], StopIncident["recovery"]] | undefined {
+  const entry: LifecycleKind = runLifecycle[run.kind];
+  const stop = Object.values(entry.stops).find(
+    (stop) =>
+      stop.trigger === trigger && (!stop.matches || stop.matches(run, reason)),
+  );
+  return (
+    stop && [(entry.reasonOverride && reason) || stop.reasons[0], stop.recovery]
+  );
+}
+
+/** Activity reasons are shared by worker blocking and reviewer inspection. */
+export function lifecycleActivity(
+  activity: "error" | "awaiting-approval",
+): [StopIncident["reason"], StopIncident["recovery"]] {
+  const stops: Record<string, LifecycleStop> = runLifecycle.running.stops;
+  const stop = Object.values(stops).find((stop) => stop.activity === activity)!;
+  return [stop.reasons[0], stop.recovery];
+}
+
+/** Compact static status reference; never includes run state or predicate source. */
+export function lifecycleStatus() {
+  return Object.fromEntries(
+    Object.entries(runLifecycle).map(([kind, entry]) => [
+      kind,
+      {
+        actions: entry.actions,
+        blocks: entry.blocks,
+        ...("repairBlocks" in entry
+          ? { repairBlocks: entry.repairBlocks }
+          : {}),
+        exits: entry.exits,
+        stops: Object.fromEntries(
+          Object.entries<LifecycleStop>(entry.stops).map(
+            ([name, { matches: _matches, ...stop }]) => [name, stop],
+          ),
+        ),
+      },
+    ]),
+  );
+}
+
 export type State = {
   enabled: boolean;
   owner?: ThreadID;

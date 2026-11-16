@@ -9,7 +9,12 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { backup } from "./backup";
 import type { DashboardSnapshot } from "./dashboard";
-import { factoryStatus, type Run, type State } from "./persistence";
+import {
+  factoryStatus,
+  lifecycleStatus,
+  type Run,
+  type State,
+} from "./persistence";
 import {
   assertControlCaller,
   effectiveConfiguration,
@@ -532,7 +537,11 @@ export default function registerFactory(
         );
         if (action !== "reload" && action !== "status")
           await publish(liveTools);
-        return JSON.stringify(state);
+        return JSON.stringify(
+          action === "status"
+            ? { ...state, lifecycle: lifecycleStatus() }
+            : state,
+        );
       };
       calls++;
       try {

@@ -36,6 +36,11 @@ import {
   validWatchdogPolicy,
   validProviderLimitPolicy,
   reviewerModel,
+  runLifecycle,
+  lifecycleStop,
+  lifecycleActivity,
+  admitsRun,
+  runBlocks,
   type ThreadID,
   type Task,
   type Run,
@@ -51,11 +56,6 @@ type ConnectedTools = PluginTools & { isConnected?(): boolean };
 type Activity = Awaited<ReturnType<NativeHost["state"]>>;
 type GateOutcome =
   "gate-failed" | "gate-not-run" | "post-gate-changed" | "gate-passed";
-
-const activityReasons = {
-  error: "worker-error",
-  "awaiting-approval": "approval-required",
-} as const;
 
 const progressActions = new Set([
   "preparing",
@@ -234,12 +234,6 @@ export function parseSetup(command: unknown, timeout: unknown) {
       "Invalid setupTimeoutMs; expected positive milliseconds with setup",
     );
   return { command: setup, timeoutMs };
-}
-
-function isPreparation(
-  run: Run | undefined,
-): run is Extract<Run, { kind: "preparing" | "preparation-failed" }> {
-  return run?.kind === "preparing" || run?.kind === "preparation-failed";
 }
 
 /** Parse native worker effort; omission keeps the model default. @throws On unsupported values. */
@@ -1028,7 +1022,7 @@ function verifiedLanding(
   evidence: ReturnType<typeof parseLandingRequest>,
   owner?: ThreadID,
 ): Extract<Run, { kind: "done" }> {
-  if (run?.kind !== "blocked")
+  if (!admitsRun(run, "record-landing"))
     throw new Error("Landing requires a blocked ticket");
   const checkpoint =
     run.repair ?? run.checkpoint ?? incidentCheckpoint(root, directory, run);
@@ -1233,9 +1227,8 @@ function restoreTickets(queue: Task[], persisted: Task[], state: State) {
 function retryAdmission(state: State, action: string) {
   if (action !== "retry-setup") return true;
   const runs = Object.values(state.runs);
-  if (runs.some((run) => run.kind === "creating" || run.kind === "uncertain"))
-    return false;
-  if (!state.enabled || !runs.some(isPreparation))
+  if (runs.some((run) => runBlocks(run, "retry-setup"))) return false;
+  if (!state.enabled || !runs.some((run) => admitsRun(run, "retry-setup")))
     throw new Error("No preparation to retry");
   return true;
 }
@@ -1249,31 +1242,6 @@ function checkpointIdentity(run?: Run) {
     base: checkpoint.base,
     attempt: "attempt" in checkpoint ? checkpoint.attempt : 0,
   };
-}
-
-function stoppedRun(
-  run: Run,
-  reason?: StopIncident["reason"],
-): [StopIncident["reason"], StopIncident["recovery"]] | undefined {
-  if (run.kind === "blocked")
-    return [
-      reason ?? (run.repair ? "verification-rejected" : "worker-blocked"),
-      run.repair || run.checkpoint ? "resume" : "inspect",
-    ];
-  if (run.kind === "preparation-failed")
-    return ["preparation-failed", "retry-setup"];
-  if (run.kind === "uncertain") return ["delivery-unknown", "inspect"];
-  return undefined;
-}
-
-function interruptedRun(run: Run): StopIncident["reason"] | undefined {
-  if (run.kind === "creating") return "creation-unknown";
-  if (run.kind === "preparing") return "preparation-interrupted";
-  if (run.kind !== "running") return undefined;
-  if ([run.delivery, run.review?.delivery].includes("sending"))
-    return "delivery-unknown";
-  if (run.review?.delivery === "creating") return "creation-unknown";
-  return undefined;
 }
 
 function requireIncident(
@@ -1395,7 +1363,7 @@ export function createFactory(
       ) {
         const run = state.runs[ticket];
         if (run && !run.incident) {
-          const stop = stoppedRun(run, reason);
+          const stop = lifecycleStop(run, "stopped", reason);
           if (stop) incident(ticket, run, ...stop);
         }
         if (run)
@@ -1424,13 +1392,8 @@ export function createFactory(
       function parkedIncidents() {
         for (const [ticket, run] of Object.entries(state.runs)) {
           if (run.incident) continue;
-          let stop = stoppedRun(run);
-          const reason = interruptedRun(run);
-          if (reason)
-            stop = [
-              reason,
-              reason === "preparation-interrupted" ? "retry-setup" : "inspect",
-            ];
+          const stop =
+            lifecycleStop(run, "interrupted") ?? lifecycleStop(run, "stopped");
           if (stop && incident(ticket, run, ...stop))
             commit(
               ticket,
@@ -1721,15 +1684,11 @@ export function createFactory(
         const decision = text(request.decision);
         const task = queue.find((task) => task.id === ticket);
         const blocked = state.runs[ticket];
-        if (!task || blocked?.kind !== "blocked")
+        if (!task || !admitsRun(blocked, "resume"))
           throw new Error(
             "Resume requires a blocked ticket with its original worker",
           );
-        if (
-          Object.values(state.runs).some(
-            (run) => run.kind !== "blocked" && run.kind !== "done",
-          )
-        )
+        if (Object.values(state.runs).some((run) => runBlocks(run, "resume")))
           throw new Error(
             "Resolve active or uncertain work before resuming a repair",
           );
@@ -1796,7 +1755,7 @@ export function createFactory(
         if (
           text(owner) !== state.owner ||
           !task ||
-          run?.kind !== "creating" ||
+          !admitsRun(run, "retry-create") ||
           !run.incident ||
           run.incident.id !== request.incident ||
           !request.decision.trim()
@@ -1813,9 +1772,8 @@ export function createFactory(
       if (
         Object.values(state.runs).some(
           (run) =>
-            run.kind === "creating" ||
-            run.kind === "uncertain" ||
-            (isPreparation(run) && action !== "retry-setup"),
+            runBlocks(run, "reconcile") &&
+            !(action === "retry-setup" && admitsRun(run, "retry-setup")),
         )
       )
         return state;
@@ -1947,7 +1905,12 @@ export function createFactory(
             reason: "Integration target changed; reconcile before landing",
             executor: run.executor,
           };
-          commit(task.id, "blocked", "target-changed", "target-changed");
+          commit(
+            task.id,
+            "blocked",
+            "target-changed",
+            runLifecycle.blocked.stops.targetChanged.reasons[0],
+          );
           return;
         }
         if (target !== revision) git(root, "merge", "--ff-only", revision);
@@ -2077,7 +2040,12 @@ export function createFactory(
             reason: "Integration target changed; reconcile before landing",
             executor: run.executor,
           };
-          commit(task.id, "blocked", "target-changed", "target-changed");
+          commit(
+            task.id,
+            "blocked",
+            "target-changed",
+            runLifecycle.blocked.stops.targetChanged.reasons[0],
+          );
           return;
         }
         const model = reviewerModel(run.workerModel);
@@ -2201,7 +2169,8 @@ export function createFactory(
           newProviderIncident(run.incident, activity)
         ) {
           delete run.incident;
-          incident(task.id, run, "provider-limit", "wait");
+          const stop = runLifecycle.running.stops.providerLimit;
+          incident(task.id, run, stop.reasons[0], stop.recovery);
           run.incident!.providerLimit = { ...activity.limit, thread };
           commit(
             task.id,
@@ -2247,8 +2216,7 @@ export function createFactory(
           const created = incident(
             task.id,
             run,
-            activityReasons[activity],
-            "inspect",
+            ...lifecycleActivity(activity),
           );
           if (created) commit(task.id, "review-stopped", activity);
         } else if (activity !== "unknown" && run.incident) {
@@ -2277,7 +2245,7 @@ export function createFactory(
             task.id,
             "blocked",
             "review-identity-changed",
-            "review-identity-changed",
+            runLifecycle.blocked.stops.reviewIdentityChanged.reasons[0],
           );
           return;
         }
@@ -2356,7 +2324,7 @@ export function createFactory(
             checkpoint: run,
             executor: run.executor,
           };
-          commit(task.id, "blocked", activity, activityReasons[activity]);
+          commit(task.id, "blocked", activity, lifecycleActivity(activity)[0]);
           return;
         }
         const report = await currentReport(directory, task, run.attempt);
@@ -2497,12 +2465,7 @@ export function createFactory(
       }
 
       async function dispatchNext() {
-        if (
-          Object.values(state.runs).some(
-            (run) =>
-              run.kind === "running" || (run.kind === "blocked" && run.repair),
-          )
-        )
+        if (Object.values(state.runs).some((run) => runBlocks(run, "dispatch")))
           return state;
         const next = queue.find(
           (task) =>
@@ -2534,9 +2497,7 @@ export function createFactory(
           run?.kind === "blocked" &&
           run.incident?.reason === "worker-error" &&
           run.checkpoint &&
-          !Object.values(state.runs).some(
-            (other) => other.kind !== "blocked" && other.kind !== "done",
-          )
+          !Object.values(state.runs).some((other) => runBlocks(other, "resume"))
         ) {
           const activity = await observe(run.checkpoint.thread);
           if (typeof activity === "object") {
@@ -2567,7 +2528,7 @@ export function createFactory(
       async function retrySetup() {
         for (const task of queue) {
           const run = state.runs[task.id];
-          if (!isPreparation(run)) continue;
+          if (!admitsRun(run, "retry-setup")) continue;
           requireSetupStopped(run.pid);
           if (git(root, "status", "--porcelain"))
             throw new Error("Commit existing changes before retrying setup");
@@ -2770,7 +2731,7 @@ export function createFactory(
           const run = Object.hasOwn(state.runs, ticket)
             ? state.runs[ticket]
             : undefined;
-          if (run?.kind !== "done")
+          if (!admitsRun(run, "record-merge"))
             throw new Error("Merge recording requires a done ticket");
           if (run.merge) {
             if (run.merge.pr !== pr || run.merge.commit !== commit)

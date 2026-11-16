@@ -7,11 +7,173 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startDashboard } from "./dashboard";
 import registerFactory from "./plugin";
-import { factoryStatus, openPersistence, type Run } from "./persistence";
+import {
+  factoryStatus,
+  openPersistence,
+  type lifecycleStatus,
+  type Run,
+} from "./persistence";
 import { watchdogFixture } from "./bookkeeping.fixture";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
+
+test("status exposes a compact static lifecycle with real control actions and no private evidence", async () => {
+  const root = await mkdtemp(join(tmpdir(), "factory-plugin-lifecycle-"));
+  const directory = join(root, ".git/factory");
+  const canary = "PRIVATE-BRIEF-REPORT-PATH-THREAD-CONTENT";
+  let dispose = () => {};
+  let actions: readonly string[] = [];
+  let execute!: (
+    input: { action: string },
+    ctx: PluginToolContext,
+  ) => Promise<unknown>;
+  try {
+    git(root, "init", "-q");
+    await writeFile(join(root, "prd.md"), canary);
+    await writeFile(
+      join(root, "tickets.json"),
+      JSON.stringify([{ id: "A", brief: canary, after: [] }]),
+    );
+    await writeFile(
+      join(root, ".factory.json"),
+      JSON.stringify({
+        version: 1,
+        capacity: 1,
+        workerModel: "openai/gpt-6.1-sol",
+        prd: "prd.md",
+        tickets: "tickets.json",
+        scope: ["src/"],
+        verify: "true",
+        permissions: { execute: false, publish: false, externalTickets: false },
+      }),
+    );
+    const storage = openPersistence(directory, [
+      { id: "A", brief: canary, after: [] },
+    ]);
+    storage.commit(
+      {
+        enabled: false,
+        owner: "T-owner",
+        runs: {
+          A: {
+            kind: "running",
+            base: "base",
+            worktree: canary,
+            thread: "T-worker",
+            attempt: 1,
+            delivery: "sent",
+            requirements: canary,
+            review: {
+              ticket: "A",
+              attempt: 1,
+              revision: "a".repeat(40),
+              base: "base",
+              stage: "post-graft",
+              worktree: canary,
+              model: "anthropic/reviewer",
+              report: canary,
+              log: canary,
+              command: canary,
+              delivery: "sent",
+              thread: "T-review",
+            },
+          },
+        },
+      },
+      "factory",
+      "fixture",
+      canary,
+    );
+    storage.close();
+    const before = await readFile(join(directory, "state.sqlite"));
+    registerFactory(
+      {
+        createAgent() {
+          throw new Error("Status cannot create threads");
+        },
+        threads: {
+          get() {
+            return {
+              state: {
+                async get() {
+                  return "unknown";
+                },
+                subscribe() {
+                  return { unsubscribe() {} };
+                },
+              },
+            };
+          },
+        },
+        logger: { log() {} },
+        on() {},
+        registerTool(tool: {
+          execute: typeof execute;
+          inputSchema: { properties: { action: { enum: string[] } } };
+        }) {
+          execute = tool.execute;
+          actions = tool.inputSchema.properties.action.enum;
+        },
+        onDispose(fn: () => void) {
+          dispose = fn;
+        },
+      } as unknown as PluginAPI,
+      root,
+      () => ({
+        async init() {
+          throw new Error("Status cannot initialize bookkeeping");
+        },
+        async close() {},
+        ledger: { async record() {} },
+      }),
+    );
+    const ctx = {
+      thread: { id: "T-owner" },
+      tools: {
+        async call() {
+          throw new Error("Status cannot call remote tools");
+        },
+      },
+    } as unknown as PluginToolContext;
+    const status = JSON.parse(
+      String(await execute({ action: "status" }, ctx)),
+    ) as {
+      lifecycle: ReturnType<typeof lifecycleStatus>;
+    };
+    const projection = JSON.stringify(status.lifecycle);
+    expect(projection).not.toContain(canary);
+    expect(projection).not.toContain(root);
+    expect(projection).not.toContain("T-worker");
+    expect(projection).not.toContain("matches");
+    expect(Buffer.byteLength(projection)).toBeLessThan(10_000);
+    expect(Object.keys(status.lifecycle)).toHaveLength(7);
+    expect(status.lifecycle.creating.stops.unknown.exits).toContainEqual({
+      action: "retry-create",
+      when: expect.any(String),
+    });
+    expect(status.lifecycle.blocked.stops.targetChanged.reasons).toContain(
+      "target-changed",
+    );
+    expect(status.lifecycle.blocked.stops.targetChanged.exits).toContainEqual({
+      action: "record-landing",
+      when: expect.any(String),
+    });
+    expect(status.lifecycle.done.actions).toEqual(["record-merge"]);
+    for (const entry of Object.values(status.lifecycle)) {
+      for (const action of entry.actions) expect(actions).toContain(action);
+      for (const stop of Object.values(entry.stops)) {
+        for (const exit of stop.exits)
+          if ("action" in exit) expect(actions).toContain(exit.action);
+      }
+    }
+    expect(await readFile(join(directory, "state.sqlite"))).toEqual(before);
+    expect(factoryStatus(directory)).not.toHaveProperty("lifecycle");
+  } finally {
+    dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("connected handoff observes the exact old owner and returns private durable notes", async () => {
   const root = await mkdtemp(join(tmpdir(), "factory-plugin-handoff-"));
