@@ -157,8 +157,9 @@ function reportedActivity(
   if (!result) return "unknown";
   const threadID = record(result.metadata)?.threadID;
   if (threadID !== undefined && threadID !== id) return "unknown";
-  const status = activity(record(result.agentState)?.state);
-  if (status === "error") return providerActivity(result.agentError);
+  const agentState = record(result.agentState);
+  const status = activity(agentState?.state);
+  if (status === "error") return providerActivity(agentState?.agentError);
   return threadID === id ? status : "unknown";
 }
 

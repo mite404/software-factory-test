@@ -1754,13 +1754,69 @@ test("setup recovery control preserves durable failure and compatible observatio
 }, 30000);
 
 test.each([
-  [false, false, { threadID: "T-worker" }, "sending", "T-worker", "resume"],
-  [false, true, { threadID: "T-worker" }, "unknown", "T-worker", "resume"],
-  [true, false, {}, "sending", "T-reviewer", "inspect"],
-  [true, true, undefined, "unknown", "T-reviewer", "inspect"],
+  [
+    false,
+    false,
+    { threadID: "T-worker" },
+    "sending",
+    "T-worker",
+    "resume",
+    undefined,
+    false,
+  ],
+  [
+    false,
+    true,
+    { threadID: "T-worker" },
+    "unknown",
+    "T-worker",
+    "resume",
+    undefined,
+    false,
+  ],
+  [
+    true,
+    false,
+    { threadID: "T-reviewer" },
+    "sending",
+    "T-reviewer",
+    "inspect",
+    undefined,
+    false,
+  ],
+  [true, true, undefined, "unknown", "T-reviewer", "inspect", undefined, false],
+  [
+    false,
+    false,
+    { threadID: "T-worker" },
+    "sending",
+    "T-worker",
+    "resume",
+    { mode: "fallback", reviewerModel: "xai/grok-5" },
+    false,
+  ],
+  [
+    true,
+    false,
+    { threadID: "T-reviewer" },
+    "sending",
+    "T-reviewer",
+    "inspect",
+    { mode: "fallback", reviewerModel: "xai/grok-5" },
+    true,
+  ],
 ] as const)(
-  "provider wait resumes the same thread once (review=%s, lost send=%s)",
-  async (review, lostSend, metadata, heldOutcome, thread, errorRecovery) => {
+  "nested provider errors recover (review=%s, lost send=%s, metadata=%j, held=%s, thread=%s, recovery=%s, policy=%j, fallback=%s)",
+  async (
+    review,
+    lostSend,
+    metadata,
+    heldOutcome,
+    thread,
+    errorRecovery,
+    providerLimit,
+    fallbackReview,
+  ) => {
     const root = await mkdtemp(join(tmpdir(), "factory-provider-"));
     const directory = join(root, ".git/factory");
     const queue = [{ id: "A", brief: "Private assignment", after: [] }];
@@ -1781,7 +1837,16 @@ test.each([
     };
     let status = "error";
     let persisted!: Run;
+    const createdModels: string[] = [];
     const amp = {
+      createAgent(options: { model: string }) {
+        createdModels.push(options.model);
+        return {
+          async createThread() {
+            return { id: "T-fallback" };
+          },
+        };
+      },
       threads: {
         get(id: string) {
           return {
@@ -1826,8 +1891,8 @@ test.each([
         if (name === "amp.get_thread_status")
           return {
             metadata,
-            agentState: { state: status },
-            agentError: error,
+            agentState: { state: status, updatedAt: at, agentError: error },
+            preview: "",
           };
         return fixture.tools.call(name, input);
       },
@@ -1868,6 +1933,7 @@ test.each([
           tickets: "tickets.json",
           scope: ["src/"],
           verify: "true",
+          providerLimit,
           permissions: {
             execute: true,
             publish: false,
@@ -1918,6 +1984,26 @@ test.each([
         "worker-error",
       );
       const first = (await control()).runs.A;
+      if (fallbackReview) {
+        expect(first).toMatchObject({
+          kind: "running",
+          thread: "T-worker",
+          attempt: 1,
+          review: {
+            thread: "T-fallback",
+            model: "xai/grok-5",
+            delivery: "sent",
+            fallback: {
+              thread: "T-reviewer",
+              model: "anthropic/reviewer",
+              reason: (error as { message: string }).message,
+            },
+          },
+        });
+        expect(first.incident).toBeUndefined();
+        expect(createdModels).toEqual(["xai/grok-5"]);
+        return;
+      }
       expect(first).toMatchObject({
         kind: "running",
         attempt: 1,
@@ -1959,6 +2045,7 @@ test.each([
           ),
         },
       ]);
+      expect(createdModels).toEqual([]);
       const previousNotices = [...notices];
       expect(previousNotices).toContainEqual(
         expect.stringContaining("provider-limit"),
@@ -2074,14 +2161,17 @@ test.each([
         expect(repeated.providerLimit.continuation).toBeUndefined();
       }
 
-      for (const recoverEarly of [false, true]) {
+      for (const [message, recoveredState, advance] of [
+        ["Try later", "error", 1],
+        ["resets 7pm (Unknown)", "running", 0],
+      ] as const) {
         seed();
         error = {
           code: "MODEL_PROVIDER_ERROR",
           message: JSON.stringify({
             error: {
               type: "rate_limit_error",
-              message: recoverEarly ? "resets 7pm (Unknown)" : "Try later",
+              message,
             },
           }),
         };
@@ -2095,8 +2185,8 @@ test.each([
         at += 1_799_999;
         await control();
         expect(sent).toHaveLength(count);
-        if (recoverEarly) local = status = "running";
-        else at++;
+        local = status = recoveredState;
+        at += advance;
         await control();
         expect(sent).toHaveLength(count + 1);
         await control();
@@ -2104,6 +2194,7 @@ test.each([
         local = status = "error";
       }
       for (const invalid of [
+        undefined,
         null,
         {},
         { code: "OTHER", message: "rate_limit_error" },
