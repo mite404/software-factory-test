@@ -18,7 +18,7 @@ Merged, but at least one box, usually a live proof, is still open.
 | [foreman-watchdog-ticket3](feats/foreman-watchdog/foreman-watchdog-ticket3.md) | Outside-orb wake-up and alert delivery        | 2/4       |
 | [F003-provider-limit-resume](feats/durability/F003-provider-limit-resume.md)   | Same threads resume after a provider limit    | 5/6       |
 
-## Not started (41)
+## Not started (40)
 
 In dispatch order.
 
@@ -38,7 +38,6 @@ In dispatch order.
 | [F028-role-credentials](feats/config-layout/F028-role-credentials.md)                   | Each role sees only its own credentials         | 0/3       |
 | [F022-ticket-file-sync](feats/planned-intake/F022-ticket-file-sync.md)                  | Saved tickets appear as planned on their own    | 0/6       |
 | [F023-public-stop-reasons](feats/lifecycle-view/F023-public-stop-reasons.md)            | A blocked or rejected ticket says why           | 0/6       |
-| [F032-landing-per-commit-proof](feats/durability/F032-landing-per-commit-proof.md)      | A multi-commit candidate can record its landing | 0/4       |
 | [F033-provider-error-shape](feats/durability/F033-provider-error-shape.md)              | A real provider limit waits instead of stopping | 0/4       |
 | [v1-ticket4](feats/v1/v1-ticket4.md)                                                    | Durable private evidence records                | 0/3       |
 | [v1-ticket11](feats/v1/v1-ticket11.md)                                                  | Required and advisory verification tools        | 0/3       |
@@ -66,7 +65,7 @@ In dispatch order.
 | [v1-ticket21](feats/v1/v1-ticket21.md)                                                  | Read-only effectiveness views                   | 0/3       |
 | [v1-ticket22](feats/v1/v1-ticket22.md)                                                  | Cross-orb v1 acceptance trial                   | 0/3       |
 
-## Done (24)
+## Done (25)
 
 | Ticket                                                                               | Outcome                                                   | Done when |
 | ------------------------------------------------------------------------------------ | --------------------------------------------------------- | --------- |
@@ -88,6 +87,7 @@ In dispatch order.
 | [F006-limit-fallback-setting](feats/done/F006-limit-fallback-setting.md)             | Wait or fall back on a provider limit                     | 5/5       |
 | [F024-serial-test-runs](feats/done/F024-serial-test-runs.md)                         | Test runs on one machine take turns                       | 5/5       |
 | [F031-landing-without-checkpoint](feats/done/F031-landing-without-checkpoint.md)     | A blocked run without a checkpoint can record its landing | 5/5       |
+| [F032-landing-per-commit-proof](feats/done/F032-landing-per-commit-proof.md)         | A multi-commit candidate can record its landing           | 4/4       |
 | [v1-ticket1](feats/done/v1-ticket1.md)                                               | Public titles never show private briefs                   | 3/3       |
 | [v1-ticket2](feats/done/v1-ticket2.md)                                               | One versioned definition that never auto-runs             | 4/4       |
 | [worktree-setup-ticket1](feats/done/worktree-setup-ticket1.md)                       | Each worktree is ready before its worker starts           | 5/5       |
