@@ -36,7 +36,7 @@ export type WatchdogPolicy = {
 };
 export type WatchdogAlert = {
   id: string;
-  kind: "unresolved" | "spending";
+  kind: "unresolved" | "spending" | "parked";
   episode: string;
   attempt: number;
   intendedAt: number;
@@ -55,6 +55,8 @@ export const defaultWatchdog: WatchdogPolicy = {
   spendingFirstAttempt: 6,
   spendingInterval: 4,
 };
+/** Rejections at this attempt or later require an operator decision before owner resume. */
+export const repairAttemptCap = 4;
 export type Task = {
   id: string;
   brief: string;
@@ -152,6 +154,12 @@ export type Run = (
       checkpoint?: Extract<Run, { kind: "running" }>;
     }
   | {
+      kind: "parked";
+      reason: string;
+      thread: ThreadID;
+      repair: Extract<Run, { kind: "running" }>;
+    }
+  | {
       kind: "uncertain";
       reason: string;
       thread: ThreadID;
@@ -196,7 +204,7 @@ type LifecycleKind = {
   reasonOverride?: boolean;
 };
 
-/** Existing lifecycle rules only. Conditions describe evidence, never grant authority. */
+/** Declared lifecycle rules. Conditions describe evidence, never grant authority. */
 export const runLifecycle = {
   preparing: {
     actions: ["retry-setup"],
@@ -482,6 +490,24 @@ export const runLifecycle = {
       },
     },
   },
+  parked: {
+    actions: ["resume"],
+    blocks: [],
+    exits: [],
+    stops: {
+      repair: {
+        trigger: "stopped",
+        reasons: ["verification-rejected"],
+        recovery: "resume",
+        exits: [
+          {
+            action: "resume",
+            when: "the exact incident, operator decision and idle clean original worker validate with no other active work; the clean integration base is unchanged or a descendant, repinned on resume with rebase feedback",
+          },
+        ],
+      },
+    },
+  },
   uncertain: {
     actions: [],
     blocks: ["resume", "retry-setup", "reconcile"],
@@ -751,7 +777,7 @@ function validWatchdog(value: unknown): boolean {
       return (
         text(alert.id) &&
         text(alert.episode) &&
-        ["unresolved", "spending"].includes(String(alert.kind)) &&
+        ["unresolved", "spending", "parked"].includes(String(alert.kind)) &&
         Number.isSafeInteger(alert.attempt) &&
         Number(alert.attempt) >= 0 &&
         timestamp(alert.intendedAt) &&
@@ -833,6 +859,20 @@ const runValidators: Record<string, (run: Record<string, unknown>) => boolean> =
           validRepair(run.checkpoint, run.thread))) &&
       (run.repair === undefined ||
         (validRepair(run.repair, run.thread) && run.repair.attempt % 2 === 0)),
+    parked: (run) => {
+      const incident = record(run.incident);
+      return (
+        text(run.reason) &&
+        thread(run.thread) &&
+        run.checkpoint === undefined &&
+        validRepair(run.repair, run.thread) &&
+        run.repair.attempt >= repairAttemptCap &&
+        incident.reason === "verification-rejected" &&
+        incident.recovery === "resume" &&
+        incident.base === run.repair.base &&
+        incident.attempt === run.repair.attempt
+      );
+    },
     uncertain: (run) =>
       text(run.reason) &&
       thread(run.thread) &&

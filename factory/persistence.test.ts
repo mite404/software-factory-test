@@ -75,6 +75,7 @@ test("lifecycle walking names every exitless stop and validates recoveries and p
     "blocked",
     "creating",
     "done",
+    "parked",
     "preparation-failed",
     "preparing",
     "running",
@@ -311,6 +312,70 @@ async function fixture(execute = true) {
 afterEach(async () => {
   for (const root of roots.splice(0))
     await rm(root, { recursive: true, force: true });
+});
+
+test("parked repairs validate their original checkpoint and incident on save and reopen", async () => {
+  const f = await fixture();
+  const repair = {
+    kind: "running" as const,
+    base: "base",
+    worktree: "/unused",
+    thread: "T-original" as const,
+    attempt: 4,
+    delivery: "sent" as const,
+  };
+  const incident = {
+    id: "park-1",
+    ticket: "A",
+    owner: "T-owner" as const,
+    base: "base",
+    attempt: 4,
+    reason: "verification-rejected" as const,
+    recovery: "resume" as const,
+    delivery: "sent" as const,
+  };
+  const run = {
+    kind: "parked" as const,
+    thread: repair.thread,
+    reason: "Cap reached",
+    repair,
+    incident,
+  };
+  const state: State = { enabled: true, owner: "T-owner", runs: { A: run } };
+  const storage = openPersistence(f.directory, queue);
+  try {
+    storage.commit(state, "A", "parked", "Rejected fourth attempt");
+    expect(factoryStatus(f.directory)).toEqual(state);
+    for (const invalid of [
+      { repair: undefined },
+      { repair: { ...repair, attempt: 3 } },
+      { repair: { ...repair, delivery: "queued" } },
+      { repair: { ...repair, thread: "T-other" } },
+      { checkpoint: repair },
+      { incident: undefined },
+      { incident: { ...incident, base: "other" } },
+      { incident: { ...incident, attempt: 5 } },
+      { incident: { ...incident, reason: "worker-blocked" } },
+      { incident: { ...incident, recovery: "inspect" } },
+    ]) {
+      expect(() =>
+        storage.commit(
+          { ...state, runs: { A: { ...run, ...invalid } } } as unknown as State,
+          "A",
+          "invalid",
+          "",
+        ),
+      ).toThrow();
+      expect(factoryStatus(f.directory)).toEqual(state);
+    }
+  } finally {
+    storage.close();
+  }
+  const before = await readFile(join(f.directory, "state.sqlite"));
+  const reopened = openPersistence(f.directory, queue);
+  expect(reopened.state).toEqual(state);
+  reopened.close();
+  expect(await readFile(join(f.directory, "state.sqlite"))).toEqual(before);
 });
 
 test("delivery intents validate and reopen without adding keys to legacy runs", async () => {

@@ -147,7 +147,10 @@ test("status exposes a compact static lifecycle with real control actions and no
     expect(projection).not.toContain("T-worker");
     expect(projection).not.toContain("matches");
     expect(Buffer.byteLength(projection)).toBeLessThan(10_000);
-    expect(Object.keys(status.lifecycle)).toHaveLength(7);
+    expect(Object.keys(status.lifecycle)).toHaveLength(8);
+    expect(status.lifecycle.parked.stops.repair.exits).toEqual([
+      { action: "resume", when: expect.any(String) },
+    ]);
     expect(status.lifecycle.creating.stops.unknown.exits).toContainEqual({
       action: "retry-create",
       when: expect.any(String),

@@ -215,7 +215,7 @@ test("weekly audit collects every in-range finding once, pages events, bounds ga
   event(directory, "Gate", "escalated", "/private/path/Gate-3.log");
   event(directory, "Stop", "blocked", "PRIVATE BRIEF AND TRANSCRIPT");
   event(directory, "StoppedReview", "review-stopped", "error");
-  event(directory, "Missing", "rejected", "/private/Missing-1.log");
+  event(directory, "Missing", "parked", "/private/Missing-4.log");
   const sources = await readdir(directory);
   const before = await Promise.all(
     sources.map((name) => readFile(join(directory, name))),

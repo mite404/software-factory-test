@@ -178,14 +178,23 @@ The original files remain intact for recovery. Later operations use SQLite and i
 files. Removing a ticket from the manifest does not discard its claimed worker or accepted evidence.
 Ambiguous creation and delivery stay parked instead of creating replacement workers.
 
-Every two failed verification or review attempts escalate to the Foreman. The blocked record retains
-the original worker and repair checkpoint. The owning Foreman can call `resume` with `ticket`, the
-current `incident` ID, and a nonempty `decision` after inspecting the evidence. This queues the same
+The second failed verification or review attempt escalates to the Foreman and holds the queue.
+Rejection at attempt four or later sets the run to `parked` and records one operator-alert intent
+in the same transaction. Parking releases independent tickets; dependents still require `done`.
+Both blocked repairs and parked runs retain the original worker and repair checkpoint.
+The owning Foreman can call `resume` with `ticket`, the current `incident` ID, and a nonempty
+`decision` after inspecting the evidence. This queues the same
 worker at the next attempt. It does not accept code or start a paused factory. Use `start`
-separately when paused. Resumption requires an idle worker, its registered clean worktree, and an
-unchanged integration base. Old two-attempt review blocks can recover from matching durable review
-events and the candidate report. Missing recovery evidence fails closed. Subsequent candidates still
-require the normal gates.
+separately when paused. Resumption requires an idle worker and its registered clean worktree.
+Blocked repairs require an unchanged integration base. A parked repair allows a clean descendant
+integration HEAD: resume validates the original incident, atomically repins the checkpoint base,
+and tells the same worker to rebase onto it before submitting another candidate. Rewound or
+unrelated histories are refused. Old two-attempt review blocks can recover from matching durable
+review events and the candidate report. Missing recovery evidence fails closed. Subsequent
+candidates still require the normal gates. A parked run waits for an operator decision, has only
+owner `resume` as its exit, and requires no other active or uncertain work before resumption. Its
+dashboard status is `blocked`. A later rejection parks it again rather than sending an automatic
+correction.
 
 Actionable stops persist an `incident` in the run, in the same SQLite transaction as the stop event.
 Its ID identifies the ticket, attempt and base; its owner names the current recovery recipient.
@@ -335,7 +344,9 @@ reservation and send can lose that nudge. The next interval permits another. Run
 worker activity retain ownership, never dispatch a duplicate or replacement, and are not proof of
 a hang or acceptance.
 Attempts six, ten, fourteen and so on independently record non-blocking spending alerts without
-parking safe work or resetting the progress clock. Existing two-rejection checkpoints still apply.
+parking safe work or resetting the progress clock. Repairs beyond the cap require owner resumption.
+Parking reserves its alert at rejection, not from the spending count or suspicion clock.
+Parked runs do not generate timed suspicion nudges or further alert intents until resumed.
 
 Alert IDs, kind, episode, attempt, intent time and optional `acknowledgedAt` survive reload and
 repair. Connected owner reconciliation delivers these intents through `amp.notify_user`. It
@@ -702,7 +713,8 @@ The dashboard's existing title, thread, revision, and activity fields project th
 Reloads reattach reviewers without replacements. Unknown creation or inconclusive delivery stays
 parked for operator reconciliation; missing, invalid, blocked, stale, or unavailable verdicts cannot
 land or consume corrections. Issues return to the original worker, with Foreman escalation after
-every two verification or review rejections. Owner-only `resume` records the next repair decision.
+the second rejection and operator parking at attempt four or later. Owner-only `resume` records
+the next repair decision.
 A gate rejection sends the worker the exit status, marked stdout and stderr tails of at most 8,192
 bytes combined cut on line boundaries, and the full log path, or names the precondition that
 prevented the run.

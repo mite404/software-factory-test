@@ -765,7 +765,26 @@ test.each([false, true])(
       await f.submit(4);
       await f.tick();
       await f.verdict("issues");
-      expect((await f.tick()).runs.A?.kind).toBe("blocked");
+      const parked = (await f.tick()).runs.A;
+      expect(parked).toMatchObject({
+        kind: "parked",
+        thread: "T-1",
+        repair: { attempt: 4, thread: "T-1", worktree: f.worktree },
+        incident: {
+          attempt: 4,
+          reason: "verification-rejected",
+          recovery: "resume",
+        },
+      });
+      expect(f.messages.filter((item) => item.thread === "T-1")).toHaveLength(
+        4,
+      );
+      expect(parked!.watchdog!.alerts).toMatchObject([
+        { kind: "parked", attempt: 4 },
+      ]);
+      expect((await f.status()).runs.B).toBeUndefined();
+      f.reload();
+      expect((await f.status()).runs.A).toEqual(parked);
       await f.resume();
       await f.tick();
       await f.submit(5);

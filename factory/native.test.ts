@@ -185,7 +185,7 @@ async function preparationFixture(
     },
     watch() {},
   };
-  const { tools } = watchdogFixture();
+  const { tools, notifications } = watchdogFixture();
   const factory = (now?: () => number) => {
     const engine = createFactory(root, host, openStore, now);
     return {
@@ -212,6 +212,7 @@ async function preparationFixture(
     host,
     factory,
     git,
+    notifications,
     counts: () => ({ creates, sends }),
   };
 }
@@ -2426,7 +2427,286 @@ test("stop notices do not reset an incident clock and repair opens a fresh episo
   expect(f.counts().creates).toBe(1);
 });
 
-test("repair spending alerts at six and ten without parking or replacing the worker", async () => {
+test("four rejections park the worker, release only independent work and require exact owner resume", async () => {
+  const f = await preparationFixture(() => "");
+  const configPath = join(f.root, ".factory.json");
+  const config = JSON.parse(await readFile(configPath, "utf8"));
+  config.verify = "test -f src/independent";
+  await writeFile(configPath, JSON.stringify(config));
+  await writeFile(
+    join(f.root, "tickets.json"),
+    JSON.stringify([
+      { id: "A", brief: "PRIVATE-BRIEF", after: [] },
+      { id: "B", brief: "Dependent", after: ["A"] },
+      { id: "C", brief: "Independent", after: [] },
+    ]),
+  );
+  f.git("add", ".factory.json", "tickets.json");
+  f.git("commit", "-qm", "fixture queue");
+  const create = f.host.create.bind(f.host);
+  f.host.create = async (...args) => {
+    const thread = await create(...args);
+    return f.counts().creates === 1
+      ? thread
+      : f.counts().creates === 2
+        ? "T-independent"
+        : "T-dependent";
+  };
+  const messages: string[] = [];
+  const notices: string[] = [];
+  const send = f.host.send.bind(f.host);
+  f.host.send = async (thread, message) => {
+    if (thread === "T-prepared") messages.push(message);
+    if (thread === "T-owner") notices.push(message);
+    await send(thread, message);
+  };
+  const workerGit = (worktree: string, ...args: string[]) =>
+    execFileSync("git", ["-C", worktree, ...args], {
+      encoding: "utf8",
+    }).trim();
+  async function candidateCommit(
+    worktree: string,
+    file: string,
+    value: string,
+  ) {
+    await mkdir(join(worktree, "src"), { recursive: true });
+    await writeFile(join(worktree, "src", file), value);
+    workerGit(worktree, "add", "src/");
+    workerGit(worktree, "commit", "-qm", "fixture candidate");
+    return workerGit(worktree, "rev-parse", "HEAD");
+  }
+  let at = 1000;
+  const engine = f.factory(() => at);
+  await engine.tick("start", "T-owner");
+  f.host.state = async () => "idle";
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    const revision = await candidateCommit(f.worktree, "value", `${attempt}`);
+    await writeFile(
+      join(engine.directory, "A.report.json"),
+      JSON.stringify({
+        kind: "candidate",
+        attempt,
+        revision,
+      }),
+    );
+    if (attempt === 4) {
+      const db = new Database(join(engine.directory, "state.sqlite"));
+      try {
+        db.run(
+          "CREATE TRIGGER fail_park BEFORE INSERT ON events WHEN NEW.action = 'parked' BEGIN SELECT RAISE(ABORT, 'fixture park failure'); END",
+        );
+        expect(await engine.tick("reconcile").catch(String)).toMatch(
+          /fixture park failure/,
+        );
+        expect(factoryStatus(engine.directory).runs.A).toMatchObject({
+          kind: "running",
+          attempt: 4,
+          watchdog: { alerts: [] },
+        });
+        expect(f.notifications).toEqual([]);
+        db.run("DROP TRIGGER fail_park");
+      } finally {
+        db.close();
+      }
+    }
+    const state = await engine.tick("reconcile");
+    expect(state.runs.A).toMatchObject({
+      kind: attempt === 2 ? "blocked" : attempt === 4 ? "parked" : "running",
+    });
+    if (attempt < 4) expect(state.runs.C).toBeUndefined();
+    if (attempt === 2) {
+      const originalBase = f.git("rev-parse", "HEAD");
+      f.git("commit", "--allow-empty", "-qm", "advance blocked repair base");
+      expect(
+        await engine
+          .tick("resume", "T-owner", f.host.state, {
+            ticket: "A",
+            incident: state.runs.A!.incident!.id,
+            decision: "Do not repin a blocked repair",
+          })
+          .catch(String),
+      ).toMatch(/Repair base/);
+      f.git("reset", "--hard", originalBase);
+      await engine.tick("resume", "T-owner", f.host.state, {
+        ticket: "A",
+        incident: state.runs.A!.incident!.id,
+        decision: "Diagnosed the first escalation",
+      });
+    }
+  }
+  const state = factoryStatus(engine.directory);
+  expect(state.runs.A).toMatchObject({
+    kind: "parked",
+    repair: { thread: "T-prepared", worktree: f.worktree, attempt: 4 },
+    incident: {
+      reason: "verification-rejected",
+      recovery: "resume",
+      attempt: 4,
+    },
+  });
+  expect(state.runs.B).toBeUndefined();
+  expect(state.runs.C).toMatchObject({
+    kind: "running",
+    thread: "T-independent",
+  });
+  expect(messages).toHaveLength(4);
+  expect(f.counts().creates).toBe(2);
+  const notice = state.runs.A!.incident!;
+  expect(state.runs.A!.watchdog!.alerts).toEqual([
+    {
+      id: expect.any(String),
+      kind: "parked",
+      episode: notice.id,
+      attempt: 4,
+      intendedAt: 1000,
+      acknowledgedAt: 1000,
+    },
+  ]);
+  expect(f.notifications).toEqual([
+    {
+      title: "Factory needs diagnosis",
+      body: `Ticket A, attempt 4. Repair attempt cap reached; ticket parked. Incident ${notice.id}. Read factory status and private evidence; this alert grants no permission.`,
+    },
+  ]);
+  const server = startDashboard({ root: f.root, port: 0 });
+  try {
+    const response = await fetch(`http://localhost:${server.port}/api/status`);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.tasks).toMatchObject([
+      { id: "A", status: "blocked", thread: "T-prepared" },
+      { id: "B", status: "queued" },
+      { id: "C", status: "unknown", thread: "T-independent" },
+    ]);
+    expect(JSON.stringify(body)).not.toContain("PRIVATE-BRIEF");
+    expect(JSON.stringify(body)).not.toContain(engine.directory);
+  } finally {
+    await server.stop(true);
+  }
+  const request = {
+    ticket: "A",
+    incident: notice.id,
+    decision: "Operator approved another try",
+  };
+  const reopened = f.factory(() => at);
+  const events = factoryEvents(engine.directory);
+  await reopened.tick("reconcile");
+  await reopened.tick("reconcile");
+  expect(factoryEvents(engine.directory)).toEqual(events);
+  expect(f.notifications).toHaveLength(1);
+  expect(
+    reopened.tick("resume", "T-owner", f.host.state, request),
+  ).rejects.toThrow(/active/);
+  const independent = join(f.root, ".git/factory/worktrees/C");
+  const advancedBase = await candidateCommit(independent, "independent", "C");
+  await writeFile(
+    join(engine.directory, "C.report.json"),
+    JSON.stringify({
+      kind: "candidate",
+      attempt: 1,
+      revision: advancedBase,
+    }),
+  );
+  await reopened.tick("reconcile");
+  expect(factoryStatus(engine.directory).runs.C).toMatchObject({
+    kind: "done",
+    revision: advancedBase,
+  });
+  expect(f.git("rev-parse", "HEAD")).toBe(advancedBase);
+  expect(advancedBase).not.toBe(notice.base);
+  at += 86_400_000;
+  await reopened.tick("reconcile");
+  expect(factoryStatus(engine.directory).runs.A).toEqual(state.runs.A);
+  expect(
+    reopened.tick("resume", "T-stranger", f.host.state, request),
+  ).rejects.toThrow();
+  expect(
+    reopened.tick("resume", "T-owner", f.host.state, {
+      ...request,
+      incident: "stale",
+    }),
+  ).rejects.toThrow(/exact/);
+  expect(
+    reopened.tick("resume", "T-owner", async () => "running", request),
+  ).rejects.toThrow(/idle/);
+  expect(
+    reopened.tick("resume", "T-owner", f.host.state, {
+      ...request,
+      decision: " ",
+    }),
+  ).rejects.toThrow(/nonempty/);
+  const beforeResume = factoryEvents(engine.directory);
+  for (const worktree of [f.root, f.worktree]) {
+    const dirty = join(worktree, "dirty");
+    await writeFile(dirty, "uncommitted");
+    expect(
+      await reopened
+        .tick("resume", "T-owner", f.host.state, request)
+        .catch(String),
+    ).toMatch(/Repair base or registered worker worktree changed/);
+    await rm(dirty);
+  }
+  const unrelated = f.git(
+    "commit-tree",
+    `${advancedBase}^{tree}`,
+    "-m",
+    "same tree, unrelated history",
+  );
+  f.git("reset", "--hard", unrelated);
+  expect(
+    await reopened
+      .tick("resume", "T-owner", f.host.state, request)
+      .catch(String),
+  ).toMatch(/merge-base/);
+  f.git("reset", "--hard", advancedBase);
+  expect(factoryStatus(engine.directory).runs.A).toEqual(state.runs.A);
+  expect(factoryEvents(engine.directory)).toEqual(beforeResume);
+  const resumed = await reopened.tick(
+    "resume",
+    "T-owner",
+    f.host.state,
+    request,
+  );
+  expect(resumed.runs.A).toMatchObject({
+    kind: "running",
+    thread: "T-prepared",
+    base: advancedBase,
+    attempt: 5,
+    delivery: "sent",
+  });
+  expect(resumed.runs.B).toBeUndefined();
+  expect(messages).toHaveLength(5);
+  expect(f.counts().creates).toBe(2);
+  expect(messages[4]).toContain(`Rebase onto ${advancedBase}`);
+  workerGit(f.worktree, "rebase", advancedBase);
+  expect(await readFile(join(f.worktree, "src/value"), "utf8")).toBe("4");
+  const revision = await candidateCommit(f.worktree, "value", "5");
+  await writeFile(
+    join(engine.directory, "A.report.json"),
+    JSON.stringify({ kind: "candidate", attempt: 5, revision }),
+  );
+  const accepted = await reopened.tick("reconcile");
+  expect(accepted.runs.A).toMatchObject({
+    kind: "done",
+    thread: "T-prepared",
+    revision,
+    acceptedBase: advancedBase,
+  });
+  expect(f.git("rev-parse", "HEAD")).toBe(revision);
+  expect(await readFile(join(f.root, "src/value"), "utf8")).toBe("5");
+  expect(await readFile(join(f.root, "src/independent"), "utf8")).toBe("C");
+  expect(accepted.runs.B).toMatchObject({
+    kind: "running",
+    thread: "T-dependent",
+    base: revision,
+  });
+  expect(f.counts().creates).toBe(3);
+  expect(notices[0]).toContain("a diagnosis decision");
+  expect(notices[1]).toContain("Attempt cap reached");
+  expect(notices[1]).toContain("operator's decision");
+});
+
+test("owner-authorized repairs retain spending alerts at six and ten on the same worker", async () => {
   const f = await preparationFixture(() => "");
   let at = 1000;
   const clock = () => at;
@@ -2456,8 +2736,8 @@ test("repair spending alerts at six and ten without parking or replacing the wor
       }),
     );
     const result = await f.factory(clock).tick("reconcile");
-    if (attempt % 2 === 0) {
-      expect(result.runs.A!.kind).toBe("blocked");
+    if (attempt % 2 === 0 || attempt >= 4) {
+      expect(result.runs.A!.kind).toBe(attempt >= 4 ? "parked" : "blocked");
       await f.factory(clock).tick("resume", "T-owner", f.host.state, {
         ticket: "A",
         incident: result.runs.A!.incident!.id,

@@ -82,8 +82,12 @@ review feedback, or an answer to a question. Find its current stage and continue
    Two failures reject once and return the second run's output plus both logs to the worker. Never
    classify flakes from output text or accept a failing gate result.
 7. On rejection, return the failure to the same worker. Keep its thread, worktree, and evidence.
-   Every two verification or review rejections require a Foreman escalation checkpoint, not a
-   terminal attempt limit. Inspect the failed reproductions and record the next repair decision
+   The second verification or review rejection requires a Foreman escalation checkpoint and holds
+   the queue. A rejection at attempt four or later parks the ticket and reserves one operator
+   alert. Independent work continues; dependents still wait for acceptance. Do not automatically
+   resume a parked ticket. Obtain the operator's decision first. The original worker and checkpoint
+   remain available, and the dashboard shows `blocked`.
+   Inspect the failed reproductions and record the next repair decision
    with `resume`, naming the ticket and the current `incident` ID from factory status. Compare the
    incident's owner, attempt, base, and recovery action with the notice before deciding. Notices
    can repeat after ambiguous delivery. A stale notice is evidence to inspect, not a repair command.
@@ -101,7 +105,9 @@ review feedback, or an answer to a question. Find its current stage and continue
    Creation still needs inspection because the installed plugin has no thread listing or search
    API, and generated titles or keyword hits cannot identify a creation. Legacy uncertain
    deliveries without a saved key also stay parked. Do not send a second brief yourself.
-   Retain the original worker and increasing attempt numbers.
+   Retain the original worker and increasing attempt numbers. Parked runs use the same
+   exact-incident `resume` checks and require no other active or uncertain work. Their only exit is
+   owner `resume`.
    A paused factory still needs `start` after `resume`. Every candidate must pass its normal gates;
    escalation never grants acceptance. Delivery uncertainty, executor recovery, changed
    requirements, permission decisions, and integration conflicts require resolution before
