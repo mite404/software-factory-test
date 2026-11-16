@@ -111,12 +111,12 @@ Run the shared preflight in `docs/v1-execution.md`. Baseline gates have not run 
 
 ## Done when
 
-- [ ] The fourth rejection parks the run and keeps the worker's checkpoint.
-- [ ] An independent ticket starts while a ticket is parked; a dependent one stays queued.
-- [ ] The operator receives one alert per parked run.
-- [ ] Owner `resume` with the exact incident continues the same worker.
-- [ ] The lifecycle table lists `parked` and its exit, and its walking test passes.
-- [ ] Full gates, guard and fresh cold review pass on the exact candidate.
+- [x] The fourth rejection parks the run and keeps the worker's checkpoint.
+- [x] An independent ticket starts while a ticket is parked; a dependent one stays queued.
+- [x] The operator receives one alert per parked run.
+- [x] Owner `resume` with the exact incident continues the same worker.
+- [x] The lifecycle table lists `parked` and its exit, and its walking test passes.
+- [x] Full gates, guard and fresh cold review pass on the exact candidate.
 
 ## Notes
 
