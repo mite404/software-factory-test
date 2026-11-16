@@ -10,9 +10,10 @@ Public-title privacy (v1-ticket1), canonical backup adoption (backup-adoption-ti
 versioned definition (v1-ticket2) are accepted natively and no longer appear as implementation work
 below. Historical ticket files remain as evidence. Feature numbers describe areas, not dispatch IDs.
 
-The definition candidate is integrated into parent source and passed the combined gate. Next come
-watchdog and safe admission, followed by evidence, gates, recovery, and native execution. Service
-packaging and remaining frontend acceptance follow those foundations. Dependencies are acceptance
+The definition candidate is integrated into parent source and passed the combined gate. Watchdog
+and safe admission have landed. The durability units and the dashboard and gate fixes below have
+mostly landed too; evidence, recovery, and native execution follow. Service packaging and remaining
+frontend acceptance follow those foundations. Dependencies are acceptance
 prerequisites, not permission to dispatch every draft against today's base.
 
 | Unit                                                                                    | Outcome                                                   | Prerequisites                                                            | Requirements                              |
@@ -166,21 +167,19 @@ PR #31; see workflow trial 16. Its live proof at a real provider limit is still 
 F008-gate-failure-feedback was accepted at attempt two: the first cold review found that the excerpt
 held only the end of stderr, so a lint or type failure printed on stdout was lost. It has not yet
 been seen on a real gate rejection. F016-kit-page-default was accepted at attempt one and makes the
-kit page the only dashboard; its before and after screenshots are identical. The planned inventory
-has not been imported yet.
+kit page the only dashboard; its before and after screenshots are identical. planned-intake-ticket1
+is done, so the planned inventory is imported.
 
-Next are the five durability units, in table order, which the operator approved after a provider
-limit stopped the factory for two hours. F003-provider-limit-resume is first. The factory runs one
-ticket at a time from merged main. On 2026-11-15 the operator approved five more units, F008 to
-F012, and then F013, which follows F008. The Foreman places F008 right after F003, because it is
-independent and the operator ranked it highest; F009 to F012 follow F007. F014 and F015 were
-approved the same day: F014 runs after F009 and before F012, and F015 follows F013. Also that day
-the operator chose the kit page as the only dashboard: F016 runs right after F008 and before F013,
-and F017 follows F012. F021, which the operator asked to land first so it can be tested, runs right
-after F016; F019 follows. Then come F024, which stops overlapping test runs, and F010, which the
-operator moved up to stop workers starting on an incomplete brief. F018 and F020 follow in that
-order, then F013. F022, F023, F025, F026, F027 and F029 are not placed yet; F029, F026 and F027
-follow F025. The operator placed F028 last in the line.
+Since then these tickets landed, each merged through its own integration pull request, and their
+files are in `feats/done/`: F004, F005, F006 and F007 (PR #51, #56, #58, #63); F013 (#50); F015
+(#54); F018 to F021 (#48, #45, #49, #43); F024 (#46); and F030 to F033 (#53, #59, #61, #62).
+F003-provider-limit-resume is also merged, but its file stays outside `feats/done/` until its live
+proof at a real provider limit happens.
+
+F009 is running now. The operator set the order after it: F010, F011 and F014, then F012 and F017
+as their dependencies allow, then F023, then F022, F025, F029, F026, F027 and F028 last. All are
+placed. The factory runs one ticket at a time from merged main.
+
 v1-ticket10 keeps the recovery of outages that still happen, and v1-ticket8 keeps exclusive
 ownership across orbs. Keep preserved backup owners until required evidence preservation is
 confirmed. Native acceptance does not authorize retirement.

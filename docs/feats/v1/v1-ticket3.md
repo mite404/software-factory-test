@@ -6,7 +6,7 @@
 - Initial priority: P0. Effort: Medium. Risk: elevated; setup must not execute project work.
 - Depends on: v1-ticket2.
 - Planned at: `62816cf8a6c8c282172754c4a97242e5a4a9eab1`, 2026-11-13.
-- Backlog: F01. Local only; pending definition acceptance.
+- Backlog: F01. Local only.
 
 ## Why this matters
 
