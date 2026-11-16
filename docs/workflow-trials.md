@@ -528,6 +528,31 @@ Edge cases this run exposed:
 - Both rejections shared a cause that only a reader of both verdicts could see. F015 owns the
   weekly pass that looks across tickets.
 
+## Trial 17 passed: weekly failure audit, four attempts and a live classification
+
+F015 added `factory/audit.ts`. The worker's runner had no `TYPESAFE_API_KEY`, so the Foreman ran
+the live pass from the integration branch, after cold review passed.
+
+- Attempt one missed stdout diagnostics: the excerpt was a tail of a log that ends in stderr.
+- Attempt two labelled gate-not-run rejections as legacy logs.
+- Attempt three audited a post-gate tree change as a gate failure. The Foreman steered attempt
+  four to the shared cause: the gate now records one closed outcome where each rejection is
+  decided, and only `gate-failed` excerpts leave the orb. Attempt four passed.
+- Live run, 2026-11-16, range 2026-11-09T03:10Z to 2026-11-16T03:10Z: 56 records. Buckets:
+  scheduling and watchdog 13, lifecycle and recovery 5, tests and fixtures 3, documentation 3,
+  dashboard 2, persistence 1, unsorted 29. The key appeared in no output.
+- Unsorted reasons: 22 below the 0.7 area confidence threshold, 3 `review-stopped` and 1
+  `blocked` with no structured finding, 2 legacy gate logs, 1 none-fits.
+
+Not proven: the Fable audit thread over these buckets has not run yet.
+
+Edge cases this run exposed:
+
+- 22 of 56 findings fell under the area confidence threshold. The area list or the threshold
+  needs tuning in the script, as the ticket's notes expected.
+- The brief allowed the API call but not the key: a secret in the Foreman's orb does not reach
+  a runner worker.
+
 [trial-artifact]: https://ampcode.com/artifacts/factory-workflow-trials-36c5101e-8f2e-4e6c-ab3f-0a4425873f7e
 [source-workflow]: https://ampcode.com/threads/T-01a1ce51-ec2c-73cf-9b63-a2eb9f40442b
 [rename-worker]: https://ampcode.com/threads/T-01a1d208-909b-7726-8b37-40e40e5ba5c2

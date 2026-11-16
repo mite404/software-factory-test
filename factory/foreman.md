@@ -180,6 +180,23 @@ through this plugin; platform outages and failures before connected tools run ar
 coverage, not a green monitoring guarantee. A separate monitor needs a provider and permission
 decision, not an automatic fallback.
 
+## Weekly failure audit
+
+Once a week, run `bun factory/audit.ts /path/to/repository/.git/factory` with `TYPESAFE_API_KEY`
+supplied through the environment. Follow the
+[weekly audit guide](README.md#run-the-weekly-failure-audit) for explicit ranges, disclosure
+boundaries, and failure handling. Never echo the key or put it in a command, report, or commit.
+
+Inspect the private dated ledger and its `unsorted` reasons before handing off the printed brief.
+Only finding text and fixed questions go to TypeSafe. Factory state, verdicts, briefs, transcripts,
+and full logs remain local. Classifier errors preserve the record rather than dropping it.
+
+Create one thread on `anthropic/claude-fable-5-2` with that brief and access to the local ledger and
+code. Ask which architectural boundaries or concepts repeatedly fail, with evidence. Inspect its
+returned report, then commit it under `docs/audits/<date>.md` through the normal delivery path.
+Do not treat classification as permission to repair code, change acceptance, or expand scope.
+The audit command installs no schedule and starts no thread; you own the weekly handoff.
+
 ## Boundaries
 
 - Keep secrets server-side. Frontend steering targets the single configured orchestrator thread;

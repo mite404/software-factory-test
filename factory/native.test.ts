@@ -27,6 +27,7 @@ import {
   watchdogFixture,
 } from "./bookkeeping.fixture";
 import { startDashboard } from "./dashboard";
+import { audit } from "./audit";
 import {
   factoryEvents,
   factoryRecords,
@@ -36,6 +37,44 @@ import {
 
 const installer = resolve(import.meta.dir, "setup-factory.ts");
 const preparationRoots: string[] = [];
+
+async function auditGateOutcome(
+  directory: string,
+  outcome: "gate-passed" | "gate-failed" | "post-gate-changed",
+  runs: number,
+) {
+  const states: Array<{ evidence: string }> = [];
+  const statePath = join(directory, "state.sqlite");
+  const before = await readFile(statePath);
+  const result = await audit({
+    directory,
+    apiKey: "fixture-audit-key",
+    fetch: async (_url, init) => {
+      if (typeof init.body !== "string") throw new Error("Expected JSON text");
+      states.push(JSON.parse(init.body).state);
+      return new Response(null, { status: 401 });
+    },
+  });
+  const records = (await Bun.file(result.ledger).json()).records;
+  if (outcome === "gate-passed") {
+    expect(records).toEqual([]);
+    expect(states).toEqual([]);
+  } else if (outcome === "post-gate-changed") {
+    expect(records).toMatchObject([
+      {
+        ticket: "A",
+        bucket: "unsorted",
+        reason: "Post-gate clean tree or candidate revision check failed",
+      },
+    ]);
+    expect(states).toEqual([]);
+  } else {
+    expect(states).toHaveLength(1);
+    expect(states[0]!.evidence).toContain(`run ${runs}\n`);
+    expect(states[0]!.evidence).toContain(`error ${runs}\n`);
+  }
+  expect(await readFile(statePath)).toEqual(before);
+}
 
 test("queue retains ordered step labels and rejects malformed labels", () => {
   const task = { id: "A", brief: "Private brief", after: [] };
@@ -2128,27 +2167,75 @@ test("reload pins future definitions while active checks, scope and instructions
 });
 
 test.each([
-  { outcome: "pass", command: "exit 0", runs: 1, passed: true },
-  { outcome: "flake", command: 'test "$n" -gt 1', runs: 2, passed: true },
-  { outcome: "fail", command: "exit 7", runs: 2, passed: false },
-  { outcome: "dirty", command: "touch dirty; exit 7", runs: 1, passed: false },
+  {
+    outcome: "pass",
+    command: "exit 0",
+    runs: 1,
+    passed: true,
+    expectedOutcome: "gate-passed",
+    firstStatus: 0,
+  },
+  {
+    outcome: "flake",
+    command: 'test "$n" -gt 1',
+    runs: 2,
+    passed: true,
+    expectedOutcome: "gate-passed",
+    firstStatus: 1,
+  },
+  {
+    outcome: "fail",
+    command: "exit 7",
+    runs: 2,
+    passed: false,
+    expectedOutcome: "gate-failed",
+    firstStatus: 7,
+  },
+  {
+    outcome: "dirty",
+    command: "touch dirty; exit 7",
+    runs: 1,
+    passed: false,
+    expectedOutcome: "gate-failed",
+    firstStatus: 7,
+  },
   {
     outcome: "moved",
     command:
       "git -c commit.gpgsign=false commit --allow-empty -qm moved; exit 7",
     runs: 1,
     passed: false,
+    expectedOutcome: "gate-failed",
+    firstStatus: 7,
   },
-  { outcome: "cap", command: "sleep 60", runs: 1, passed: false },
+  {
+    outcome: "cap",
+    command: "sleep 60",
+    runs: 1,
+    passed: false,
+    expectedOutcome: "gate-failed",
+    firstStatus: null,
+  },
   {
     outcome: "rerun mutates",
     command: 'test "$n" -eq 1 && exit 7; touch dirty; exit 0',
     runs: 2,
     passed: false,
+    expectedOutcome: "post-gate-changed",
+    firstStatus: 7,
   },
-])(
+  {
+    outcome: "passed but moved",
+    command:
+      "git -c commit.gpgsign=false commit --allow-empty -qm moved; exit 0",
+    runs: 1,
+    passed: false,
+    expectedOutcome: "post-gate-changed",
+    firstStatus: 0,
+  },
+] as const)(
   "candidate gate rerun preserves verdict and evidence: $outcome",
-  async ({ outcome, command, runs, passed }) => {
+  async ({ outcome, command, runs, passed, expectedOutcome, firstStatus }) => {
     const f = await preparationFixture(() => "");
     const path = join(f.root, ".factory.json");
     const config = await Bun.file(path).json();
@@ -2199,8 +2286,8 @@ test.each([
     const rerunLog = join(engine.directory, "A-1.rerun.log");
     expect(await readFile(log, "utf8")).toContain("run 1\nerror 1\n");
     expect(await Bun.file(rerunLog).exists()).toBe(runs === 2);
-    if (passed)
-      expect(messages.at(-1)).toContain(outcome === "flake" ? rerunLog : log);
+    const selected = runs === 2 ? rerunLog : log;
+    if (passed) expect(messages.at(-1)).toContain(selected);
     if (runs === 2)
       expect(await readFile(rerunLog, "utf8")).toBe("run 2\nerror 2\n");
     if (outcome === "fail") {
@@ -2209,6 +2296,14 @@ test.each([
       expect(messages.at(-1)).toContain("error 2\n");
       expect(messages.at(-1)).toContain(rerunLog);
     }
+    await auditGateOutcome(engine.directory, expectedOutcome, runs);
+    expect(await Bun.file(`${selected}.excerpt.json`).json()).toMatchObject({
+      outcome: expectedOutcome,
+    });
+    expect(await Bun.file(`${log}.excerpt.json`).json()).toMatchObject({
+      outcome: runs === 2 ? "gate-failed" : expectedOutcome,
+      status: firstStatus,
+    });
     const db = new Database(join(engine.directory, "state.sqlite"), {
       readonly: true,
     });
@@ -2265,7 +2360,14 @@ test.each([
     "",
     "é".repeat(4095) + "x\n",
   ],
-  ["mutating gate", "", "", 0, "", ""],
+  [
+    "mutating gate",
+    "Tests passed\n",
+    "Build passed\n",
+    0,
+    "Tests passed\n",
+    "Build passed\n",
+  ],
   [
     "stdout failure after long stderr",
     "failure: stdout diagnostic\n",
@@ -2339,10 +2441,55 @@ test.each([
       message.indexOf("END GATE STDERR"),
     );
     expect(await readFile(log, "utf8")).toBe(stdout + stderr);
-    if (status === 0)
+    if (_name === "stdout failure after long stderr") {
+      const states: Array<{ evidence: string }> = [];
+      const statePath = join(engine.directory, "state.sqlite");
+      const before = await readFile(statePath);
+      await audit({
+        directory: engine.directory,
+        apiKey: "fixture-audit-key",
+        fetch: async (_url, init) => {
+          if (typeof init.body !== "string")
+            throw new Error("Expected JSON text");
+          states.push(JSON.parse(init.body).state);
+          return new Response(null, { status: 401 });
+        },
+      });
+      expect(states).toHaveLength(1);
+      expect(states[0]!.evidence).toContain("failure: stdout diagnostic\n");
+      expect(states[0]!.evidence).toContain(expectedStderr);
+      expect(states[0]!.evidence).not.toContain(engine.directory);
+      expect(await readFile(statePath)).toEqual(before);
+    }
+    if (status === 0) {
       expect(message).toContain(
         "Post-gate clean tree or candidate revision check failed",
       );
+      let requests = 0;
+      const result = await audit({
+        directory: engine.directory,
+        apiKey: "fixture-audit-key",
+        fetch: async () => {
+          requests++;
+          return new Response(null, { status: 401 });
+        },
+      });
+      expect((await Bun.file(result.ledger).json()).records).toMatchObject([
+        {
+          ticket: "A",
+          bucket: "unsorted",
+          reason: "Post-gate clean tree or candidate revision check failed",
+        },
+      ]);
+      expect(requests).toBe(0);
+    }
+    expect(JSON.parse(await readFile(`${log}.excerpt.json`, "utf8"))).toEqual({
+      outcome: status === 0 ? "post-gate-changed" : "gate-failed",
+      status,
+      stdout: expectedStdout,
+      stderr: expectedStderr,
+      omitted: Buffer.byteLength(stdout + stderr) > 8192,
+    });
     const db = new Database(join(engine.directory, "state.sqlite"), {
       readonly: true,
     });
@@ -2416,6 +2563,25 @@ test.each(["candidate revision", "clean tree", "allowed-path"])(
     expect(await readFile(join(engine.directory, "A-1.log"), "utf8")).toBe(
       "Candidate revision, clean tree, or allowed-path check failed",
     );
+    let requests = 0;
+    const result = await audit({
+      directory: engine.directory,
+      apiKey: "fixture-audit-key",
+      fetch: async () => {
+        requests++;
+        return new Response(null, { status: 401 });
+      },
+    });
+    const ledger = JSON.parse(await readFile(result.ledger, "utf8"));
+    expect(ledger.records).toMatchObject([
+      {
+        ticket: "A",
+        bucket: "unsorted",
+        reason:
+          "Gate not run: candidate revision, clean tree or allowed-path check failed",
+      },
+    ]);
+    expect(requests).toBe(0);
   },
 );
 
