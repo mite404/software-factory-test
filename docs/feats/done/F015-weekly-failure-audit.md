@@ -153,13 +153,13 @@ restart to receive it.
 
 ## Done when
 
-- [ ] One command produces a dated ledger and a Fable brief for a date range.
-- [ ] Each finding carries an area, mistake kind, layer and impact with probabilities, or is
+- [x] One command produces a dated ledger and a Fable brief for a date range.
+- [x] Each finding carries an area, mistake kind, layer and impact with probabilities, or is
       `unsorted` with a reason.
-- [ ] Only finding text is sent to the API; the key appears in no output.
-- [ ] Factory state and verdict files are unchanged by a run.
-- [ ] One live run over real records is recorded in workflow trials.
-- [ ] Full gates, guard and fresh cold review pass on the exact candidate.
+- [x] Only finding text is sent to the API; the key appears in no output.
+- [x] Factory state and verdict files are unchanged by a run.
+- [x] One live run over real records is recorded in workflow trials.
+- [x] Full gates, guard and fresh cold review pass on the exact candidate.
 
 ## Notes
 
@@ -169,3 +169,6 @@ restart to receive it.
   overloaded; change the lists in the script, not the approach.
 - Jev answers each question in isolation, so the questions are kept narrow. Ranking buckets
   against each other is done in code and by the audit thread.
+
+Outcome: landed after four attempts. The live run used the Foreman's key from the integration
+branch, because the runner worker had none; see Trial 17 in `docs/workflow-trials.md`.
