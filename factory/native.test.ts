@@ -705,6 +705,200 @@ test("paused handoff and hand-back never start execution or install a watchdog",
   expect(f.counts().creates).toBe(1);
 });
 
+async function repeatedPatchRangeFixture() {
+  const f = await preparationFixture(() => "");
+  const lines = Array.from({ length: 100 }, (_, i) => `site ${i}`);
+  await writeFile(join(f.root, "guards"), lines.join("\n") + "\n");
+  f.git("add", "guards");
+  f.git("commit", "-qm", "two guard sites");
+  const base = f.git("rev-parse", "HEAD");
+  f.git("worktree", "add", "--detach", f.worktree, base);
+  const commits: string[] = [];
+  for (const site of [3, 91]) {
+    lines.splice(site, 0, "guard();");
+    await writeFile(join(f.worktree, "guards"), lines.join("\n") + "\n");
+    f.git("-C", f.worktree, "commit", "-qam", `guard site ${site}`);
+    commits.push(f.git("-C", f.worktree, "rev-parse", "HEAD"));
+  }
+  const ids = commits.map(
+    (revision) =>
+      execFileSync("git", ["-C", f.root, "patch-id", "--stable"], {
+        input: f.git("show", "--format=", "-U0", revision),
+        encoding: "utf8",
+      }).split(/\s/)[0],
+  );
+  expect(ids[0]).toMatch(/^[a-f0-9]{40}$/);
+  expect(ids[0]).toBe(ids[1]);
+  return { f, base, commits, revision: commits[1]! };
+}
+
+async function acceptedRangeFixture(landing: string) {
+  if (landing.startsWith("repeated-")) return repeatedPatchRangeFixture();
+  const f = await preparationFixture(() => "");
+  const base = f.git("rev-parse", "HEAD");
+  f.git("worktree", "add", "--detach", f.worktree, base);
+  const workerGit = (...args: string[]) => f.git("-C", f.worktree, ...args);
+  const commits: string[] = [];
+  if (landing !== "no-change") {
+    if (landing !== "empty-only" && landing !== "empty-missing") {
+      await writeFile(join(f.worktree, "first"), "first change\n");
+      workerGit("add", "first");
+    }
+    workerGit("commit", "--allow-empty", "-qm", "first candidate");
+    commits.push(workerGit("rev-parse", "HEAD"));
+    if (landing !== "single" && landing !== "empty-only") {
+      if (landing === "net-zero") workerGit("rm", "first");
+      else {
+        await writeFile(join(f.worktree, "second"), "second change\n");
+        workerGit("add", "second");
+      }
+      workerGit("commit", "-qm", "second candidate");
+      commits.push(workerGit("rev-parse", "HEAD"));
+    }
+  }
+  return { f, base, commits, revision: workerGit("rev-parse", "HEAD") };
+}
+
+test.each(
+  ["record-landing", "record-merge"].flatMap((action) =>
+    [
+      "single",
+      "cherry-picked",
+      "squashed",
+      "partial",
+      "altered",
+      "empty-missing",
+      "empty-only",
+      "no-change",
+      "net-zero",
+      "repeated-partial",
+      "repeated-complete",
+    ].map((landing) => ({ action, landing })),
+  ),
+)(
+  "$action proves $landing landing without side effects",
+  async ({ action, landing }) => {
+    const { f, base, commits, revision } = await acceptedRangeFixture(landing);
+    await writeFile(join(f.root, "unrelated"), "upstream change\n");
+    f.git("add", "unrelated");
+    f.git("commit", "-qm", "advance target");
+    if (landing === "squashed") {
+      f.git("merge", "--squash", revision);
+      f.git("commit", "-qm", "squashed candidate");
+    } else if (landing === "altered") {
+      f.git("cherry-pick", commits[0]!);
+      await writeFile(join(f.root, "second"), "altered change\n");
+      f.git("add", "second");
+      f.git("commit", "-qm", "altered second candidate");
+    } else if (landing.startsWith("empty-") || landing === "no-change") {
+      f.git("commit", "--allow-empty", "-qm", "empty landing");
+    } else {
+      const picks = landing.endsWith("partial") ? commits.slice(0, 1) : commits;
+      for (const pick of picks) {
+        f.git("cherry-pick", pick);
+        expect(f.git("rev-parse", "HEAD")).not.toBe(pick);
+      }
+    }
+    const commit = f.git("rev-parse", "HEAD");
+    const branch = f.git("branch", "--show-current");
+    f.git("remote", "add", "origin", f.root);
+    f.git("update-ref", `refs/remotes/origin/${branch}`, commit);
+    f.git("branch", `--set-upstream-to=origin/${branch}`, branch);
+    const engine = f.factory();
+    const storage = openPersistence(engine.directory, []);
+    storage.commit(
+      {
+        enabled: false,
+        owner: "T-owner",
+        runs: {
+          A:
+            action === "record-merge"
+              ? {
+                  kind: "done",
+                  thread: "T-prepared",
+                  revision,
+                  acceptedBase: base,
+                  insight: "accepted",
+                }
+              : {
+                  kind: "blocked",
+                  thread: "T-prepared",
+                  reason: "Target changed",
+                  incident: {
+                    id: "landing-stop",
+                    ticket: "A",
+                    owner: "T-owner",
+                    base,
+                    attempt: 1,
+                    reason: "target-changed",
+                    recovery: "inspect",
+                    delivery: "sent",
+                  },
+                },
+        },
+      },
+      "A",
+      "fixture",
+      "accepted candidate",
+    );
+    storage.close();
+    f.host.state = async () => {
+      throw new Error("Must not observe threads");
+    };
+    const request = {
+      ticket: "A",
+      revision,
+      commit,
+      pr: 32,
+      incident: "landing-stop",
+      decision: "Operator approved external landing",
+    };
+    const record = () =>
+      action === "record-merge"
+        ? f.factory().recordMerge(request, "T-owner")
+        : f.factory().recordLanding(request, "T-owner");
+    const path = join(engine.directory, "state.sqlite");
+    const before = await readFile(path);
+    if (
+      [
+        "single",
+        "cherry-picked",
+        "squashed",
+        "net-zero",
+        "repeated-complete",
+      ].includes(landing)
+    ) {
+      expect(await record()).toMatchObject({
+        enabled: false,
+        runs: {
+          A: {
+            kind: "done",
+            revision,
+            acceptedBase: base,
+            merge: { pr: 32, commit },
+          },
+        },
+      });
+      const after = await readFile(path);
+      await record();
+      expect(await readFile(path)).toEqual(after);
+      expect(
+        factoryEvents(engine.directory)?.filter(
+          (event) =>
+            event.action ===
+            (action === "record-merge" ? "merge-recorded" : "landed-outside"),
+        ),
+      ).toHaveLength(1);
+    } else {
+      expect(await record().catch(String)).toContain(
+        "does not contain the accepted change",
+      );
+      expect(await readFile(path)).toEqual(before);
+    }
+    expect(f.counts()).toEqual({ creates: 0, sends: 0 });
+  },
+);
+
 async function externalLandingFixture(targetChanged = false) {
   const f = await preparationFixture(() => "");
   await writeFile(
