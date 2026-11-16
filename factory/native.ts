@@ -993,15 +993,40 @@ async function currentReport(directory: string, task: Task, attempt: number) {
   return report.attempt === attempt ? report : null;
 }
 
+function incidentCheckpoint(
+  root: string,
+  directory: string,
+  run: Extract<Run, { kind: "blocked" }>,
+) {
+  if (
+    !run.thread ||
+    !run.incident ||
+    !/^[a-f0-9]{40}$/.test(run.incident.base) ||
+    run.incident.attempt <= 0
+  )
+    return undefined;
+  const worktree = join(directory, "worktrees", run.incident.ticket);
+  requireWorktree(root, worktree);
+  return {
+    base: run.incident.base,
+    attempt: run.incident.attempt,
+    thread: run.thread,
+    worktree,
+    workerModel: undefined,
+  };
+}
+
 function verifiedLanding(
   root: string,
+  directory: string,
   run: Run | undefined,
   evidence: ReturnType<typeof parseLandingRequest>,
   owner?: ThreadID,
 ): Extract<Run, { kind: "done" }> {
   if (run?.kind !== "blocked")
     throw new Error("Landing requires a blocked ticket");
-  const checkpoint = run.repair ?? run.checkpoint;
+  const checkpoint =
+    run.repair ?? run.checkpoint ?? incidentCheckpoint(root, directory, run);
   if (
     !checkpoint ||
     !Object.entries({
@@ -2775,7 +2800,13 @@ export function createFactory(
               throw new Error("Conflicting landing record");
             return state;
           }
-          state.runs[ticket] = verifiedLanding(root, run, evidence, owner);
+          state.runs[ticket] = verifiedLanding(
+            root,
+            directory,
+            run,
+            evidence,
+            owner,
+          );
           persistence.commit(state, ticket, "landed-outside", detail);
           return state;
         }),
