@@ -37,8 +37,8 @@ revisions separately. The coordinator executes bounded checks without a model or
 ## Steps
 
 1. **Define distinct gate outcomes**. Model landed, pending, passed, failed, interrupted, and stale.
-2. **Persist serialized check attempts**. Record exact revision, base, command version, result, and log
-   reference.
+2. **Persist serialized check attempts**. Record exact revision, base, command version, result, and
+   log reference.
 3. **Retain original repair ownership**. Withhold dependent acceptance until required
    proof.
 4. **Expose truthful gate status**. Document opt-in policy and explicit scheduling permissions.

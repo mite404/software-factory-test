@@ -181,7 +181,8 @@ Record affected consumers/shared contracts and the safety fact verification must
 
 Prepare the integration candidate in an isolated staging worktree. Withhold canonical acceptance
 and dependent dispatch until any required review passes. The reviewer uses the implementation
-worker's opposite provider at high effort: OpenAI author to Fable 5.2, Anthropic author to GPT-6 Astra.
+worker's opposite provider at high effort: OpenAI author to Fable 5.2, Anthropic author to
+GPT-6 Astra.
 Give it requirements and exact artifacts, never worker context, rationale, or self-review. Findings
 return to the same worker; changed revisions rerun gates and receive a fresh required review.
 The local native review/rejection/repair loop passed [trial 9](workflow-trials.md). Scheduled

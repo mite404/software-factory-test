@@ -7,6 +7,17 @@ guard() {
   local bad=0
   git grep -nE '^(<<<<<<<|>>>>>>>)( |$)' -- . ':!factory' && bad=1
   git grep -nE '\b(test|describe)\.only\(' -- '*.test.ts' && bad=1
+  # Markdown prose wraps at 100 columns; code fences, tables, headings and
+  # link definitions may run longer.
+  git ls-files -z '*.md' | xargs -0 perl -CSD -nle '
+    $fence = 0 if $. == 1;
+    if (/^ *```/) { $fence = !$fence }
+    elsif (!$fence && length > 100 && !/^ *[|#]/ && !/^\[[^]]+\]: /) {
+      print "$ARGV:$.: over 100 columns, rewrap at word boundaries";
+      $found = 1;
+    }
+    close ARGV if eof;
+    END { exit $found }' || bad=1
   return $bad
 }
 

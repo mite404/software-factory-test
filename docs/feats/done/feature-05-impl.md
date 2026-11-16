@@ -26,8 +26,10 @@ source before implementation; preserve all newer setup, launcher, review, and es
 ## Steps
 
 1. **Inspect preserved backup candidate**. Compare its patch and old evidence with the current base.
-2. **Adopt shared snapshot operation**. Preserve current native safety and separate backup permission.
-3. **Verify publication uncertainty controls**. Run local-remotes refusal, no-op, and recovery checks.
+2. **Adopt shared snapshot operation**. Preserve current native safety and separate backup
+   permission.
+3. **Verify publication uncertainty controls**. Run local-remotes refusal, no-op, and recovery
+   checks.
 
 ## Why this approach?
 
@@ -49,7 +51,8 @@ v1-ticket6 adds complete preservation after the evidence/lesson contracts exist.
 
 ## Initial state / preflight
 
-Run the full dispatch preflight in `docs/v1-execution.md`. Baseline checks have not run for adoption.
+Run the full dispatch preflight in `docs/v1-execution.md`. Baseline checks have not run for
+adoption.
 
 | Command | Expected result / action |
 | --- | --- |
