@@ -112,8 +112,8 @@ A baseline failure goes back to the Foreman; it does not widen the worker's scop
 
 ## Done when
 
-- [ ] The owner can record a blocked ticket as landed only with Git proof of its exact patch.
-- [ ] Every rejected request leaves state unchanged.
-- [ ] A dependent of the recorded ticket dispatches.
-- [ ] Saved state from before this change opens unchanged.
-- [ ] Full gates, guard and a fresh cold review pass on the accepted revision.
+- [x] The owner can record a blocked ticket as landed only with Git proof of its exact patch.
+- [x] Every rejected request leaves state unchanged.
+- [x] A dependent of the recorded ticket dispatches.
+- [x] Saved state from before this change opens unchanged.
+- [x] Full gates, guard and a fresh cold review pass on the accepted revision.

@@ -84,6 +84,18 @@ review feedback, or an answer to a question. Find its current stage and continue
    the accepted ticket ID, integer `pr` number, and full merge `commit` hash. Do not pass a URL.
    Confirm the feed's merge record before moving on. Backfill tickets merged before this action
    existed once from the pull request list. Recording works while the factory is paused.
+   If the operator instead approved and merged a blocked candidate outside the native path, use
+   `record-landing` with `ticket`, its exact current `incident` ID, the full worker `revision`,
+   integer `pr`, full merge `commit`, and a nonempty `decision` recording that approval. Fetch the
+   configured upstream and integrate the merge into the root checkout before recording. Fetching
+   alone is insufficient. Git must prove the revision descends from the saved base, is reachable
+   from the worker worktree's HEAD, and has its exact patch on that upstream. The merge commit must
+   be reachable from both the upstream and root HEAD. A later blocked report does not disqualify
+   an earlier landed candidate; neither reports nor reason text prove ownership. Running, uncertain
+   or queued-repair work cannot be recorded. An identical request is repeat-safe; changed evidence
+   is refused. Success closes the incident and makes dependents eligible at the next ordinary
+   enabled reconciliation, without dispatching or touching schedules itself. Do not resume the
+   worker or edit private state to account for a proven outside landing.
    Then update the ticket, the dispatch order, and the workflow lessons through a second pull
    request. Once every box under the ticket's "Done when" is ticked, move its file to
    `docs/feats/done/` with `git mv` and fix the links to it. A ticket with an open box, such as a

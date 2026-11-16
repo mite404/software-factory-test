@@ -27,7 +27,12 @@ import {
   watchdogFixture,
 } from "./bookkeeping.fixture";
 import { startDashboard } from "./dashboard";
-import { factoryRecords, factoryStatus, openPersistence } from "./persistence";
+import {
+  factoryEvents,
+  factoryRecords,
+  factoryStatus,
+  openPersistence,
+} from "./persistence";
 
 const installer = resolve(import.meta.dir, "setup-factory.ts");
 const preparationRoots: string[] = [];
@@ -174,6 +179,208 @@ async function preparationFixture(
 afterEach(async () => {
   for (const root of preparationRoots.splice(0))
     await rm(root, { recursive: true, force: true });
+});
+
+async function externalLandingFixture() {
+  const f = await preparationFixture(() => "");
+  await writeFile(
+    join(f.root, "tickets.json"),
+    JSON.stringify([
+      { id: "A", brief: "First", after: [] },
+      { id: "B", brief: "Dependent", after: ["A"] },
+    ]),
+  );
+  const configPath = join(f.root, ".factory.json");
+  const config = JSON.parse(await readFile(configPath, "utf8"));
+  await writeFile(configPath, JSON.stringify({ ...config, verify: "false" }));
+  f.git("add", ".");
+  f.git("commit", "-qm", "dependent ticket");
+  const engine = f.factory();
+  const started = await engine.tick("start", "T-owner");
+  const running = started.runs.A;
+  if (running?.kind !== "running") throw new Error("Expected worker");
+  await mkdir(join(f.worktree, "src"));
+  await writeFile(join(f.worktree, "src/value"), "landed change\n");
+  const workerGit = (...args: string[]) =>
+    execFileSync("git", ["-C", f.worktree, ...args], {
+      encoding: "utf8",
+    }).trim();
+  workerGit("add", ".");
+  workerGit("commit", "-qm", "candidate");
+  const revision = workerGit("rev-parse", "HEAD");
+  const report = { attempt: running.attempt, kind: "candidate", revision };
+  const reportPath = join(engine.directory, "A.report.json");
+  await writeFile(reportPath, JSON.stringify(report));
+  f.host.state = async () => "idle";
+  const repair = await engine.tick("reconcile", "T-owner");
+  expect(repair.runs.A).toMatchObject({ kind: "running", attempt: 2 });
+  await writeFile(
+    reportPath,
+    JSON.stringify({ attempt: 2, kind: "blocked", reason: "Worker stopped" }),
+  );
+  const stopped = await engine.tick("reconcile", "T-owner");
+  const blocked = stopped.runs.A;
+  if (blocked?.kind !== "blocked" || !blocked.incident)
+    throw new Error("Expected current incident");
+  expect(blocked.checkpoint).toMatchObject({ base: running.base, attempt: 2 });
+  expect(blocked.incident.reason).toBe("worker-blocked");
+  expect(stopped.runs.B).toBeUndefined();
+  expect(
+    await engine
+      .recordMerge({ ticket: "A", pr: 51, commit: revision }, "T-owner")
+      .catch(String),
+  ).toContain("done ticket");
+
+  f.git("merge", "--no-ff", "-qm", "outside merge", revision);
+  const commit = f.git("rev-parse", "HEAD");
+  const branch = f.git("branch", "--show-current");
+  f.git("remote", "add", "origin", f.root);
+  f.git("update-ref", `refs/remotes/origin/${branch}`, commit);
+  f.git("branch", `--set-upstream-to=origin/${branch}`, branch);
+  const request = {
+    ticket: "A",
+    incident: blocked.incident.id,
+    revision,
+    pr: 51,
+    commit,
+    decision: "Operator approved the external gate and review",
+  };
+  const snapshot = async () => ({
+    state: factoryStatus(engine.directory),
+    events: factoryEvents(engine.directory),
+    bytes: await readFile(join(engine.directory, "state.sqlite")),
+  });
+  return {
+    f,
+    engine,
+    running,
+    stopped,
+    revision,
+    commit,
+    branch,
+    request,
+    snapshot,
+  };
+}
+
+test("external landing rejects stale incidents, unproven candidates and active repairs without writes", async () => {
+  const { f, engine, running, stopped, commit, branch, request, snapshot } =
+    await externalLandingFixture();
+  const before = await snapshot();
+  for (const invalid of [
+    { ticket: "missing" },
+    { incident: "stale" },
+    { decision: " " },
+    { revision: "main" },
+    { revision: commit },
+    { pr: 0 },
+    { commit: "main" },
+    { commit: running.base },
+  ]) {
+    expect(
+      await engine
+        .recordLanding({ ...request, ...invalid }, "T-owner")
+        .catch(() => "refused"),
+    ).toBe("refused");
+    expect(await snapshot()).toEqual(before);
+  }
+  for (const owner of [undefined, "T-prepared", "T-stranger"] as const) {
+    expect(
+      await engine.recordLanding(request, owner).catch(() => "refused"),
+    ).toBe("refused");
+    expect(await snapshot()).toEqual(before);
+  }
+  f.git("update-ref", `refs/remotes/origin/${branch}`, running.base);
+  expect(
+    await engine.recordLanding(request, "T-owner").catch(() => "refused"),
+  ).toBe("refused");
+  expect(await snapshot()).toEqual(before);
+  f.git("update-ref", `refs/remotes/origin/${branch}`, commit);
+  const previous = f.git("rev-parse", `${running.base}^`);
+  f.git("restore", "--source", previous, "--", "tickets.json", ".factory.json");
+  f.git("commit", "-qam", "restore pre-base configuration");
+  const reversed = f.git("rev-parse", "HEAD");
+  f.git("update-ref", `refs/remotes/origin/${branch}`, reversed);
+  expect(
+    await engine
+      .recordLanding(
+        { ...request, revision: previous, commit: reversed },
+        "T-owner",
+      )
+      .catch(() => "refused"),
+  ).toBe("refused");
+  expect(await snapshot()).toEqual(before);
+
+  for (const run of [
+    running,
+    { kind: "uncertain" as const, thread: running.thread, reason: "held" },
+    { ...running, delivery: "queued" as const },
+    { ...running, delivery: "sending" as const },
+  ]) {
+    const storage = openPersistence(engine.directory, []);
+    storage.commit({ ...stopped, runs: { A: run } }, "A", "fixture", "held");
+    storage.close();
+    const held = await snapshot();
+    expect(
+      await engine.recordLanding(request, "T-owner").catch(() => "refused"),
+    ).toBe("refused");
+    expect(await snapshot()).toEqual(held);
+  }
+});
+
+test("external landing survives reload and releases dependencies only on reconciliation", async () => {
+  const { f, engine, running, revision, commit, request, snapshot } =
+    await externalLandingFixture();
+  const counts = f.counts();
+  f.git("reset", "--hard", running.base);
+  const blocked = await snapshot();
+  expect(
+    await engine.recordLanding(request, "T-owner").catch(String),
+  ).toContain("Integrate the fetched upstream into the root checkout first");
+  expect(await snapshot()).toEqual(blocked);
+  f.git("merge", "--ff-only", commit);
+  const landed = await engine.recordLanding(request, "T-owner");
+  expect(landed).toMatchObject({
+    enabled: true,
+    runs: {
+      A: {
+        kind: "done",
+        thread: running.thread,
+        revision,
+        acceptedBase: running.base,
+        merge: { pr: 51, commit },
+        insight: request.decision,
+      },
+    },
+  });
+  expect(landed.runs.A?.incident).toBeUndefined();
+  expect(landed.runs.B).toBeUndefined();
+  expect(f.counts()).toEqual(counts);
+  const after = await snapshot();
+  const reloaded = f.factory();
+  expect(await reloaded.recordLanding(request, "T-owner")).toEqual(landed);
+  expect(await snapshot()).toEqual(after);
+  for (const conflict of [
+    { pr: 52 },
+    { commit: revision },
+    { incident: "old" },
+    { revision: commit },
+  ]) {
+    expect(
+      await reloaded
+        .recordLanding({ ...request, ...conflict }, "T-owner")
+        .catch(String),
+    ).toContain("Conflicting");
+    expect(await snapshot()).toEqual(after);
+  }
+  expect(
+    factoryEvents(engine.directory)?.filter(
+      (event) => event.action === "landed-outside",
+    ),
+  ).toHaveLength(1);
+  f.host.state = async () => "running";
+  const next = await reloaded.tick("reconcile", "T-owner");
+  expect(next.runs.B).toMatchObject({ kind: "running", base: commit });
 });
 
 test("provider reclassification cannot restore a second implementation owner", async () => {

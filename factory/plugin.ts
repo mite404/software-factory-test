@@ -29,7 +29,6 @@ const controlActions = [
   "resume",
   "reload",
   "admit",
-  "record-merge",
 ] as const;
 
 function matchingDeliveries(page: ThreadMessage[], message: string) {
@@ -427,6 +426,10 @@ export default function registerFactory(
   }, 5000);
   void publish();
   const suffix = createHash("sha256").update(root).digest("hex").slice(0, 8);
+  const recordings = new Map<unknown, typeof factory.recordMerge>([
+    ["record-merge", factory.recordMerge],
+    ["record-landing", factory.recordLanding],
+  ]);
   amp.registerTool({
     name: `factory_control_${suffix}`,
     description: `Control the factory in ${root}. status is read-only and does not deliver notices or register schedules. reload validates the authored definition for future runs without executing commands or changing active pins; a connected owner also recovers its watchdog registration. message-foreman delivers message text from a registered worker or reviewer to the owning Foreman without granting control; delivery errors have unknown outcomes, so do not retry blindly. start requires explicit user authorization, permissions.execute=true and connected owner tools; it confirms its owned watchdog before dispatch and refuses unrelated schedules or second roots. pause persists a local stop before any remote check, including from non-owner non-worker threads; only the owner's connected turn clears its watchdog. reconcile observes persisted work, recovers its watchdog and delivers durable alerts only in the connected owner context, without granting permissions. Unknown alert sends are held, not retried. retry-setup explicitly reruns parked preparation in the same worktree before creating a worker. resume requires the owning Foreman, a blocked ticket, its exact current incident ID from status, and a decision explaining the next repair; it queues the same worker without starting a paused factory or accepting code. Duplicate or stale notices never authorize another checkpoint. retry-create requires the owning Foreman, a ticket parked in creating, its exact current incident ID and a decision recording that no thread was created; it repeats that one creation in place and never falls back to another executor. Runner and Orb threads are created after the tool call returns, so the returned status can still show creating; call status again. backup publishes private SQLite state and requires explicit user authorization and permissions.backup=true.`,
@@ -435,12 +438,17 @@ export default function registerFactory(
       properties: {
         action: {
           type: "string",
-          enum: [...controlActions, "message-foreman", "backup"],
+          enum: [
+            ...controlActions,
+            ...recordings.keys(),
+            "message-foreman",
+            "backup",
+          ],
         },
         ticket: {
           type: "string",
           description:
-            "Canonical ticket ID for admit or record-merge. Only the owning Foreman may use these actions; neither starts or dispatches work.",
+            "Canonical ticket ID for admit, record-merge or record-landing. Only the owning Foreman may use these actions; none starts or dispatches work.",
         },
         pr: {
           type: "integer",
@@ -449,6 +457,12 @@ export default function registerFactory(
             "For owner-only record-merge. Git checks the done ticket's change and commit against the fetched upstream. Recording is repeat-safe, works while paused, and has no lifecycle or schedule effects.",
         },
         commit: { type: "string", pattern: "^[a-f0-9]{40}$" },
+        revision: {
+          type: "string",
+          pattern: "^[a-f0-9]{40}$",
+          description:
+            "For owner-only record-landing, a revision descending from the saved base and reachable from the worker worktree HEAD. Requires the current incident, decision, PR and merge commit. Git must prove the exact patch upstream and the merge in both upstream and root HEAD. Later blocked reports do not disqualify earlier candidates. No dispatch or schedule effects.",
+        },
         decision: { type: "string" },
         incident: { type: "string", minLength: 1 },
         message: { type: "string", minLength: 1 },
@@ -464,15 +478,10 @@ export default function registerFactory(
         assertControlCaller(factoryStatus(factory.directory), ctx.thread.id);
         return JSON.stringify(await backup(root));
       }
+      const record = recordings.get(requested);
+      if (record) return JSON.stringify(await record(input, ctx.thread.id));
       const action = controlActions.find((action) => action === requested);
       if (!action) throw new Error("Unknown action");
-      if (action === "record-merge")
-        return JSON.stringify(
-          await factory.recordMerge(
-            { ticket: input.ticket, pr: input.pr, commit: input.commit },
-            ctx.thread.id,
-          ),
-        );
       const tools = connectedTools(
         action,
         factoryStatus(factory.directory),
