@@ -154,7 +154,8 @@ failure does not itself pause dispatch or grant permission. Report the monitorin
 from the recovery result; an unrelated reconcile error does not invalidate confirmed registration.
 
 Pause commits the local stop even if schedule inspection or clearing fails. A non-worker thread
-can pause without owner tools; the owner's next connected turn clears the watchdog. Preserve a
+that never owned the factory can pause without owner tools; a former Foreman is refused. The
+owner's next connected turn clears the watchdog. Preserve a
 foreign schedule while paused or finished: our watchdog is absent, not in conflict. A refused
 first start does not claim the factory owner. If `monitor.pendingThread` records an uncertain
 effect, inspect through start or clear through pause on that original thread before switching
