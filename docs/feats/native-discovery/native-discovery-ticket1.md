@@ -37,10 +37,12 @@ attempts, and reconcile interrupted or ambiguous intake before creating anything
 
 ## Steps
 
-1. **Define bounded discovery records**. Revalidate F12/F04 and model identity, evidence, and exhaustion.
+1. **Define bounded discovery records**. Revalidate F12/F04 and model identity, evidence, and
+   exhaustion.
 2. **Run selected discovery mode**. Apply mode changes only to the next bounded pass.
 3. **Admit only evidenced work**. Check duplicates, persist admission, and use the existing queue.
-4. **Verify interrupted intake recovery**. Exercise cooldown, permission refusal, and revision gates.
+4. **Verify interrupted intake recovery**. Exercise cooldown, permission refusal, and revision
+   gates.
 
 ## Test plan
 
