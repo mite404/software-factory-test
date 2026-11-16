@@ -305,9 +305,9 @@ test("handoff preserves workers and incident identity, reissues stops, and permi
     "reload",
     "resume",
   ] as const)
-    expect(engine.tick(action, "T-owner")).rejects.toThrow("Former Foreman");
+    expect(engine.tick(action, "T-owner")).rejects.toThrow("no longer owns");
   expect(engine.note("Stale owner", "T-owner")).rejects.toThrow(
-    "Former Foreman",
+    "operator decides any handoff",
   );
   await engine.tick("pause", "T-new", f.host.state, undefined, f.next.tools);
   const resumed = await engine.tick(
@@ -425,6 +425,7 @@ async function handoffScheduleFixture(fault: string) {
   let clears = 0;
   let targetedReads = 0;
   let blocked = true;
+  if (fault === "absent") f.old.schedules.delete("T-owner");
   if (fault === "foreign")
     f.old.schedules.set("T-owner", {
       title: "Unrelated",
@@ -435,7 +436,7 @@ async function handoffScheduleFixture(fault: string) {
     f.old.schedules.get("T-owner")!.targetThreadID = "T-other";
   async function readOld() {
     targetedReads++;
-    if (blocked && fault === "ignored-target") return null;
+    if (blocked && fault === "unrecognized-read") return {};
     if (
       blocked &&
       (fault === "unreadable" || (fault === "lost-inspection" && clears > 0))
@@ -451,6 +452,13 @@ async function handoffScheduleFixture(fault: string) {
     const result = await f.next.tools.call("amp.clear_schedule", {
       thread: "T-owner",
     });
+    if (fault === "unrecognized-clear" && blocked) return {};
+    if (fault === "replaced")
+      f.old.schedules.set("T-owner", {
+        title: "Unrelated",
+        prompt: "Keep",
+        targetThreadID: "T-owner",
+      });
     if (fault === "lost-ack") throw new Error("Lost clear acknowledgment");
     return result;
   }
@@ -478,14 +486,17 @@ async function handoffScheduleFixture(fault: string) {
 
 test.each([
   ["cleared", false, 1, 2],
-  ["lost-ack", false, 1, 2],
+  ["lost-ack", true, 1, 2],
   ["denied", true, 1, 2],
   ["false-success", true, 1, 2],
   ["unreadable", true, 0, 1],
   ["lost-inspection", true, 1, 2],
-  ["foreign", true, 0, 1],
+  ["foreign", false, 0, 1],
   ["wrong-target", true, 0, 1],
-  ["ignored-target", true, 0, 1],
+  ["absent", false, 0, 1],
+  ["unrecognized-read", true, 0, 1],
+  ["unrecognized-clear", true, 1, 2],
+  ["replaced", false, 1, 2],
 ] as const)(
   "handoff watchdog follows the owner despite %s cleanup",
   async (fault, failed, clears, reads) => {
@@ -516,15 +527,12 @@ test.each([
         f.tools,
       );
       expect(recovered.monitor?.schedule).toBe("installed");
-      const confirmed = !["foreign", "lost-inspection"].includes(fault);
-      expect(recovered.foreman?.handoffs.at(-1)?.clear).toBe(
-        confirmed ? "cleared" : "unreachable",
-      );
+      expect(recovered.foreman?.handoffs.at(-1)?.clear).toBe("cleared");
       expect(f.old.schedules.has("T-new")).toBe(true);
       expect(f.next.notifications).toHaveLength(1);
       expect(f.effects().installs).toBe(1);
     }
-    if (fault === "foreign")
+    if (["foreign", "replaced"].includes(fault))
       expect(f.old.schedules.get("T-owner")).toEqual({
         title: "Unrelated",
         prompt: "Keep",
@@ -682,7 +690,12 @@ test("paused handoff and hand-back never start execution or install a watchdog",
   );
   expect(back.owner).toBe("T-owner");
   expect(back.enabled).toBe(false);
-  expect(back.foreman?.handoffs).toHaveLength(2);
+  expect(back.foreman?.handoffs.map((handoff) => handoff.clear)).toEqual([
+    "cleared",
+    "cleared",
+  ]);
+  expect(f.old.notifications).toHaveLength(0);
+  expect(f.next.notifications).toHaveLength(0);
   expect(back.runs.A?.incident).toMatchObject({
     id: "stop-exact",
     owner: "T-owner",

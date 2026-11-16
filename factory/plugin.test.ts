@@ -124,17 +124,17 @@ test("connected handoff observes the exact old owner and returns private durable
       enabled: false,
       foreman: {
         notes: [{ thread: "T-owner", text: "PRIVATE-HANDOFF-NOTE" }],
-        handoffs: [{ clear: "unreachable" }],
+        handoffs: [{ clear: "cleared" }],
       },
       monitor: { schedule: "cleared" },
     });
     expect(fixture.schedules.size).toBe(0);
-    expect(fixture.notifications).toHaveLength(1);
+    expect(fixture.notifications).toHaveLength(0);
     expect(JSON.stringify(fixture.notifications)).not.toContain(
       "PRIVATE-HANDOFF-NOTE",
     );
     expect(factoryStatus(directory)).toEqual(result);
-    expect(execute({ action: "pause" }, old)).rejects.toThrow("Former Foreman");
+    expect(execute({ action: "pause" }, old)).rejects.toThrow("no longer owns");
     server = startDashboard({ root, port: 0 });
     for (const path of ["/api/status", "/api/events"]) {
       const response = await fetch(`${server.url}${path}`);

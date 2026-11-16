@@ -18,16 +18,18 @@ fingerprint. Cross-orb takeover, restore, and exclusive fencing remain outside t
 Read the returned `foreman.notes`, incidents, `foreman.handoffs`, and `monitor.problem` before
 recovery. Ownership changes atomically without dispatch or changes to worker identity, attempts,
 progress clocks, or enabled state. Open incident IDs stay valid for the new owner and are reissued.
-The old owner loses control. Taking control back requires a fresh guarded handoff.
+The old owner loses control. The operator decides whether another guarded handoff is appropriate.
 
 An unreachable old watchdog clear does not block the new owner's registration, start, or a later
 guarded handoff. Read each `foreman.handoffs` entry's `clear` and `problem`. The factory reserves at
 most one cleanup warning per handoff and retries unresolved former-owner cleanups on connected
 reconciles. It never clears the current owner's wake after a hand-back or an unrelated schedule.
 A former owner's stale wake cannot control the queue or perform remote watchdog effects.
-Confirmation requires the old fingerprint in a targeted read before clear and null afterward.
-An initial null is unconfirmed, not evidence that the tool honored its target. Use connected
-`reload`, `reconcile`, or `pause` to retry cleanup. Repeating the original handoff is a no-op.
+A targeted null or a foreign registration confirms that this factory's old watchdog is absent.
+Failed reads, failed clears, unrecognized replies and read-backs still showing the old fingerprint
+remain unreachable. Use connected `reload`, `reconcile`, or `pause` to retry cleanup.
+Unchanged retries write no cleanup commit or event and send no new alert.
+Repeating the original handoff is a no-op.
 The live transfer and hand-back proof belongs to the Foreman after native acceptance.
 
 ## Procedure

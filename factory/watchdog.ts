@@ -220,38 +220,70 @@ async function sendNotification(
   save();
 }
 
+function clearReceipt(raw: unknown) {
+  const reply: unknown = typeof raw === "string" ? JSON.parse(raw) : raw;
+  if (
+    !reply ||
+    typeof reply !== "object" ||
+    !("deleted" in reply) ||
+    reply.deleted !== true
+  )
+    throw new Error("Unrecognized schedule clear result");
+}
+
+async function removePreviousSchedule(
+  tools: PluginTools,
+  thread: ThreadID,
+  fingerprint: string,
+) {
+  const expected = { fingerprint };
+  const previous = registration(await readSchedule(tools, thread), expected);
+  if (previous === "missing" || previous === "conflict") return;
+  let problem: string | undefined;
+  try {
+    clearReceipt(await tools.call("amp.clear_schedule", { thread }));
+  } catch (error) {
+    problem = String(error);
+  }
+  const current = registration(await readSchedule(tools, thread), expected);
+  if (problem || (current !== "missing" && current !== "conflict"))
+    throw new WatchdogUnavailable(
+      ["Previous owner's watchdog clear is unconfirmed", problem]
+        .filter(Boolean)
+        .join(": "),
+    );
+}
+
 async function clearPreviousOwner(
   state: State,
   handoff: NonNullable<State["foreman"]>["handoffs"][number],
   tools: PluginTools,
   save: () => void,
 ) {
+  let problem: string | undefined;
   try {
-    const previous = await readSchedule(tools, handoff.from);
-    if (!String(previous?.title).includes(state.monitor!.fingerprint))
-      throw new WatchdogUnavailable(
-        "Previous owner's watchdog inspection is unconfirmed; preserve unrelated schedules",
-      );
-    await tools
-      .call("amp.clear_schedule", { thread: handoff.from })
-      .catch(() => undefined);
-    if ((await readSchedule(tools, handoff.from)) !== null)
-      throw new WatchdogUnavailable(
-        "Previous owner's watchdog clear is unconfirmed",
-      );
+    await removePreviousSchedule(
+      tools,
+      handoff.from,
+      state.monitor!.fingerprint,
+    );
   } catch (error) {
-    handoff.clear = "unreachable";
-    handoff.problem = String(error);
-    save();
-    return;
+    problem = String(error);
   }
-  // One confirmed clear settles every outstanding handoff from that thread.
-  for (const previous of state.foreman!.handoffs) {
-    if (previous.from !== handoff.from) continue;
-    previous.clear = "cleared";
-    delete previous.problem;
+  const clear = problem === undefined ? "cleared" : "unreachable";
+  const changed = state.foreman!.handoffs.filter(
+    (previous) =>
+      previous.from === handoff.from &&
+      previous.clear !== "cleared" &&
+      (previous.clear !== clear || previous.problem !== problem),
+  );
+  for (const previous of changed) {
+    previous.clear = clear;
+    if (problem === undefined) delete previous.problem;
+    else previous.problem = problem;
   }
-  save();
+  if (changed.length) save();
+  return changed.length > 0;
 }
 
 async function clearPreviousOwners(
@@ -264,8 +296,8 @@ async function clearPreviousOwners(
   for (const [index, handoff] of (state.foreman?.handoffs ?? []).entries()) {
     // Hand-back makes this registration the current owner's wake, not stale cleanup.
     if (handoff.clear === "cleared" || handoff.from === state.owner) continue;
-    await clearPreviousOwner(state, handoff, tools, save);
-    if (handoff.clear !== "unreachable") continue;
+    const changed = await clearPreviousOwner(state, handoff, tools, save);
+    if (!changed || handoff.clear !== "unreachable") continue;
     await sendNotification(
       monitor,
       tools,
@@ -278,6 +310,23 @@ async function clearPreviousOwners(
       save,
     );
   }
+}
+
+function settleMonitor(
+  monitor: NonNullable<State["monitor"]>,
+  schedule: "installed" | "cleared",
+  save: () => void,
+) {
+  if (
+    monitor.schedule === schedule &&
+    monitor.pendingThread === undefined &&
+    monitor.problem === undefined
+  )
+    return;
+  monitor.schedule = schedule;
+  delete monitor.pendingThread;
+  delete monitor.problem;
+  save();
 }
 
 /** Reconcile only this factory's existing-thread schedule under the lifecycle lock.
@@ -338,10 +387,7 @@ export async function reconcileSchedule(
         "Owned watchdog configuration drifted; inspect recurrence, run mode and enabled state",
       );
     if (satisfied(current, wanted, monitor.wakeAt, wakeAt)) {
-      monitor.schedule = settled;
-      delete monitor.pendingThread;
-      delete monitor.problem;
-      save();
+      settleMonitor(monitor, settled, save);
       return;
     }
     monitor.schedule = "checking";
@@ -358,10 +404,7 @@ export async function reconcileSchedule(
         "Watchdog effect not confirmed; inspect actual schedule before another action",
       );
     monitor.wakeAt = wakeAt;
-    monitor.schedule = settled;
-    delete monitor.pendingThread;
-    delete monitor.problem;
-    save();
+    settleMonitor(monitor, settled, save);
   } catch (error) {
     if (monitor.schedule !== "conflict") monitor.schedule = "unknown";
     save();

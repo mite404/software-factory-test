@@ -1066,7 +1066,7 @@ function legacyReview(
   return review;
 }
 
-/** Refuse workers, reviewers and former owners; explicit handoff can reclaim ownership.
+/** Refuse workers, reviewers and former owners outside an operator-decided handoff.
  * @throws If the caller is ineligible to control the factory.
  */
 export function assertControlCaller(
@@ -1088,7 +1088,9 @@ export function assertControlCaller(
     owner !== state.owner &&
     state.foreman?.handoffs.some((entry) => entry.from === owner)
   )
-    throw new Error("Former Foreman must use handoff to regain control");
+    throw new Error(
+      "This thread no longer owns the factory. The operator decides any handoff.",
+    );
 }
 
 function assertWatchdogCaller(

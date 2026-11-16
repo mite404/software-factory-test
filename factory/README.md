@@ -21,20 +21,22 @@ The existing coordinator lock serializes the transfer. One SQLite commit changes
 records the decision, and reassigns open incidents without changing their IDs. Runs, workers,
 reviewers, attempts, progress clocks, enabled state, and execution permissions stay unchanged.
 Open incidents are reissued to the new owner. Use their exact current IDs for recovery. Former
-owners cannot control the queue unless they explicitly take it back with another guarded handoff.
+owners cannot control the queue. The operator decides any further guarded handoff.
 Repeating the same handoff request from the new owner is a no-op.
 
 The new owner inspects the old thread's schedule and clears only this factory's fingerprinted
 watchdog using the schedule tools' `thread` parameter. Every clear is followed by inspection,
-including after a lost acknowledgment. Confirmation requires a targeted read of the old watchdog
-before the clear and a null read-back afterward. An initial null or a foreign schedule cannot
-prove cleanup and is recorded as unreachable, without clearing a foreign registration.
+including after a lost acknowledgment. A targeted null or a foreign registration confirms that
+this factory's old watchdog is absent. Foreign registrations remain untouched. A failed read,
+failed clear, unrecognized reply, or read-back still showing the old fingerprint records cleanup
+as unreachable. A later successful inspection can settle a lost clear acknowledgment.
 An unconfirmed clear does not block the new owner's watchdog, start, or a further guarded handoff.
 `foreman.handoffs` records `clear: "unreachable"` and its `problem` separately from new-owner
 monitoring. A stale former-owner wake cannot control the queue or perform watchdog effects.
 Connected reconciles retry all unresolved former-owner cleanups, except a thread that now owns the
-factory again. Each handoff reserves at most one cleanup warning through the durable notification
-budget, including unknown sends. Cleanup warnings can occur while paused; paused or completed
+factory again. Unchanged retries write no cleanup commit or event and send no new alert.
+Each handoff reserves at most one cleanup warning through the durable notification budget,
+including unknown sends. Cleanup warnings can occur while paused; paused or completed
 factories still do not install a new watchdog. Never edit SQLite or clear an unrelated schedule.
 Live cross-thread clearing still needs Foreman acceptance.
 
@@ -186,15 +188,16 @@ events and the candidate report. Missing recovery evidence fails closed. Subsequ
 require the normal gates.
 
 Actionable stops persist an `incident` in the run, in the same SQLite transaction as the stop event.
-Its ID binds the ticket, attempt, base, and owner to a curated reason and recovery action.
+Its ID identifies the ticket, attempt and base; its owner names the current recovery recipient.
 Preparation uses `retry-setup`; ambiguous creation or delivery and changed integration or review
 identity require inspection. Only a saved worker checkpoint supports `resume`. Permission blockers
 grant no authority.
 Serialized reconciliation sends queued notices to the owning Foreman through `host.send`, including
 after adapter restart and while execution is paused. Failed or ambiguous sends remain queued for the
 next reconciliation. A successful append with a lost acknowledgment can produce duplicate notices.
-Successful delivery is recorded durably and does not repeat normally. Owner replacement readdresses
-the notice with a new ID. A stale ID cannot resume a later checkpoint or a different owner's stop.
+Successful delivery is recorded durably and does not repeat normally. Handoff readdresses the notice
+to the new owner without changing its ID. The former owner cannot recover it. A stale ID cannot
+resume a later checkpoint.
 Status and HTTP reads neither drain notices nor change incident state. Notices contain no private
 worker reasons, instructions, paths, or review findings; diagnosis uses the private saved evidence.
 
@@ -331,14 +334,14 @@ monitor is installed. Legacy SQLite opens unchanged; monitor metadata is added t
 the first connected lifecycle effect without changing existing definition pins or incident IDs.
 
 Pause persists the local stop before inspecting or clearing any remote schedule. Non-worker,
-non-reviewer threads can pause, reconcile or reload without schedule or alert effects; the owning
-Foreman's next connected turn clears its watchdog after such a pause. This local stop remains
-available if the owner cannot start. Only the connected owner can start monitored execution or
-resume a repair. A changed root/Git path after copy or restore records a durable fingerprint
-conflict, not an installed monitor. Pause still persists even if its tool result reports that
-conflict. Restore the original root and Git storage paths before connected recovery. Automatic
-fingerprint migration to a new path is unsupported: inspect the old thread's schedule and seek an
-explicit adoption decision rather than editing the fingerprint or clearing an unrelated schedule.
+non-reviewer threads other than former Foremen can pause, reconcile or reload without schedule or
+alert effects. The owning Foreman's next connected turn clears its watchdog after such a pause.
+This local stop remains available if the owner cannot start. Only the connected owner can start
+monitored execution or resume a repair. A changed root/Git path after copy or restore records a
+durable fingerprint conflict, not an installed monitor. Pause still persists even if its tool result
+reports that conflict. Restore the original root and Git storage paths before connected recovery.
+Automatic fingerprint migration to a new path is unsupported. Inspect the old thread's schedule.
+Seek an explicit adoption decision. Do not edit the fingerprint or clear an unrelated schedule.
 
 **Unsupported coverage boundary.** An unstartable Foreman cannot independently notify its owner
 through this plugin. A platform outage or failure before the connected owner can run its tools is
