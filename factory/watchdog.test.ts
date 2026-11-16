@@ -1,10 +1,15 @@
 import { expect, test } from "bun:test";
 import type { PluginTools } from "@ampcode/plugin";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { watchdogFixture } from "./bookkeeping.fixture";
-import { factoryStatus, openPersistence, type State } from "./persistence";
+import {
+  factoryEvents,
+  factoryStatus,
+  openPersistence,
+  type State,
+} from "./persistence";
 import { deliverAlerts, reconcileSchedule } from "./watchdog";
 
 test("planning metadata cannot drop monitoring for an existing active run", async () => {
@@ -151,6 +156,81 @@ test("owned schedule converges after lost create/clear acknowledgments and prese
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test.each(["absent", "unreadable", "uncleared"])(
+  "handoff cleanup converges without unchanged writes for %s",
+  async (fault) => {
+    const directory = await mkdtemp(join(tmpdir(), "factory-cleanup-"));
+    const storage = openPersistence(directory, []);
+    const state: State = { enabled: true, owner: "T-old", runs: {} };
+    const old = watchdogFixture("T-old");
+    const next = watchdogFixture("T-new", old.schedules);
+    let blocked = true;
+    const tools: PluginTools = {
+      async call(name, input) {
+        if (blocked && input.thread === "T-old") {
+          if (fault === "unreadable") throw new Error("Old thread unavailable");
+          if (fault === "uncleared" && name === "amp.clear_schedule")
+            return { deleted: true };
+        }
+        return next.tools.call(name, input);
+      },
+    };
+    const sync = (connected: PluginTools) =>
+      reconcileSchedule(
+        "/TEST/factory",
+        directory,
+        state,
+        [{ id: "A", brief: "PRIVATE", after: [] }],
+        connected,
+        () => storage.commit(state, "factory", "fixture-cleanup", ""),
+      );
+    try {
+      await sync(old.tools);
+      state.owner = "T-new";
+      state.foreman = {
+        notes: [],
+        handoffs: [
+          {
+            at: 1,
+            from: "T-old",
+            to: "T-new",
+            decision: "Take over",
+            clear: "pending",
+          },
+        ],
+      };
+      if (fault === "absent") old.schedules.delete("T-old");
+      await sync(tools);
+      expect(state.monitor?.schedule).toBe("installed");
+      expect(state.foreman.handoffs[0]?.clear).toBe(
+        fault === "absent" ? "cleared" : "unreachable",
+      );
+      if (fault === "unreadable") {
+        // Legacy unreachable handoffs can lack an alert reservation.
+        state.monitor!.notifications = [];
+        storage.commit(state, "factory", "fixture-legacy-alert", "");
+      }
+      const events = factoryEvents(directory);
+      const bytes = await readFile(join(directory, "state.sqlite"));
+      await sync(tools);
+      expect(factoryEvents(directory)).toEqual(events);
+      expect(await readFile(join(directory, "state.sqlite"))).toEqual(bytes);
+      expect(next.notifications).toHaveLength(fault === "absent" ? 0 : 1);
+      blocked = false;
+      await sync(tools);
+      expect(state.foreman.handoffs[0]?.clear).toBe("cleared");
+      expect(state.foreman.handoffs[0]?.problem).toBeUndefined();
+      expect([...old.schedules.keys()]).toEqual(["T-new"]);
+      const settled = factoryEvents(directory);
+      await sync(tools);
+      expect(factoryEvents(directory)).toEqual(settled);
+    } finally {
+      storage.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
 
 test.each([
   { patch: { prompt: "Updated wording" }, healthy: true },

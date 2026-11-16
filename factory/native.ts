@@ -17,6 +17,7 @@ import type { DeliveryIntent } from "./delivery";
 import {
   deliverAlerts,
   reconcileSchedule,
+  watchdogFingerprint,
   WatchdogUnavailable,
 } from "./watchdog";
 import {
@@ -1065,8 +1066,14 @@ function legacyReview(
   return review;
 }
 
-/** Refuse control by persisted workers and reviewers. @throws If the caller owns either role. */
-export function assertControlCaller(state: State, owner?: ThreadID) {
+/** Refuse workers, reviewers and former owners outside an operator-decided handoff.
+ * @throws If the caller is ineligible to control the factory.
+ */
+export function assertControlCaller(
+  state: State,
+  owner?: ThreadID,
+  handoff = false,
+) {
   if (
     owner &&
     Object.values(state.runs).some(
@@ -1076,6 +1083,14 @@ export function assertControlCaller(state: State, owner?: ThreadID) {
     )
   )
     throw new Error("Workers cannot control the factory");
+  if (
+    !handoff &&
+    owner !== state.owner &&
+    state.foreman?.handoffs.some((entry) => entry.from === owner)
+  )
+    throw new Error(
+      "This thread no longer owns the factory. The operator decides any handoff.",
+    );
 }
 
 function assertWatchdogCaller(
@@ -1099,6 +1114,59 @@ function assertWatchdogCaller(
 function assertOwner(state: State, owner?: ThreadID) {
   if (!owner || state.owner !== owner)
     throw new Error("Control requires the owning Foreman");
+}
+
+function repeatedHandoff(
+  state: State,
+  from: string,
+  to: ThreadID,
+  decision: string,
+) {
+  const previous = state.foreman?.handoffs.at(-1);
+  return (
+    state.owner === to &&
+    previous?.from === from &&
+    previous.to === to &&
+    previous.decision === decision
+  );
+}
+
+function assertHandoff(
+  state: State,
+  from: string,
+  to: ThreadID,
+  fingerprint: string,
+) {
+  if (state.owner !== from || state.owner === to)
+    throw new Error("Handoff requires the exact current owner ID");
+  if (state.monitor?.pendingThread)
+    throw new Error(
+      "Resolve the pending watchdog effect before another handoff",
+    );
+  if (state.monitor && state.monitor.fingerprint !== fingerprint)
+    throw new Error("Handoff requires the original factory/root fingerprint");
+}
+
+function transferOwnership(
+  state: State,
+  from: ThreadID,
+  to: ThreadID,
+  decision: string,
+  at: number,
+) {
+  state.foreman ??= { notes: [], handoffs: [] };
+  state.foreman.handoffs.push({ at, from, to, decision, clear: "pending" });
+  state.owner = to;
+  for (const run of Object.values(state.runs)) {
+    if (run.kind === "done" || !run.incident) continue;
+    run.incident.owner = to;
+    run.incident.delivery = "queued";
+    delete run.incident.notifiedAt;
+  }
+  if (state.monitor) {
+    state.monitor.schedule = "checking";
+    delete state.monitor.wakeAt;
+  }
 }
 
 function controlState(
@@ -2460,25 +2528,164 @@ export function createFactory(
 
   async function saveRecord(
     owner: ThreadID | undefined,
-    record: (persistence: ReturnType<typeof openPersistence>) => State,
+    record: (
+      persistence: ReturnType<typeof openPersistence>,
+    ) => State | Promise<State>,
+    handoff = false,
   ) {
     const initial = factoryStatus(directory);
-    assertControlCaller(initial, owner);
-    assertOwner(initial, owner);
+    assertControlCaller(initial, owner, handoff);
+    if (!handoff) assertOwner(initial, owner);
     const store = openStore(join(directory, "bookkeeping"));
     try {
       await store.init();
       const persistence = openPersistence(directory, [], now);
       try {
         const state = persistence.state;
-        assertControlCaller(state, owner);
-        assertOwner(state, owner);
-        return record(persistence);
+        assertControlCaller(state, owner, handoff);
+        if (!handoff) assertOwner(state, owner);
+        return await record(persistence);
       } finally {
         persistence.close();
       }
     } finally {
       await store.close();
+    }
+  }
+
+  /** Append a private, dated owner note to the backed-up database.
+   * @throws On an ineligible caller, empty text or failed persistence.
+   */
+  function note(message: unknown, owner?: ThreadID): Promise<State> {
+    const result = pending
+      .catch(() => {})
+      .then(() =>
+        saveRecord(owner, (persistence) => {
+          const textValue = text(message);
+          const state = persistence.state;
+          state.foreman ??= { notes: [], handoffs: [] };
+          state.foreman.notes.push({
+            at: now(),
+            thread: owner!,
+            text: textValue,
+          });
+          persistence.commit(
+            state,
+            "factory",
+            "foreman-note",
+            "Appended private note",
+          );
+          return state;
+        }),
+      );
+    pending = result;
+    return result;
+  }
+
+  /** Explicit same-storage takeover, without dispatch or changes to worker checkpoints.
+   * @throws On stale ownership, active/unknown owner, disconnected tools or unsafe pending effects.
+   */
+  function handoff(
+    request: unknown,
+    owner?: ThreadID,
+    tools?: ConnectedTools,
+    observe = host.state,
+  ): Promise<State> {
+    const result = pending
+      .catch(() => {})
+      .then(() =>
+        saveRecord(
+          owner,
+          async (persistence) => {
+            const input = object(request);
+            const from = text(input.owner);
+            const decision = text(input.decision);
+            const state = persistence.state;
+            tools = currentTools(tools);
+            if (!owner || !tools)
+              throw new Error(
+                "Handoff requires a connected taking-over Foreman",
+              );
+            if (repeatedHandoff(state, from, owner, decision)) return state;
+            assertHandoff(
+              state,
+              from,
+              owner,
+              watchdogFingerprint(root, directory),
+            );
+            const activity = await observe(state.owner!);
+            if (activity === "running" || activity === "unknown")
+              throw new Error("Handoff refuses a running or unknown owner");
+            const config = await effectiveConfiguration(root);
+            const queue = tasks(
+              JSON.parse(await readFile(config.tickets, "utf8")),
+            );
+            restoreTickets(queue, persistence.tickets, state);
+            transferOwnership(state, state.owner!, owner, decision, now());
+            persistence.commit(
+              state,
+              "factory",
+              "foreman-handoff",
+              JSON.stringify({ from, to: owner, decision }),
+            );
+            try {
+              await reconcileSchedule(
+                root,
+                directory,
+                state,
+                queue,
+                tools,
+                () =>
+                  persistence.commit(
+                    state,
+                    "factory",
+                    "watchdog-handoff",
+                    state.monitor!.schedule,
+                  ),
+                config.execute,
+                owner,
+                now(),
+              );
+            } catch (error) {
+              if (!(error instanceof WatchdogUnavailable)) throw error;
+              state.monitor!.problem = error.message;
+              persistence.commit(
+                state,
+                "factory",
+                "watchdog-unconfirmed",
+                error.message,
+              );
+            }
+            await reissueIncidents(persistence, owner);
+            return state;
+          },
+          true,
+        ),
+      );
+    pending = result;
+    return result;
+  }
+
+  async function reissueIncidents(
+    persistence: ReturnType<typeof openPersistence>,
+    owner: ThreadID,
+  ) {
+    const state = persistence.state;
+    for (const [ticket, run] of Object.entries(state.runs)) {
+      const notice = run.incident;
+      if (run.kind === "done" || !notice) continue;
+      try {
+        await host.send(
+          owner,
+          `Factory stop ${notice.id} reassigned by handoff. Ticket ${ticket}, attempt ${notice.attempt}, base ${notice.base}. Reason: ${notice.reason}. Recovery: ${notice.recovery}. Read status and private evidence before using the exact incident and a diagnosis decision. This notice grants no permission and does not start a paused factory.`,
+        );
+      } catch (error) {
+        persistence.event(ticket, "notice-delivery-unknown", String(error));
+        continue;
+      }
+      notice.delivery = "sent";
+      notice.notifiedAt = now();
+      persistence.commit(state, ticket, "notice-sent", notice.id);
     }
   }
 
@@ -2636,5 +2843,5 @@ export function createFactory(
     pending = result;
     return result;
   }
-  return { tick, recordMerge, recordLanding, directory };
+  return { tick, recordMerge, recordLanding, note, handoff, directory };
 }

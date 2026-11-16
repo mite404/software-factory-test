@@ -18,13 +18,12 @@ Merged, but at least one box, usually a live proof, is still open.
 | [foreman-watchdog-ticket3](feats/foreman-watchdog/foreman-watchdog-ticket3.md) | Outside-orb wake-up and alert delivery        | 2/4       |
 | [F003-provider-limit-resume](feats/durability/F003-provider-limit-resume.md)   | Same threads resume after a provider limit    | 5/6       |
 
-## Not started (41)
+## Not started (40)
 
 In dispatch order.
 
 | Ticket                                                                                  | Outcome                                       | Done when |
 | --------------------------------------------------------------------------------------- | --------------------------------------------- | --------- |
-| [F005-foreman-handoff](feats/durability/F005-foreman-handoff.md)                        | Guarded same-orb Foreman takeover             | 0/6       |
 | [F006-limit-fallback-setting](feats/durability/F006-limit-fallback-setting.md)          | Wait or fall back on a provider limit         | 0/5       |
 | [F007-run-transition-table](feats/durability/F007-run-transition-table.md)              | One declared, tested run lifecycle table      | 0/5       |
 | [F009-attempt-cap-parking](feats/repair-escalation/F009-attempt-cap-parking.md)         | Twice-escalated ticket parks; queue continues | 0/6       |
@@ -66,7 +65,7 @@ In dispatch order.
 | [v1-ticket21](feats/v1/v1-ticket21.md)                                                  | Read-only effectiveness views                 | 0/3       |
 | [v1-ticket22](feats/v1/v1-ticket22.md)                                                  | Cross-orb v1 acceptance trial                 | 0/3       |
 
-## Done (21)
+## Done (22)
 
 | Ticket                                                                               | Outcome                                            | Done when |
 | ------------------------------------------------------------------------------------ | -------------------------------------------------- | --------- |
@@ -84,6 +83,7 @@ In dispatch order.
 | [F015-weekly-failure-audit](feats/done/F015-weekly-failure-audit.md)                 | Weekly bucketed failures and a Fable audit         | 6/6       |
 | [F004-keyed-creation-delivery](feats/done/F004-keyed-creation-delivery.md)           | Unclear creation and delivery recover by lookup    | 5/5       |
 | [F030-record-external-landing](feats/done/F030-record-external-landing.md)           | A ticket landed outside the factory counts as done | 5/5       |
+| [F005-foreman-handoff](feats/done/F005-foreman-handoff.md)                           | Guarded same-orb Foreman takeover                  | 6/6       |
 | [F024-serial-test-runs](feats/done/F024-serial-test-runs.md)                         | Test runs on one machine take turns                | 5/5       |
 | [v1-ticket1](feats/done/v1-ticket1.md)                                               | Public titles never show private briefs            | 3/3       |
 | [v1-ticket2](feats/done/v1-ticket2.md)                                               | One versioned definition that never auto-runs      | 4/4       |
