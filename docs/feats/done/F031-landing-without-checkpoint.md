@@ -104,9 +104,9 @@ A baseline failure goes back to the Foreman; it does not widen the worker's scop
 
 ## Done when
 
-- [ ] The owner can record a checkpoint-less blocked run as landed only with Git proof of its
+- [x] The owner can record a checkpoint-less blocked run as landed only with Git proof of its
       exact patch against the incident's saved base.
-- [ ] Every rejected request leaves state unchanged.
-- [ ] A dependent of the recorded ticket dispatches.
-- [ ] Checkpoint and repair landings and saved state from before this change behave unchanged.
-- [ ] Full gates, guard and a fresh cold review pass on the accepted revision.
+- [x] Every rejected request leaves state unchanged.
+- [x] A dependent of the recorded ticket dispatches.
+- [x] Checkpoint and repair landings and saved state from before this change behave unchanged.
+- [x] Full gates, guard and a fresh cold review pass on the accepted revision.

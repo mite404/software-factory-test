@@ -742,7 +742,11 @@ Supply `ticket`, its exact current `incident` ID, the full worker `revision`, a 
 integer `pr`, the full merge `commit`, and a nonempty `decision` describing the external approval.
 Do not use this action to bypass an unresolved gate or review.
 
-The run must be blocked with a saved worker checkpoint and no queued repair. Git must prove the
+The run must be blocked with no queued repair. A `target-changed` block without a saved checkpoint
+can qualify after its candidate lands. Without a checkpoint or repair, identity comes from the
+saved incident's base, attempt, ticket and owner, the run's thread, and the registered worker
+worktree. Missing identity is refused; the request cannot supply it. Recovery stays `inspect`,
+not `resume`. Checkpoint and repair identities keep their existing checks. Git must prove the
 revision descends from the saved base and is reachable from the original worker worktree's HEAD.
 An earlier candidate can qualify even when the latest report is blocked at a later attempt.
 Neither report text nor the blocked reason proves ownership. The existing `verifyMerge` proof
