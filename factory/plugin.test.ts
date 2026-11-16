@@ -162,7 +162,10 @@ test("status exposes a compact static lifecycle with real control actions and no
       action: "record-landing",
       when: expect.any(String),
     });
-    expect(status.lifecycle.done.actions).toEqual(["record-merge"]);
+    expect(status.lifecycle.done.actions).toEqual([
+      "record-merge",
+      "record-insight",
+    ]);
     for (const entry of Object.values(status.lifecycle)) {
       for (const action of entry.actions) expect(actions).toContain(action);
       for (const stop of Object.values(entry.stops)) {
@@ -636,7 +639,7 @@ async function recordedMergeFixture(action: string) {
             action === "record-landing"
               ? blocked
               : { ...done, acceptedBase: base },
-          legacy: done,
+          legacy: { ...done, insight: "" },
         },
       },
       "factory",
@@ -773,6 +776,25 @@ async function recordedMergeFixture(action: string) {
       { ...request, action: "record-merge", ticket: "legacy" },
       owner,
     );
+    const insight = {
+      action: "record-insight",
+      ticket: "legacy",
+      insight: "Verified accepted patch",
+    };
+    expect(
+      execute(insight, {
+        thread: { id: "T-stranger" },
+      } as unknown as PluginToolContext),
+    ).rejects.toThrow();
+    await execute(insight, owner);
+    expect(factoryStatus(directory).runs.legacy).toMatchObject({
+      kind: "done",
+      revision,
+      insight: "Verified accepted patch",
+    });
+    const recorded = await readFile(join(directory, "state.sqlite"));
+    await execute(insight, owner);
+    expect(await readFile(join(directory, "state.sqlite"))).toEqual(recorded);
     const body = await status();
     expect(body.enabled).toBe(true);
     expect(factoryStatus(directory).runs.queued).toEqual(queued);

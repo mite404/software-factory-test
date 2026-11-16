@@ -153,9 +153,11 @@ legacy queue behavior.
 The owning Foreman calls the native control tool with `action: "admit"` and one `ticket` ID.
 All `after` prerequisites must already have durable accepted runs. Workers, reviewers, missing
 callers, and nonowners cannot admit work. Repeating admission is a no-op. Admission freezes that
-ticket's scoped record against later planning refreshes. It neither starts a paused factory nor
-creates a worker; the ordinary capacity-one loop dispatches admitted work afterward. Existing
-accepted evidence and definition migration rules remain unchanged.
+ticket's scoped record against later planning refreshes. Owner `reload` may replace this record only
+when releasing a `brief-incomplete` refusal, retaining admission and recording the new ticket in a
+`configured` event. Admission neither starts a paused factory nor creates a worker; the ordinary
+capacity-one loop dispatches admitted work afterward. Existing accepted evidence and definition
+migration rules remain unchanged.
 
 The read-only `/api/status` feed exposes `status: "planned"` before admission and `"queued"` after
 admission until execution begins. Each task includes `outcome`, or `null` when no public outcome was
@@ -198,6 +200,23 @@ correction.
 
 Actionable stops persist an `incident` in the run, in the same SQLite transaction as the stop event.
 Its ID identifies the ticket, attempt and base; its owner names the current recovery recipient.
+
+Before setup or worker creation, dispatch checks the local Markdown ticket pointer following a
+leading `Implement` in the brief. Other Markdown mentions, including files to create, are not ticket
+pointers. That pointer must exist in the Git base tree. Dispatch also requires a pinned definition,
+nonempty scope and verification command, and nonblank insights for completed dependencies.
+Missing facts record a `brief-incomplete` incident and hold the queue without creating a worktree
+or thread. The reason names missing facts without quoting the brief.
+Fix the queue or definition and commit tracked changes. For a done dependency with empty insight,
+the owning Foreman calls `record-insight` with its `ticket` ID and nonblank verified `insight`.
+This fills only missing accepted evidence; it cannot replace nonempty evidence. Repeating the same
+value is a no-op. It does not dispatch, change acceptance, or release the dependent refusal.
+Then call owner `reload` to release the refusal for rechecking on the next dispatch. The refused
+ticket must remain in the authored queue; removing it does not cancel its admission or release the
+hold. Reload preserves admitted intake and does not start a paused factory. Non-owner definition
+reloads do not release refusals or replace admitted records. Other stops and existing workers are
+unchanged.
+
 Control `status` adds a compact, static `lifecycle` reference from `runLifecycle` in
 `persistence.ts`.
 It lists each kind's admitted actions, admission holds, stops, incident reasons, recovery values and

@@ -120,7 +120,8 @@ export type StopIncident = {
     | "delivery-unknown"
     | "creation-unknown"
     | "target-changed"
-    | "review-identity-changed";
+    | "review-identity-changed"
+    | "brief-incomplete";
   recovery: "resume" | "retry-setup" | "inspect" | "wait";
   providerLimit?: ProviderLimit & {
     thread: ThreadID;
@@ -149,6 +150,7 @@ export type Run = (
   | {
       kind: "blocked";
       reason: string;
+      base?: string;
       thread?: ThreadID;
       repair?: Extract<Run, { kind: "running" }>;
       checkpoint?: Extract<Run, { kind: "running" }>;
@@ -183,7 +185,13 @@ export type Run = (
 };
 
 type RunAction =
-  "retry-setup" | "retry-create" | "resume" | "record-landing" | "record-merge";
+  | "retry-setup"
+  | "retry-create"
+  | "resume"
+  | "record-landing"
+  | "record-merge"
+  | "record-insight"
+  | "reload";
 type LifecycleExit =
   { action: RunAction; when: string } | { event: string; when: string };
 type LifecycleStop = {
@@ -191,6 +199,7 @@ type LifecycleStop = {
   reasons: readonly [StopIncident["reason"], ...StopIncident["reason"][]];
   recovery: StopIncident["recovery"];
   exits: readonly LifecycleExit[];
+  blocks?: readonly "dispatch"[];
   foremanOnly?: string;
   activity?: "error" | "awaiting-approval";
   matches?: (run: Run, reason?: StopIncident["reason"]) => boolean;
@@ -394,12 +403,27 @@ export const runLifecycle = {
     },
   },
   blocked: {
-    actions: ["resume", "record-landing"],
+    actions: ["resume", "record-landing", "reload"],
     blocks: [],
     repairBlocks: ["dispatch"],
     exits: [],
     reasonOverride: true,
     stops: {
+      briefIncomplete: {
+        trigger: "stopped",
+        reasons: ["brief-incomplete"],
+        recovery: "inspect",
+        matches: (run, reason) =>
+          run.kind === "blocked" &&
+          (reason ?? run.incident?.reason) === "brief-incomplete",
+        blocks: ["dispatch"],
+        exits: [
+          {
+            action: "reload",
+            when: "the owner fixes the queue or definition, or records a done dependency's missing evidence with record-insight, then reloads; the ticket must remain in the queue and dispatch rechecks the current base",
+          },
+        ],
+      },
       repair: {
         trigger: "stopped",
         reasons: ["verification-rejected"],
@@ -536,7 +560,12 @@ export const runLifecycle = {
       },
     },
   },
-  done: { actions: ["record-merge"], blocks: [], exits: [], stops: {} },
+  done: {
+    actions: ["record-merge", "record-insight"],
+    blocks: [],
+    exits: [],
+    stops: {},
+  },
 } as const satisfies Record<Run["kind"], LifecycleKind>;
 
 type AdmittedRun<A extends RunAction> = Extract<
@@ -568,6 +597,12 @@ export function runBlocks(
   const entry: LifecycleKind = runLifecycle[run.kind];
   return (
     entry.blocks.includes(action) ||
+    Object.values(entry.stops).some(
+      (stop) =>
+        action === "dispatch" &&
+        stop.blocks?.includes(action) &&
+        (!stop.matches || stop.matches(run, run.incident?.reason)),
+    ) ||
     (action === "dispatch" &&
       "repair" in run &&
       !!run.repair &&
@@ -993,6 +1028,7 @@ function validateIncident(id: string, value: unknown) {
       "creation-unknown",
       "target-changed",
       "review-identity-changed",
+      "brief-incomplete",
     ],
   };
   const valid =
@@ -1332,7 +1368,25 @@ export function factoryRecords(directory: string) {
   }
 }
 
-function refreshTickets(db: Database, queue: Task[], now: () => number) {
+function configuredTicket(
+  task: Task,
+  saved: Record<string, unknown> | undefined,
+  replaceAdmitted: boolean,
+) {
+  const intake = saved ? ticketIntake(saved).intake : undefined;
+  if (intake === "admitted" && !replaceAdmitted) return;
+  return JSON.stringify({
+    ...task,
+    ...(intake ? { intake, outcome: task.outcome ?? saved!.outcome } : {}),
+  });
+}
+
+function refreshTickets(
+  db: Database,
+  queue: Task[],
+  now: () => number,
+  replaceAdmitted = false,
+) {
   const upsert = db.query(
     "INSERT OR REPLACE INTO tickets (id, data) VALUES (?, ?)",
   );
@@ -1344,13 +1398,8 @@ function refreshTickets(db: Database, queue: Task[], now: () => number) {
       )
       .get(task.id);
     const saved = previous ? record(JSON.parse(previous.data)) : undefined;
-    const intake = saved ? ticketIntake(saved).intake : undefined;
-    if (intake === "admitted") continue;
-    const data = JSON.stringify({
-      ...task,
-      ...(intake ? { intake, outcome: task.outcome ?? saved!.outcome } : {}),
-    });
-    if (previous?.data === data) continue;
+    const data = configuredTicket(task, saved, replaceAdmitted);
+    if (data === undefined || previous?.data === data) continue;
     upsert.run(task.id, data);
     saveEvent(db, {
       at: new Date(now()).toISOString(),
@@ -1411,6 +1460,30 @@ export function openPersistence(
             db.query(
               "INSERT OR REPLACE INTO loaded_definition (id, digest) VALUES (1, ?)",
             ).run(pin.digest);
+        })();
+      },
+      /** Release only brief refusals for rechecking, retaining admitted intake. @throws On storage failure. */
+      reloadBriefs() {
+        const refused = queue.filter((task) => {
+          const run = state.runs[task.id];
+          return (
+            run?.kind === "blocked" &&
+            run.incident?.reason === "brief-incomplete"
+          );
+        });
+        if (!refused.length) return;
+        db.transaction(() => {
+          refreshTickets(db, refused, now, true);
+          for (const task of refused) {
+            delete state.runs[task.id];
+            saveEvent(db, {
+              at: new Date(now()).toISOString(),
+              ticket: task.id,
+              action: "brief-reloaded",
+              detail: "Brief refusal released for dispatch validation",
+            });
+          }
+          saveState(db, state);
         })();
       },
       tickets: db

@@ -33,6 +33,8 @@ test("lifecycle walking names every exitless stop and validates recoveries and p
     "resume",
     "record-landing",
     "record-merge",
+    "record-insight",
+    "reload",
   ]);
   const observations = new Set([
     "setup-finished",

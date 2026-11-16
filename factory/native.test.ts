@@ -18,6 +18,7 @@ import {
   effectiveConfiguration,
   createFactory,
   migrateDefinition,
+  missingBriefFacts,
   tasks,
   type NativeHost,
 } from "./native";
@@ -34,6 +35,7 @@ import {
   factoryRecords,
   factoryStatus,
   openPersistence,
+  type ThreadID,
 } from "./persistence";
 
 const installer = resolve(import.meta.dir, "setup-factory.ts");
@@ -220,6 +222,331 @@ async function preparationFixture(
 afterEach(async () => {
   for (const root of preparationRoots.splice(0))
     await rm(root, { recursive: true, force: true });
+});
+
+test("brief facts list every gap without quoting private instructions", async () => {
+  const f = await preparationFixture(() => "");
+  const definition = await configuration(f.root);
+  const task = {
+    id: "A",
+    brief:
+      "Implement `docs/missing.md`. Private instructions mention ./other.md.",
+    after: ["D", "E"],
+  };
+  const runs = {
+    D: {
+      kind: "done" as const,
+      thread: "T-D" as const,
+      revision: "abc",
+      insight: " \t",
+    },
+    E: {
+      kind: "done" as const,
+      thread: "T-E" as const,
+      revision: "def",
+      insight: "Verified",
+    },
+  };
+  expect(
+    missingBriefFacts(
+      task,
+      { ...definition, scope: [], verify: " " },
+      runs,
+      [],
+    ),
+  ).toEqual([
+    "ticket file at base: docs/missing.md",
+    "allowed scope",
+    "verification command",
+    "dependency insight: D",
+  ]);
+  expect(
+    missingBriefFacts({ ...task, after: [] }, undefined, {}, [
+      "docs/missing.md",
+      "other.md",
+    ]),
+  ).toEqual(["pinned definition", "allowed scope", "verification command"]);
+  expect(
+    missingBriefFacts({ ...task, after: ["E"] }, definition, runs, [
+      "docs/missing.md",
+      "other.md",
+    ]),
+  ).toEqual([]);
+});
+
+test.each([false, true])(
+  "brief refusal precedes creation and setup=%s, holds once, and reload rechecks",
+  async (setup) => {
+    const f = await preparationFixture(() => "");
+    const config = await Bun.file(join(f.root, ".factory.json")).json();
+    if (!setup) {
+      delete config.setup;
+      delete config.setupTimeoutMs;
+    }
+    await writeFile(join(f.root, ".factory.json"), JSON.stringify(config));
+    const queue = [
+      {
+        id: "A",
+        brief: "Implement docs/absent.md. Private instruction.",
+        after: [],
+        intake: "planned",
+        outcome: "Validated work",
+      },
+      { id: "B", brief: "Independent work", after: [] },
+    ];
+    await writeFile(join(f.root, "tickets.json"), JSON.stringify(queue));
+    await writeFile(
+      join(f.root, ".gitignore"),
+      "node_modules/\ndocs/absent.md\n",
+    );
+    await mkdir(join(f.root, "docs"));
+    await writeFile(join(f.root, "docs/absent.md"), "Not present at the base");
+    f.git("add", ".");
+    f.git("commit", "-qm", "missing brief fixture");
+    const base = f.git("rev-parse", "HEAD");
+    const messages: string[] = [];
+    let creates = 0;
+    const host: NativeHost = {
+      ...f.host,
+      async create() {
+        creates++;
+        return "T-worker";
+      },
+      async send(_id, message) {
+        messages.push(message);
+      },
+    };
+    const engine = createFactory(f.root, host, openStore, () => 1000);
+    const storage = openPersistence(engine.directory, tasks(queue), () => 1000);
+    storage.admit("A");
+    storage.close();
+    const { tools } = watchdogFixture();
+    const tick = (action: "start" | "reconcile" | "reload" | "pause") =>
+      engine.tick(action, "T-owner", host.state, undefined, tools);
+    const stopped = await tick("start");
+    expect(stopped.runs.A).toMatchObject({
+      kind: "blocked",
+      reason: "Brief incomplete; missing ticket file at base: docs/absent.md",
+      incident: {
+        reason: "brief-incomplete",
+        base,
+        attempt: 0,
+        recovery: "inspect",
+        delivery: "sent",
+      },
+    });
+    expect(creates).toBe(0);
+    expect(
+      f.git("worktree", "list", "--porcelain").match(/^worktree /gm),
+    ).toHaveLength(1);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain("Reason: brief-incomplete");
+    const events = factoryEvents(engine.directory, 0, 500);
+    const reopened = createFactory(f.root, host, openStore, () => 1000);
+    expect(
+      await reopened.tick("reconcile", "T-owner", host.state, undefined, tools),
+    ).toEqual(stopped);
+    expect(factoryEvents(engine.directory, 0, 500)).toEqual(events);
+    expect(creates).toBe(0);
+    expect(messages).toHaveLength(1);
+    await tick("reload");
+    const stillMissing = await tick("reconcile");
+    expect(stillMissing.runs.A).toMatchObject({
+      kind: "blocked",
+      incident: { reason: "brief-incomplete", base, attempt: 0 },
+    });
+    expect(stillMissing.runs.A?.incident?.id).not.toBe(
+      stopped.runs.A?.incident?.id,
+    );
+    expect(creates).toBe(0);
+    // A queue fix must replace even an admitted ticket's frozen briefing, not its intake.
+    queue[0]!.brief = "Implement prd.md";
+    await writeFile(join(f.root, "tickets.json"), JSON.stringify(queue));
+    f.git("add", ".");
+    f.git("commit", "-qm", "fix brief fixture");
+    const configured = factoryEvents(engine.directory, 0, 500)!.filter(
+      (event) => event.ticket === "A" && event.action === "configured",
+    );
+    for (const caller of [undefined, "T-stranger" as const]) {
+      const outsider = await engine.tick("reload", caller);
+      expect(outsider.runs.A).toEqual(stillMissing.runs.A);
+      expect(
+        factoryEvents(engine.directory, 0, 500)!.filter(
+          (event) => event.ticket === "A" && event.action === "configured",
+        ),
+      ).toEqual(configured);
+      const stored = openPersistence(engine.directory, []);
+      try {
+        expect(stored.tickets.find((task) => task.id === "A")).toMatchObject({
+          id: "A",
+          brief: "Implement docs/absent.md. Private instruction.",
+          intake: "admitted",
+          after: [],
+        });
+      } finally {
+        stored.close();
+      }
+    }
+    await tick("pause");
+    const loaded = await tick("reload");
+    expect(loaded.enabled).toBe(false);
+    expect(loaded.runs.A).toBeUndefined();
+    expect(creates).toBe(0);
+    const replacement = factoryEvents(engine.directory, 0, 500)!
+      .filter((event) => event.ticket === "A" && event.action === "configured")
+      .at(-1)!;
+    expect(JSON.parse(replacement.detail)).toMatchObject({
+      id: "A",
+      brief: "Implement prd.md",
+      intake: "admitted",
+      after: [],
+    });
+    const started = await tick("start");
+    expect(started.runs.A?.kind).toBe("running");
+    expect(creates).toBe(1);
+    const run = started.runs.A;
+    if (run?.kind !== "running") throw new Error("Expected complete worker");
+    expect(messages.at(-1)).toMatch(/^factory-key: [a-f0-9]{64}\n/);
+    expect(messages.at(-1)?.replace(/^factory-key: [a-f0-9]{64}\n/, "")).toBe(
+      `Work only in your worktree ${run.worktree}. Ticket A: Implement prd.md\nAllowed paths: src/. Check: true.\nDefinition: ${run.definition}.\nDependency evidence: none.\nUse a local commit for the change. Do not push, deploy, create tickets, edit factory files, or delegate.\nForeman: T-owner. Send questions and blockers there with send_thread_message, or the factory control action message-foreman with message text. Messaging does not grant factory control.\nAfter finishing, write JSON to ${join(engine.directory, "A.report.json")}: {"attempt":1,"kind":"candidate","revision":"<full git HEAD>","insight":"<short verified finding>"}. If blocked, use {"attempt":1,"kind":"blocked","reason":"<needed decision>"}. Report briefly here too.`,
+    );
+  },
+);
+
+test("brief refusal repairs accepted empty evidence through owner control actions only", async () => {
+  const f = await preparationFixture(() => "");
+  const config = await Bun.file(join(f.root, ".factory.json")).json();
+  delete config.setup;
+  delete config.setupTimeoutMs;
+  await writeFile(join(f.root, ".factory.json"), JSON.stringify(config));
+  const queue = [
+    { id: "D", brief: "Dependency", after: [] },
+    { id: "A", brief: "Work", after: ["D"] },
+    { id: "B", brief: "Independent", after: [] },
+  ];
+  await writeFile(join(f.root, "tickets.json"), JSON.stringify(queue));
+  f.git("add", ".");
+  f.git("commit", "-qm", "dependency fixture");
+  let creates = 0;
+  const messages: string[] = [];
+  const host: NativeHost = {
+    async create() {
+      return `T-worker-${++creates}`;
+    },
+    async send(_thread, message) {
+      messages.push(message);
+    },
+    async state() {
+      return "idle";
+    },
+    watch() {},
+  };
+  const engine = createFactory(f.root, host, openStore, () => 1000);
+  const { tools } = watchdogFixture();
+  await engine.tick("start", "T-owner", host.state, undefined, tools);
+  const worktree = join(engine.directory, "worktrees/D");
+  await mkdir(join(worktree, "src"));
+  await writeFile(join(worktree, "src/value"), "verified");
+  f.git("-C", worktree, "add", ".");
+  f.git("-C", worktree, "commit", "-qm", "dependency candidate");
+  const revision = f.git("-C", worktree, "rev-parse", "HEAD");
+  await writeFile(
+    join(engine.directory, "D.report.json"),
+    JSON.stringify({
+      kind: "candidate",
+      attempt: 1,
+      revision,
+    }),
+  );
+  const stopped = await engine.tick(
+    "reconcile",
+    "T-owner",
+    host.state,
+    undefined,
+    tools,
+  );
+  expect(stopped.runs.D).toMatchObject({ kind: "done", insight: "", revision });
+  expect(stopped.runs.A).toMatchObject({
+    kind: "blocked",
+    reason: "Brief incomplete; missing dependency insight: D",
+    incident: { reason: "brief-incomplete", attempt: 0 },
+  });
+  expect(creates).toBe(1);
+  const before = factoryEvents(engine.directory, 0, 500);
+  const record = (ticket: string, insight: string, caller?: ThreadID) =>
+    engine.tick(
+      "record-insight",
+      caller,
+      host.state,
+      undefined,
+      undefined,
+      ticket,
+      insight,
+    );
+  for (const caller of [
+    undefined,
+    "T-stranger" as const,
+    "T-worker-1" as const,
+  ])
+    expect(
+      record("D", "Verified dependency behavior", caller),
+    ).rejects.toThrow();
+  expect(record("A", "Not accepted", "T-owner")).rejects.toThrow();
+  expect(record("D", " ", "T-owner")).rejects.toThrow();
+  expect(factoryEvents(engine.directory, 0, 500)).toEqual(before);
+  const recorded = await record("D", "Verified dependency behavior", "T-owner");
+  const dependency = stopped.runs.D;
+  if (dependency?.kind !== "done")
+    throw new Error("Expected accepted dependency");
+  expect(recorded.runs.D).toEqual({
+    ...dependency,
+    insight: "Verified dependency behavior",
+  });
+  expect(recorded.runs.A).toEqual(stopped.runs.A);
+  const events = factoryEvents(engine.directory, 0, 500);
+  await record("D", "Verified dependency behavior", "T-owner");
+  expect(record("D", "Replace evidence", "T-owner")).rejects.toThrow();
+  expect(factoryEvents(engine.directory, 0, 500)).toEqual(events);
+  expect(creates).toBe(1);
+  const loaded = await engine.tick(
+    "reload",
+    "T-owner",
+    host.state,
+    undefined,
+    tools,
+  );
+  expect(loaded.runs.A).toBeUndefined();
+  expect(
+    (await engine.tick("reconcile", "T-owner", host.state, undefined, tools))
+      .runs.A?.kind,
+  ).toBe("running");
+  expect(creates).toBe(2);
+  expect(messages.at(-1)).toContain(
+    `Dependency evidence: D: Verified dependency behavior (${revision}).`,
+  );
+});
+
+test.each([
+  "Create docs/new-guide.md and read SKILL.md",
+  "Implement prd.md. Read SKILL.md and changelog.md; create docs/new-guide.md",
+])("complete brief ignores non-ticket Markdown mentions: %s", async (brief) => {
+  const f = await preparationFixture(() => "");
+  await writeFile(
+    join(f.root, "tickets.json"),
+    JSON.stringify([{ id: "A", brief, after: [] }]),
+  );
+  f.git("add", ".");
+  f.git("commit", "-qm", "complete brief fixture");
+  const messages: string[] = [];
+  const send = f.host.send.bind(f.host);
+  f.host.send = async (thread, message) => {
+    messages.push(message);
+    await send(thread, message);
+  };
+  const state = await f.factory().tick("start");
+  expect(state.runs.A?.kind).toBe("running");
+  expect(f.counts()).toEqual({ creates: 1, sends: 1 });
+  expect(messages[0]).toContain(`Ticket A: ${brief}\nAllowed paths:`);
 });
 
 async function handoffFixture() {
@@ -2683,7 +3010,12 @@ test("four rejections park the worker, release only independent work and require
   const revision = await candidateCommit(f.worktree, "value", "5");
   await writeFile(
     join(engine.directory, "A.report.json"),
-    JSON.stringify({ kind: "candidate", attempt: 5, revision }),
+    JSON.stringify({
+      kind: "candidate",
+      attempt: 5,
+      revision,
+      insight: "Rebased value 5 preserves independent work",
+    }),
   );
   const accepted = await reopened.tick("reconcile");
   expect(accepted.runs.A).toMatchObject({
@@ -3368,7 +3700,12 @@ test("reload pins future definitions while active checks, scope and instructions
   const revision = f.git("-C", f.worktree, "rev-parse", "HEAD");
   await writeFile(
     join(reopened.directory, "A.report.json"),
-    JSON.stringify({ attempt: 1, kind: "candidate", revision }),
+    JSON.stringify({
+      attempt: 1,
+      kind: "candidate",
+      revision,
+      insight: "Verified value under the original pinned definition",
+    }),
   );
   f.host.state = async () => "idle";
   const settled = await f.factory().tick("reconcile");

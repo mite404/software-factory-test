@@ -531,6 +531,33 @@ function runDefinition(
     : config;
 }
 
+/** List absent dispatch facts using paths from the pinned base tree, never the working tree. */
+export function missingBriefFacts(
+  task: Task,
+  definition: DefinitionPin | undefined,
+  runs: State["runs"],
+  baseFiles: readonly string[],
+): string[] {
+  const missing: string[] = [];
+  const files = new Set(baseFiles);
+  const pointer = task.brief.match(
+    /^\s*Implement\s+[`"']?((?:\.\/)?[\w.-]+(?:\/[\w.-]+)*\.md)(?=$|[\s`)"'\],.;:#])/i,
+  );
+  if (pointer) {
+    const path = pointer[1]!.replace(/^\.\//, "");
+    if (!files.has(path)) missing.push(`ticket file at base: ${path}`);
+  }
+  if (!definition) missing.push("pinned definition");
+  if (!definition?.scope.length) missing.push("allowed scope");
+  if (!definition?.verify.trim()) missing.push("verification command");
+  for (const id of task.after) {
+    const dependency = runs[id];
+    if (dependency?.kind === "done" && !dependency.insight.trim())
+      missing.push(`dependency insight: ${id}`);
+  }
+  return [...new Set(missing)];
+}
+
 /** Parse ticket identities and dependencies at the file boundary. @throws On invalid tickets. */
 export function tasks(value: unknown): Task[] {
   if (!Array.isArray(value)) throw new Error("Tickets must be an array");
@@ -1241,9 +1268,10 @@ function checkpointIdentity(run?: Run) {
     run.kind === "parked"
       ? run.repair
       : run.kind === "blocked"
-        ? (run.repair ?? run.checkpoint)
+        ? (run.repair ?? run.checkpoint ?? run)
         : run;
-  if (!checkpoint || !("base" in checkpoint)) return undefined;
+  if (!("base" in checkpoint) || typeof checkpoint.base !== "string")
+    return undefined;
   return {
     base: checkpoint.base,
     attempt: "attempt" in checkpoint ? checkpoint.attempt : 0,
@@ -2513,6 +2541,23 @@ export function createFactory(
         if (git(root, "status", "--porcelain"))
           throw new Error("Commit existing changes before dispatch");
         const base = git(root, "rev-parse", "HEAD");
+        const missing = missingBriefFacts(
+          next,
+          factoryDefinition(directory),
+          state.runs,
+          git(root, "ls-tree", "-rz", "--name-only", base).split("\0"),
+        );
+        if (missing.length) {
+          const reason = `Brief incomplete; missing ${missing.join("; ")}`;
+          state.runs[next.id] = {
+            kind: "blocked",
+            base,
+            definition: config.digest,
+            reason,
+          };
+          commit(next.id, "blocked", reason, "brief-incomplete");
+          return state;
+        }
         const worktree = join(directory, "worktrees", next.id);
         if (config.setup) return prepare(next, base, worktree);
         state.runs[next.id] = {
@@ -2618,6 +2663,34 @@ export function createFactory(
     } finally {
       await store.close();
     }
+  }
+
+  function recordInsight(
+    ticketValue: unknown,
+    value: unknown,
+    owner?: ThreadID,
+  ) {
+    return saveRecord(owner, (persistence) => {
+      const ticket = text(ticketValue);
+      const insight = text(value);
+      const state = persistence.state;
+      const run = Object.hasOwn(state.runs, ticket)
+        ? state.runs[ticket]
+        : undefined;
+      if (!admitsRun(run, "record-insight"))
+        throw new Error("Insight recording requires a done ticket");
+      if (run.insight === insight) return state;
+      if (run.insight.trim())
+        throw new Error("Accepted insight is already recorded");
+      run.insight = insight;
+      persistence.commit(
+        state,
+        ticket,
+        "insight-recorded",
+        "Recorded missing accepted evidence",
+      );
+      return state;
+    });
   }
 
   /** Append a private, dated owner note to the backed-up database.
@@ -2817,6 +2890,73 @@ export function createFactory(
     return result;
   }
 
+  async function loadDefinition(
+    action: "reload" | "admit",
+    owner: ThreadID | undefined,
+    tools: ConnectedTools | undefined,
+    selectedTicket: string | undefined,
+  ) {
+    assertControlCaller(factoryStatus(directory), owner);
+    await configuration(root);
+    const store = openStore(join(directory, "bookkeeping"));
+    try {
+      await store.init();
+      const next =
+        action === "admit"
+          ? await effectiveConfiguration(root)
+          : await configuration(root);
+      assertControlCaller(factoryStatus(directory), owner);
+      const queue = tasks(JSON.parse(await readFile(next.tickets, "utf8")));
+      const persistence = openPersistence(directory, queue, now);
+      try {
+        assertWatchdogCaller(persistence.state, action, owner, tools);
+        if (action === "admit") {
+          assertOwner(persistence.state, owner);
+          persistence.admit(text(selectedTicket));
+          return persistence.state;
+        }
+        persistence.definition(definitionPin(next), true);
+        if (owner && persistence.state.owner === owner)
+          persistence.reloadBriefs();
+        persistence.event("factory", "reloaded", next.digest);
+        if (tools) {
+          restoreTickets(queue, persistence.tickets, persistence.state);
+          await reconcileSchedule(
+            root,
+            directory,
+            persistence.state,
+            queue,
+            tools,
+            () =>
+              persistence.commit(
+                persistence.state,
+                "factory",
+                "watchdog-schedule",
+                persistence.state.monitor!.schedule,
+              ),
+            next.execute,
+            owner,
+            now(),
+          ).catch((error: unknown) => {
+            if (!(error instanceof WatchdogUnavailable)) throw error;
+            persistence.state.monitor!.problem = error.message;
+            persistence.commit(
+              persistence.state,
+              "factory",
+              "watchdog-unconfirmed",
+              error.message,
+            );
+          });
+        }
+        return persistence.state;
+      } finally {
+        persistence.close();
+      }
+    } finally {
+      await store.close();
+    }
+  }
+
   /** Serialize local callbacks; the poteto lock excludes other plugin processes. @throws On unsafe state or failed I/O. */
   function tick(
     action:
@@ -2828,12 +2968,14 @@ export function createFactory(
       | "retry-create"
       | "resume"
       | "admit"
+      | "record-insight"
       | "reload",
     owner?: ThreadID,
     observe: NativeHost["state"] = host.state,
     repairRequest?: Parameters<typeof reconcile>[3],
     tools?: ConnectedTools,
-    admissionTicket?: string,
+    selectedTicket?: string,
+    acceptedInsight?: string,
   ): Promise<State> {
     const result = pending
       .catch(() => {})
@@ -2847,68 +2989,11 @@ export function createFactory(
         }
         assertControlCaller(initial, owner);
         assertWatchdogCaller(initial, action, owner, tools);
+        if (action === "record-insight")
+          return recordInsight(selectedTicket, acceptedInsight, owner);
         if (action === "admit") assertOwner(initial, owner);
-        if (action === "reload" || action === "admit") {
-          assertControlCaller(factoryStatus(directory), owner);
-          await configuration(root);
-          const store = openStore(join(directory, "bookkeeping"));
-          try {
-            await store.init();
-            const next =
-              action === "admit"
-                ? await effectiveConfiguration(root)
-                : await configuration(root);
-            assertControlCaller(factoryStatus(directory), owner);
-            const queue = tasks(
-              JSON.parse(await readFile(next.tickets, "utf8")),
-            );
-            const persistence = openPersistence(directory, queue, now);
-            try {
-              assertWatchdogCaller(persistence.state, action, owner, tools);
-              if (action === "admit") {
-                assertOwner(persistence.state, owner);
-                persistence.admit(text(admissionTicket));
-                return persistence.state;
-              }
-              persistence.definition(definitionPin(next), true);
-              persistence.event("factory", "reloaded", next.digest);
-              if (tools) {
-                restoreTickets(queue, persistence.tickets, persistence.state);
-                await reconcileSchedule(
-                  root,
-                  directory,
-                  persistence.state,
-                  queue,
-                  tools,
-                  () =>
-                    persistence.commit(
-                      persistence.state,
-                      "factory",
-                      "watchdog-schedule",
-                      persistence.state.monitor!.schedule,
-                    ),
-                  next.execute,
-                  owner,
-                  now(),
-                ).catch((error: unknown) => {
-                  if (!(error instanceof WatchdogUnavailable)) throw error;
-                  persistence.state.monitor!.problem = error.message;
-                  persistence.commit(
-                    persistence.state,
-                    "factory",
-                    "watchdog-unconfirmed",
-                    error.message,
-                  );
-                });
-              }
-              return persistence.state;
-            } finally {
-              persistence.close();
-            }
-          } finally {
-            await store.close();
-          }
-        }
+        if (action === "reload" || action === "admit")
+          return loadDefinition(action, owner, tools, selectedTicket);
         await configuration(root);
         if (!retryAdmission(initial, action)) return initial;
         return reconcile(action, owner, observe, repairRequest, tools);

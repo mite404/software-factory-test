@@ -34,6 +34,7 @@ const controlActions = [
   "resume",
   "reload",
   "admit",
+  "record-insight",
 ] as const;
 
 function matchingDeliveries(page: ThreadMessage[], message: string) {
@@ -470,7 +471,13 @@ export default function registerFactory(
         ticket: {
           type: "string",
           description:
-            "Canonical ticket ID for admit, record-merge or record-landing. Only the owning Foreman may use these actions; none starts or dispatches work.",
+            "Canonical ticket ID for admit, record-insight, record-merge or record-landing. Only the owning Foreman may use these actions; none starts or dispatches work.",
+        },
+        insight: {
+          type: "string",
+          minLength: 1,
+          description:
+            "For owner-only record-insight, verified evidence for an already done ticket whose insight is empty. Cannot replace existing nonempty evidence. Repeating the same value is a no-op. Then owner reload releases dependent brief refusals for rechecking without dispatching or starting a paused factory.",
         },
         pr: {
           type: "integer",
@@ -533,11 +540,17 @@ export default function registerFactory(
           (id) => observe(id, liveTools),
           request,
           liveTools,
-          action === "admit" && typeof input.ticket === "string"
+          (action === "admit" || action === "record-insight") &&
+            typeof input.ticket === "string"
             ? input.ticket
             : undefined,
+          typeof input.insight === "string" ? input.insight : undefined,
         );
-        if (action !== "reload" && action !== "status")
+        if (
+          action !== "reload" &&
+          action !== "status" &&
+          action !== "record-insight"
+        )
           await publish(liveTools);
         return JSON.stringify(
           action === "status"
