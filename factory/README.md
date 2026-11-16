@@ -7,6 +7,72 @@ worker retirement, and dashboard chat are not implemented. Remaining stories liv
 The [Foreman prompt](foreman.md) defines the current sequential orchestration procedure. It is a
 reusable prompt, not an automatically installed agent mode or a change to worker instructions.
 
+## Run the weekly failure audit
+
+Once a week, supply `TYPESAFE_API_KEY` through the process environment. Do not put its value in a
+command, transcript, or file. From this checkout, run the audit against the private factory
+directory of the repository you want to audit:
+
+```sh
+bun factory/audit.ts /path/to/repository/.git/factory
+```
+
+The default range is the past seven days, ending when the command starts. To repeat a range, pass
+explicit ISO timestamps. The start is inclusive; the end is exclusive:
+
+```sh
+bun factory/audit.ts /path/to/repository/.git/factory 2026-11-09T00:00:00Z 2026-11-16T00:00:00Z
+```
+
+The collector reads SQLite events and post-graft verdicts without changing them. Event timestamps
+take precedence; verdicts without an event use file modification time. Copies in verdict files,
+review events, and rejection events count once. Each finding becomes one record. A rejected gate
+uses its `<log>.excerpt.json` companion, containing an explicit outcome, exit status, and the same
+stdout and stderr tails sent to the worker. The tails share an 8,192-byte budget and are cut at
+line boundaries. Noisy stderr cannot displace a stdout diagnostic. When a rerun log exists, the
+collector uses that attempt's rerun excerpt rather than the first failure. Candidate verification
+writes the final companion before
+recording its decision; the audit only reads it. Only `gate-failed` excerpts are classified.
+The companion also records `gate-passed` for successful gates, including successful F019 retries.
+Logs without a companion retain a bounded combined tail locally and stay `unsorted` because their
+stream boundaries are unknown. Invalid companions and stops without
+structured findings also remain local `unsorted` records with a reason. Unknown or missing outcomes
+and contradictory exit statuses make a companion invalid. The other outcomes stay local and are
+never sent to the API:
+
+- `gate-not-run` means a candidate revision, clean-tree, or allowed-path precondition failed before
+  execution. Its reason is
+  `Gate not run: candidate revision, clean tree or allowed-path check failed`.
+- `post-gate-changed` means the command passed but left the worktree dirty or moved HEAD. Its reason
+  is `Post-gate clean tree or candidate revision check failed`.
+- `gate-passed` is not a failure finding. If referenced by a failure event, its reason is
+  `Gate passed: no failed gate finding`.
+
+Only severity, location, evidence, and correction text, or a bounded gate excerpt, leave the orb.
+The destination is `POST https://api.typesafe.ai/v1/systemone`, using `jev-latest` and fixed area,
+mistake, layer, impact, and none-fits questions. Ticket metadata, worker briefs, transcripts, and
+full logs are not sent. The key is used only in the authorization header and is redacted from
+finding text and audit output. HTTP bodies and transport errors are never copied into output.
+Finding text can quote private code and file names; review that disclosure before operating this
+command in another repository.
+
+Each record gets at most three requests. HTTP 429 and 529 wait one and then two seconds before
+retrying. Each request has a 30-second timeout and refuses redirects. Other HTTP errors, invalid
+answers, area confidence below 0.7, and none-fits probability at least 0.5 yield `unsorted` with a
+reason. A missing key fails before collection or requests. The command still writes a partial
+ledger when individual classifications fail; inspect `unsorted` even when the command exits zero.
+
+The command writes a new `audit-<date>-<unique-id>.json` ledger with owner-only permissions in the
+private factory directory. It contains the range, every record, validated answers and
+probabilities, thresholds, and bucket summaries. Summaries include counts, tickets, mean impact
+on the 0-to-4 rubric, and the five most frequent finding locations without line numbers. Retain
+the ledger privately; do not commit it or serve it through the dashboard.
+
+Copy the printed brief into one `anthropic/claude-fable-5-2` thread with access to the code and
+ledger. Ask it to audit the recurring boundaries and concepts, not repair individual tickets.
+Inspect its evidence and commit the returned report under `docs/audits/<date>.md`. The script
+never creates threads, installs schedules, changes acceptance, or acts on audit recommendations.
+
 ## Project definition and reload
 
 The project owns one version-1 definition: `factory/definition.yaml`, or legacy `.factory.json`.
