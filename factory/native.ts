@@ -601,6 +601,19 @@ function parseMergeRequest(value: unknown) {
   return { ticket, pr, commit };
 }
 
+function parseLandingRequest(value: unknown) {
+  const raw = object(value);
+  const revision = text(raw.revision);
+  if (!/^[a-f0-9]{40}$/.test(revision))
+    throw new Error("Expected a full candidate revision");
+  return {
+    ...parseMergeRequest(value),
+    incident: text(raw.incident),
+    revision,
+    decision: text(raw.decision),
+  };
+}
+
 function verifyMerge(
   root: string,
   run: Extract<Run, { kind: "done" }>,
@@ -943,6 +956,59 @@ async function currentReport(directory: string, task: Task, attempt: number) {
   if (!existsSync(path)) return null;
   const report = object(JSON.parse(await readFile(path, "utf8")));
   return report.attempt === attempt ? report : null;
+}
+
+function verifiedLanding(
+  root: string,
+  run: Run | undefined,
+  evidence: ReturnType<typeof parseLandingRequest>,
+  owner?: ThreadID,
+): Extract<Run, { kind: "done" }> {
+  if (run?.kind !== "blocked")
+    throw new Error("Landing requires a blocked ticket");
+  const checkpoint = run.repair ?? run.checkpoint;
+  if (
+    !checkpoint ||
+    !Object.entries({
+      id: evidence.incident,
+      owner,
+      ticket: evidence.ticket,
+      base: checkpoint.base,
+      attempt: checkpoint.attempt,
+    }).every(
+      ([key, value]) => run.incident?.[key as keyof StopIncident] === value,
+    )
+  )
+    throw new Error(
+      "Landing requires a blocked ticket and its exact current incident with no queued repair",
+    );
+  git(root, "merge-base", "--is-ancestor", checkpoint.base, evidence.revision);
+  git(
+    checkpoint.worktree,
+    "merge-base",
+    "--is-ancestor",
+    evidence.revision,
+    "HEAD",
+  );
+  const done: Extract<Run, { kind: "done" }> = {
+    kind: "done",
+    definition: run.definition,
+    executor: run.executor,
+    thread: checkpoint.thread,
+    revision: evidence.revision,
+    acceptedBase: checkpoint.base,
+    insight: evidence.decision,
+  };
+  const at = verifyMerge(root, done, evidence.commit);
+  try {
+    git(root, "merge-base", "--is-ancestor", evidence.commit, "HEAD");
+  } catch {
+    throw new Error(
+      "Integrate the fetched upstream into the root checkout first",
+    );
+  }
+  done.merge = { pr: evidence.pr, commit: evidence.commit, at };
+  return done;
 }
 
 function legacyReview(
@@ -2359,11 +2425,13 @@ export function createFactory(
     }
   }
 
-  async function saveMerge(request: unknown, owner?: ThreadID) {
+  async function saveRecord(
+    owner: ThreadID | undefined,
+    record: (persistence: ReturnType<typeof openPersistence>) => State,
+  ) {
     const initial = factoryStatus(directory);
     assertControlCaller(initial, owner);
     assertOwner(initial, owner);
-    const { ticket, pr, commit } = parseMergeRequest(request);
     const store = openStore(join(directory, "bookkeeping"));
     try {
       await store.init();
@@ -2372,20 +2440,7 @@ export function createFactory(
         const state = persistence.state;
         assertControlCaller(state, owner);
         assertOwner(state, owner);
-        const run = Object.hasOwn(state.runs, ticket)
-          ? state.runs[ticket]
-          : undefined;
-        if (run?.kind !== "done")
-          throw new Error("Merge recording requires a done ticket");
-        if (run.merge) {
-          if (run.merge.pr !== pr || run.merge.commit !== commit)
-            throw new Error("Conflicting merge record");
-          return state;
-        }
-        const at = verifyMerge(root, run, commit);
-        run.merge = { pr, commit, at };
-        persistence.commit(state, ticket, "merge-recorded", commit);
-        return state;
+        return record(persistence);
       } finally {
         persistence.close();
       }
@@ -2398,7 +2453,53 @@ export function createFactory(
   function recordMerge(request: unknown, owner?: ThreadID): Promise<State> {
     const result = pending
       .catch(() => {})
-      .then(() => saveMerge(request, owner));
+      .then(() =>
+        saveRecord(owner, (persistence) => {
+          const { ticket, pr, commit } = parseMergeRequest(request);
+          const state = persistence.state;
+          const run = Object.hasOwn(state.runs, ticket)
+            ? state.runs[ticket]
+            : undefined;
+          if (run?.kind !== "done")
+            throw new Error("Merge recording requires a done ticket");
+          if (run.merge) {
+            if (run.merge.pr !== pr || run.merge.commit !== commit)
+              throw new Error("Conflicting merge record");
+            return state;
+          }
+          const at = verifyMerge(root, run, commit);
+          run.merge = { pr, commit, at };
+          persistence.commit(state, ticket, "merge-recorded", commit);
+          return state;
+        }),
+      );
+    pending = result;
+    return result;
+  }
+
+  /** Record an owner's externally landed candidate without dispatch or watchdog effects. @throws On stale incidents, invalid proof, conflicts, or failed I/O. */
+  function recordLanding(request: unknown, owner?: ThreadID): Promise<State> {
+    const result = pending
+      .catch(() => {})
+      .then(() =>
+        saveRecord(owner, (persistence) => {
+          const evidence = parseLandingRequest(request);
+          const { ticket } = evidence;
+          const detail = JSON.stringify(evidence);
+          const state = persistence.state;
+          const run = Object.hasOwn(state.runs, ticket)
+            ? state.runs[ticket]
+            : undefined;
+          if (run?.kind === "done") {
+            if (persistence.lastEvent(ticket, "landed-outside") !== detail)
+              throw new Error("Conflicting landing record");
+            return state;
+          }
+          state.runs[ticket] = verifiedLanding(root, run, evidence, owner);
+          persistence.commit(state, ticket, "landed-outside", detail);
+          return state;
+        }),
+      );
     pending = result;
     return result;
   }
@@ -2502,5 +2603,5 @@ export function createFactory(
     pending = result;
     return result;
   }
-  return { tick, recordMerge, directory };
+  return { tick, recordMerge, recordLanding, directory };
 }

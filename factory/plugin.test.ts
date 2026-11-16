@@ -218,9 +218,10 @@ test.each([
   },
 );
 
-test("owner records a cherry-picked merge across changed adjacent context and publishes only curated metadata", async () => {
+async function recordedMergeFixture(action: string) {
   const root = await mkdtemp(join(tmpdir(), "factory-merge-"));
   const directory = join(root, ".git/factory");
+  const worktree = join(directory, "worktrees/A");
   const canary = "PRIVATE-MERGE-BRIEF-CANARY";
   let effects = 0;
   const queue = ["A", "legacy", "queued"].map((id) => ({
@@ -250,7 +251,11 @@ test("owner records a cherry-picked merge across changed adjacent context and pu
         tickets: "tickets.json",
         scope: ["src/"],
         verify: "false",
-        permissions: { execute: false, publish: false, externalTickets: false },
+        permissions: {
+          execute: false,
+          publish: false,
+          externalTickets: false,
+        },
       }),
     );
     await writeFile(join(root, "value"), "context\nbefore\n");
@@ -261,6 +266,7 @@ test("owner records a cherry-picked merge across changed adjacent context and pu
     await writeFile(join(root, "value"), "context\nafter\n");
     git(root, "commit", "-qam", "accepted change");
     const revision = git(root, "rev-parse", "HEAD");
+    git(root, "worktree", "add", "--detach", worktree, revision);
     git(root, "checkout", "-q", "main");
     await writeFile(join(root, "value"), "main context\nbefore\n");
     await writeFile(join(root, "unrelated"), "main moved\n");
@@ -298,12 +304,38 @@ test("owner records a cherry-picked merge across changed adjacent context and pu
       thread: "T-worker" as const,
       insight: canary,
     };
+    const blocked: Run = {
+      kind: "blocked",
+      thread: "T-worker",
+      reason: "Gate failed twice",
+      repair: {
+        kind: "running",
+        thread: "T-worker",
+        base,
+        worktree,
+        attempt: 2,
+        delivery: "sent",
+      },
+      incident: {
+        id: "current-stop",
+        ticket: "A",
+        owner: "T-owner",
+        base,
+        attempt: 2,
+        reason: "verification-rejected",
+        recovery: "resume",
+        delivery: "sent",
+      },
+    };
     storage.commit(
       {
         enabled: false,
         owner: "T-owner",
         runs: {
-          A: { ...done, acceptedBase: base },
+          A:
+            action === "record-landing"
+              ? blocked
+              : { ...done, acceptedBase: base },
           legacy: done,
         },
       },
@@ -353,10 +385,13 @@ test("owner records a cherry-picked merge across changed adjacent context and pu
       (await status()).tasks.map((task: { merge: unknown }) => task.merge),
     ).toEqual([null, null, null]);
     const request = {
-      action: "record-merge",
+      action,
       ticket: "A",
       pr: 42,
       commit,
+      revision,
+      incident: "current-stop",
+      decision: "Operator verified external landing",
       url: `https://caller.invalid/${canary}`,
     };
     const owner = {
@@ -384,6 +419,17 @@ test("owner records a cherry-picked merge across changed adjacent context and pu
       { pr: Number.MAX_SAFE_INTEGER + 1 },
       { commit: "main" },
       { commit: "f".repeat(40) },
+      ...(action === "record-landing"
+        ? [
+            { incident: "stale-stop" },
+            { incident: undefined },
+            { decision: " " },
+            { decision: undefined },
+            { revision: "main" },
+            { revision: commit },
+            { revision: undefined },
+          ]
+        : []),
     ])
       expect(execute({ ...request, ...invalid }, owner)).rejects.toThrow();
     expect(execute({ ...request, commit: base }, owner)).rejects.toThrow(
@@ -421,9 +467,12 @@ test("owner records a cherry-picked merge across changed adjacent context and pu
     );
     enabled.close();
     expect(execute({ ...request, ticket: "queued" }, owner)).rejects.toThrow(
-      /done ticket/,
+      /done ticket|blocked ticket/,
     );
-    await execute({ ...request, ticket: "legacy" }, owner);
+    await execute(
+      { ...request, action: "record-merge", ticket: "legacy" },
+      owner,
+    );
     const body = await status();
     expect(body.enabled).toBe(true);
     expect(factoryStatus(directory).runs.queued).toEqual(queued);
@@ -463,7 +512,12 @@ test("owner records a cherry-picked merge across changed adjacent context and pu
     await server?.stop(true);
     await rm(root, { recursive: true, force: true });
   }
-});
+}
+
+test.each(["record-merge", "record-landing"])(
+  "owner %s proves a cherry-picked patch across changed context and publishes only curated metadata",
+  recordedMergeFixture,
+);
 
 test("plugin and HTTP keep private briefs and native titles out of public titles", async () => {
   const root = await mkdtemp(join(tmpdir(), "factory-plugin-privacy-"));

@@ -566,6 +566,31 @@ only from the root branch's configured GitHub remote and the validated number. H
 GitHub.com remotes produce `https://github.com/<owner>/<repo>/pull/<pr>`; other remotes produce
 `url: null`. No caller-supplied URL is accepted or stored. Private briefs and insights are excluded.
 
+## Record a ticket landed outside the factory
+
+If the operator approved and merged a blocked candidate outside the native gate and review path,
+the owning Foreman can call `record-landing`. Fetch the root checkout's configured upstream first.
+Integrate the merge into the root checkout before recording; fetching alone is insufficient.
+Supply `ticket`, its exact current `incident` ID, the full worker `revision`, a positive
+integer `pr`, the full merge `commit`, and a nonempty `decision` describing the external approval.
+Do not use this action to bypass an unresolved gate or review.
+
+The run must be blocked with a saved worker checkpoint and no queued repair. Git must prove the
+revision descends from the saved base and is reachable from the original worker worktree's HEAD.
+An earlier candidate can qualify even when the latest report is blocked at a later attempt.
+Neither report text nor the blocked reason proves ownership. The existing `verifyMerge` proof
+must find the exact saved base-to-revision patch and the merge commit on the fetched upstream;
+the merge commit must also be reachable from the root checkout's HEAD.
+Git proves the patch and ancestry, not GitHub's association between the PR number and commit.
+Missing evidence, stale incidents, active or uncertain runs, and conflicting repeats are refused
+without changing the run or its events.
+
+Success stores a done run with its original base, worker, merge record and decision, closes the
+incident, and appends one `landed-outside` event. An identical request, including its incident and
+decision, is a no-op after reload. Recording preserves the enabled state, works while paused, and
+does not dispatch, send messages, or change schedules. Dependents become eligible on the next
+ordinary enabled reconciliation. Existing done tickets still use `record-merge`.
+
 ## Refresh an installed adapter
 
 Run the setup command with `--refresh` to rebuild only the repository's generated plugin:
