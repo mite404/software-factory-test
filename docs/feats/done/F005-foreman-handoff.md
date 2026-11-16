@@ -108,12 +108,12 @@ Run the shared preflight in `docs/v1-execution.md`. Baseline gates have not run 
 
 ## Done when
 
-- [ ] A new thread in the same orb takes over with one call, and the old owner is refused after.
-- [ ] The watchdog follows the owner; no schedule is left pointing at a thread without control.
-- [ ] Workers, reviewers, runs and attempts are untouched, and open incidents are recoverable.
-- [ ] Foreman notes are in the database and in the backup.
-- [ ] Full gates, guard and fresh cold review pass on the exact candidate.
-- [ ] Live proof by the Foreman after acceptance: a second thread on the runner takes over a
+- [x] A new thread in the same orb takes over with one call, and the old owner is refused after.
+- [x] The watchdog follows the owner; no schedule is left pointing at a thread without control.
+- [x] Workers, reviewers, runs and attempts are untouched, and open incidents are recoverable.
+- [x] Foreman notes are in the database and in the backup.
+- [x] Full gates, guard and fresh cold review pass on the exact candidate.
+- [x] Live proof by the Foreman after acceptance: a second thread on the runner takes over a
       paused dogfood factory and hands it back.
 
 ## Notes
