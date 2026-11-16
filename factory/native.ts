@@ -34,6 +34,8 @@ import {
   ticketIntake,
   defaultWatchdog,
   validWatchdogPolicy,
+  validProviderLimitPolicy,
+  reviewerModel,
   type ThreadID,
   type Task,
   type Run,
@@ -64,6 +66,7 @@ const progressActions = new Set([
   "rejected",
   "repair-resumed",
   "review-sent",
+  "review-fallback-creating",
   "review-verdict",
   "review-recovered",
   "provider-recovered",
@@ -260,20 +263,6 @@ export function parseWorkerEffort(
   }
 }
 
-/** Resolve pstack's opposite-family adversary. @throws On unsupported providers. */
-export function reviewerModel(worker: string): `${string}/${string}` {
-  switch (worker.split("/")[0]) {
-    case "openai":
-      return "anthropic/claude-fable-5-2";
-    case "anthropic":
-      return "openai/gpt-6-astra";
-    default:
-      throw new Error(
-        "Review requires an OpenAI or Anthropic implementation worker",
-      );
-  }
-}
-
 /** Resolve a repository-relative input and reject escapes, including symlinks. @throws On escape. */
 export function localPath(root: string, value: string): string {
   const path = resolve(root, value);
@@ -347,7 +336,12 @@ function workerRole(raw: Record<string, unknown>) {
     throw new Error("Invalid review; expected boolean");
   const review = raw.review === true;
   if (review) reviewerModel(workerModel);
-  return { workerModel, workerEffort, workerRunner, review };
+  const providerLimit = raw.providerLimit;
+  if (!validProviderLimitPolicy(providerLimit, workerModel))
+    throw new Error(
+      "Invalid providerLimit; expected wait or fallback with a known independent, non-default reviewerModel and optional workerModel",
+    );
+  return { workerModel, workerEffort, workerRunner, review, providerLimit };
 }
 
 function workerExecutor(workerRunner: string | undefined): Executor {
@@ -493,6 +487,7 @@ export async function effectiveConfiguration(root: string) {
         watchdog: loaded.watchdog ?? defaultWatchdog,
         workerEffort: loaded.workerEffort,
         workerRunner: loaded.workerRunner,
+        providerLimit: loaded.providerLimit,
       }
     : current;
 }
@@ -512,6 +507,7 @@ function definitionPin(
     tickets,
     setup,
     watchdog,
+    providerLimit,
   } = config;
   return {
     digest,
@@ -525,6 +521,7 @@ function definitionPin(
     tickets,
     setup,
     watchdog,
+    ...(providerLimit === undefined ? {} : { providerLimit }),
   };
 }
 
@@ -1035,6 +1032,7 @@ function verifiedLanding(
     thread: checkpoint.thread,
     revision: evidence.revision,
     acceptedBase: checkpoint.base,
+    workerModel: checkpoint.workerModel,
     insight: evidence.decision,
   };
   const at = verifyMerge(root, done, evidence.commit);
@@ -1936,6 +1934,7 @@ export function createFactory(
           executor: run.executor,
           revision,
           acceptedBase: run.base,
+          workerModel: run.workerModel,
           review: run.review,
           insight:
             typeof report.insight === "string"
@@ -2088,9 +2087,17 @@ export function createFactory(
         git(worktree, "merge", "--ff-only", revision);
         if (!unchanged(worktree, revision))
           throw new Error("Staged artifact changed");
+        await createReviewer(task, run);
+      }
+
+      async function createReviewer(
+        task: Task,
+        run: Extract<Run, { kind: "running" }>,
+      ) {
+        const review = run.review!;
         review.thread = await host.create(
           state.owner!,
-          model,
+          review.model,
           "high",
           "reviewer",
           review.executor,
@@ -2120,6 +2127,37 @@ export function createFactory(
         }
         limit.continuation.outcome = "sent";
         commit(task.id, "provider-continuation-sent", thread);
+      }
+
+      async function fallbackReviewer(
+        task: Task,
+        run: Extract<Run, { kind: "running" }>,
+        thread: ThreadID,
+        activity: Activity,
+      ) {
+        const review = run.review;
+        if (typeof activity !== "object" || review?.thread !== thread)
+          return false;
+        const policy = runDefinition(run, config, directory).providerLimit;
+        if (review.fallback || policy?.mode !== "fallback") return false;
+        run.review = {
+          ...review,
+          model: policy.reviewerModel,
+          fallback: {
+            model: review.model,
+            thread,
+            reason: activity.limit.message,
+          },
+          report: `${review.report}.fallback-${randomUUID()}.json`,
+          thread: undefined,
+          evidence: undefined,
+          deliveryIntent: undefined,
+          delivery: "creating",
+        };
+        delete run.incident;
+        commit(task.id, "review-fallback-creating", JSON.stringify(run.review));
+        await createReviewer(task, run);
+        return true;
       }
 
       async function providerWait(
@@ -2164,6 +2202,8 @@ export function createFactory(
         thread: ThreadID,
       ) {
         const activity = await observe(thread);
+        if (await fallbackReviewer(task, run, thread, activity))
+          return "unknown";
         if (await providerWait(task, run, thread, activity)) return "unknown";
         return typeof activity === "object" ? "unknown" : activity;
       }

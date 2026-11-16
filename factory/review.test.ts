@@ -5,8 +5,17 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createFactory, tasks, type NativeHost } from "./native";
-import { deliveryFixture, openStore } from "./bookkeeping.fixture";
-import { factoryStatus, type Task } from "./persistence";
+import {
+  deliveryFixture,
+  openStore,
+  watchdogFixture,
+} from "./bookkeeping.fixture";
+import {
+  factoryEvents,
+  factoryStatus,
+  type Task,
+  type ProviderLimitPolicy,
+} from "./persistence";
 import { reviewPrompt, type Review } from "./review";
 
 const git = (cwd: string, ...args: string[]) =>
@@ -22,6 +31,7 @@ async function fixture(
   scope: Partial<Task> = {},
   workerModel = "openai/gpt-6.1-sol",
   failure = "",
+  providerLimit?: ProviderLimitPolicy,
 ) {
   const root = await mkdtemp(join(tmpdir(), "factory-review-"));
   git(root, "init", "-q");
@@ -50,6 +60,7 @@ async function fixture(
       capacity: 1,
       review: true,
       workerModel,
+      providerLimit,
       prd: "prd.md",
       tickets: "tickets.json",
       scope: ["src/"],
@@ -93,7 +104,15 @@ async function fixture(
   const initial = (await factory.tick("start", "T-owner")).runs.A;
   if (initial?.kind !== "running") throw new Error("No worker");
   const worktree = initial.worktree;
-  const tick = () => factory.tick("reconcile");
+  const { tools } = watchdogFixture();
+  const tick = (connected = false) =>
+    factory.tick(
+      "reconcile",
+      "T-owner",
+      host.state,
+      undefined,
+      connected ? tools : undefined,
+    );
   const status = () => factory.tick("status");
   const review = async () => {
     const run = (await status()).runs.A;
@@ -167,6 +186,236 @@ async function fixture(
     },
   };
 }
+
+test.each([
+  "anthropic/claude-sonnet-4-6",
+  "xai/grok-5",
+  "deepseek/deepseek-r2",
+  "meta/fixture-reviewer",
+  "moonshotai/fixture-reviewer",
+] as const)(
+  "reviewer fallback %s is cold, revision-bound, recorded and used only once across restart",
+  async (fallbackModel) => {
+    const f = await fixture({}, "openai/gpt-6.1-sol", "", {
+      mode: "fallback",
+      reviewerModel: fallbackModel,
+    });
+    try {
+      await f.submit(1);
+      await f.tick();
+      const original = await f.review();
+      await f.verdict();
+      f.observe({
+        kind: "provider-limit",
+        limit: { message: "Fable usage limit", observedAt: Date.now() },
+      });
+      await f.tick();
+      const fallback = await f.review();
+      expect(fallback).toMatchObject({
+        revision: original.revision,
+        base: original.base,
+        worktree: original.worktree,
+        attempt: 1,
+        model: fallbackModel,
+        thread: "T-3",
+        delivery: "sent",
+        fallback: {
+          model: "anthropic/claude-fable-5-2",
+          thread: "T-2",
+          reason: "Fable usage limit",
+        },
+      });
+      expect(fallback.report).not.toBe(original.report);
+      expect(
+        f.settings.map(([, model, effort, role, executor]) => ({
+          model,
+          effort,
+          role,
+          executor,
+        })),
+      ).toEqual([
+        {
+          model: "openai/gpt-6.1-sol",
+          effort: undefined,
+          role: undefined,
+          executor: "local",
+        },
+        {
+          model: "anthropic/claude-fable-5-2",
+          effort: "high",
+          role: "reviewer",
+          executor: "local",
+        },
+        {
+          model: fallbackModel,
+          effort: "high",
+          role: "reviewer",
+          executor: "local",
+        },
+      ]);
+      const message = f.messages.at(-1)!.message;
+      expect(message).toContain(
+        `Inspect git diff ${original.base} ${original.revision}`,
+      );
+      expect(message).toContain(fallback.report);
+      expect(message).not.toContain("CANARY-WORKER-RATIONALE");
+      expect(message).not.toContain("Fable usage limit");
+      f.observe({
+        kind: "provider-limit",
+        limit: { message: "Fallback usage limit", observedAt: Date.now() },
+      });
+      f.reload();
+      await f.tick();
+      const events = factoryEvents(join(f.root, ".git/factory"));
+      await f.tick();
+      expect(factoryEvents(join(f.root, ".git/factory"))).toEqual(events);
+      expect(f.settings).toHaveLength(3);
+      expect((await f.status()).runs.A).toMatchObject({
+        kind: "running",
+        thread: "T-1",
+        attempt: 1,
+      });
+      f.observe("idle");
+      await f.tick(true);
+      await f.tick();
+      expect((await f.status()).runs.A?.kind).toBe("running");
+      await f.verdict();
+      expect((await f.tick()).runs.A).toMatchObject({
+        kind: "done",
+        workerModel: "openai/gpt-6.1-sol",
+        review: {
+          model: fallbackModel,
+          fallback: fallback.fallback,
+        },
+      });
+      expect(await readFile(join(f.root, "src/value"), "utf8")).toBe("value 1");
+      f.reload();
+      expect((await f.status()).runs.A).toMatchObject({
+        kind: "done",
+        review: { fallback: fallback.fallback },
+      });
+    } finally {
+      await f.close();
+    }
+  },
+);
+
+test.each([undefined, { mode: "wait" } as const])(
+  "review limit waits without replacement for policy %j",
+  async (policy) => {
+    const f = await fixture({}, "openai/gpt-6.1-sol", "", policy);
+    try {
+      await f.submit(1);
+      await f.tick();
+      f.observe({
+        kind: "provider-limit",
+        limit: { message: "Usage limit", observedAt: Date.now(), resetAt: 0 },
+      });
+      await f.tick(true);
+      f.reload();
+      const waiting = await f.tick(true);
+      expect(waiting.runs.A).toMatchObject({
+        kind: "running",
+        thread: "T-1",
+        workerModel: "openai/gpt-6.1-sol",
+        review: { thread: "T-2", model: "anthropic/claude-fable-5-2" },
+        incident: {
+          reason: "provider-limit",
+          recovery: "wait",
+          providerLimit: { continuation: { outcome: "sent" } },
+        },
+      });
+      expect(f.settings).toHaveLength(2);
+      expect(
+        f.messages.filter(
+          ({ thread, message }) =>
+            thread === "T-2" && message.startsWith("Continue the same"),
+        ),
+      ).toHaveLength(1);
+    } finally {
+      await f.close();
+    }
+  },
+);
+
+test.each([
+  undefined,
+  { mode: "wait" } as const,
+  { mode: "fallback", reviewerModel: "anthropic/claude-sonnet-4-6" } as const,
+])(
+  "run pins its limit policy %j against a definition reload",
+  async (policy) => {
+    const f = await fixture({}, "openai/gpt-6.1-sol", "", policy);
+    try {
+      await f.submit(1);
+      await f.tick();
+      const path = join(f.root, ".factory.json");
+      const raw = JSON.parse(await readFile(path, "utf8"));
+      raw.providerLimit =
+        policy?.mode === "fallback"
+          ? { mode: "wait" }
+          : { mode: "fallback", reviewerModel: "anthropic/claude-sonnet-4-6" };
+      await writeFile(path, JSON.stringify(raw));
+      await f.loadDefinition();
+      // The integration base must stay clean and unchanged while reviewing.
+      git(f.root, "restore", ".factory.json");
+      f.reload();
+      f.observe({
+        kind: "provider-limit",
+        limit: { message: "Limit", observedAt: Date.now() },
+      });
+      await f.tick();
+      expect((await f.review()).model).toBe(
+        policy?.mode === "fallback"
+          ? "anthropic/claude-sonnet-4-6"
+          : "anthropic/claude-fable-5-2",
+      );
+      expect(f.settings).toHaveLength(policy?.mode === "fallback" ? 3 : 2);
+    } finally {
+      await f.close();
+    }
+  },
+);
+
+test.each(["create", "send"])(
+  "uncertain fallback %s never creates another reviewer",
+  async (failure) => {
+    const f = await fixture({}, "openai/gpt-6.1-sol", "", {
+      mode: "fallback",
+      reviewerModel: "anthropic/claude-sonnet-4-6",
+    });
+    try {
+      await f.submit(1);
+      await f.tick();
+      const create = f.host.create.bind(f.host);
+      const send = f.host.send.bind(f.host);
+      f.host.create = async (...args) => {
+        const thread = await create(...args);
+        if (failure === "create") throw new Error("Unknown fallback creation");
+        return thread;
+      };
+      f.host.send = async (...args) => {
+        await send(...args);
+        if (args[0] === "T-3") throw new Error("Unknown fallback delivery");
+      };
+      f.observe({
+        kind: "provider-limit",
+        limit: { message: "Usage limit", observedAt: Date.now() },
+      });
+      expect(f.tick()).rejects.toThrow(/Unknown fallback/);
+      f.reload();
+      await f.tick();
+      await f.tick();
+      expect(f.settings).toHaveLength(3);
+      expect(await f.review()).toMatchObject({
+        model: "anthropic/claude-sonnet-4-6",
+        delivery: failure === "create" ? "creating" : "sending",
+      });
+    } finally {
+      await f.close();
+    }
+  },
+);
 
 test("cold review skill stays subordinate to the factory verdict contract", () => {
   const review: Review = {

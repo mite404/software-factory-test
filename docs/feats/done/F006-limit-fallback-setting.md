@@ -101,8 +101,8 @@ Run the shared preflight in `docs/v1-execution.md`. Baseline gates have not run 
 
 ## Done when
 
-- [ ] One setting selects wait or fallback, and its absence means wait.
-- [ ] Under fallback a limited reviewer is replaced by one fresh reviewer from another family.
-- [ ] No setting ever creates a second worker for a ticket.
-- [ ] Records show which model reviewed or wrote each attempt.
-- [ ] Full gates, guard and fresh cold review pass on the exact candidate.
+- [x] One setting selects wait or fallback, and its absence means wait.
+- [x] Under fallback a limited reviewer is replaced by one fresh reviewer from another family.
+- [x] No setting ever creates a second worker for a ticket.
+- [x] Records show which model reviewed or wrote each attempt.
+- [x] Full gates, guard and fresh cold review pass on the exact candidate.

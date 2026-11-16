@@ -22,8 +22,8 @@ import {
   migrateDefinition,
   parseSetup,
   parseWorkerEffort,
-  reviewerModel,
 } from "./native";
+import { reviewerModel } from "./persistence";
 
 function discoverStore() {
   const skill = execFileSync("amp", ["skill", "info", "poteto-mode"], {

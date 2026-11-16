@@ -247,12 +247,59 @@ unrelated schedules.
 An unapplied anchor change is retried on the next read, not mistaken for configuration drift.
 `monitor.wakeAt` records only the confirmed anchor, separately from the pending schedule effect.
 UTC and TZID anchors are compared at the requested instant, including daylight-saving offsets.
-The Foreman receives the reset-aligned wake in its existing thread. Workers and reviewers receive
-one continuation per incident.
+The Foreman receives the reset-aligned wake in its existing thread. Waiting workers and reviewers
+receive one continuation per incident.
 Whether the Foreman's `agent.start` handler runs when its own model call fails on a provider limit
 remains unproven. If no connected owner observes a limit, only the ordinary watchdog remains.
 Fixtures prove these decisions, not a live limit, sleeping-orb wake, or successful model recovery.
-Those live proofs remain with the Foreman. No model or provider switch is performed.
+Those live proofs remain with the Foreman. The default policy performs no model or provider switch.
+
+### Provider limit policy
+
+The optional definition setting `providerLimit` selects `mode: wait` or `mode: fallback`. Omission
+and `{ "mode": "wait" }` preserve the wait and continuation behavior above. The policy is pinned
+when a run starts. Reload changes future runs, not active reviews or repairs.
+
+For an OpenAI worker, an explicit reviewer fallback can be configured as follows.
+
+```yaml
+providerLimit:
+  mode: fallback
+  reviewerModel: xai/grok-5
+```
+
+`fallback` requires a `reviewerModel` in `provider/model` format with a known family opposite to
+the implementation worker's family, even when review is disabled. Known first-party namespaces are
+`alibaba`, `anthropic`, `deepseek`, `meta`, `minimax`, `moonshotai`, `openai`, `thinkingmachines`,
+`xai` and `zhipuai`. Hosted and routed namespaces such as `amp`, `openrouter`, `baseten`,
+`fireworks-ai`, `google-vertex`, `nvidia` and `ollama-cloud` do not prove family independence and
+are refused for the implementation worker and fallback reviewer. The fallback must differ from
+the default reviewer model. A different model inside the default reviewer's own family is allowed,
+but only helps with a model-specific limit, not a provider-wide limit. Invalid modes, unknown
+fields, missing models, unknown families, same-worker-family fallbacks and the identical default
+reviewer fail before dispatch and on stored-pin reads.
+
+When a reviewer hits a provider limit, fallback creates one fresh cold reviewer on the named model
+at high effort, on the same executor, for the same ticket, attempt, staged revision and base.
+The replacement receives the original cold review contract, not the limited reviewer's opinions.
+It writes a separate verdict path, so a late verdict from the original reviewer cannot approve
+the candidate. If the fallback is also limited, it waits. There is no fallback chain.
+Creation intent is durable before the call. Unknown creation is held for inspection without a
+second creation, and unknown delivery follows the existing exact-message recovery path.
+
+The private review record's `model` identifies the reviewer actually used. Its `fallback` object
+records the original `model`, original `thread`, and provider-limit `reason`. The
+`review-fallback-creating` and `review-created` events retain this substitution, including failed
+or ambiguous creation. Acceptance retains the review record and actual `workerModel`.
+Old runs without model fields still load without inventing historical model use.
+
+Fallback also accepts an optional `workerModel` in `provider/model` format. The installed
+`@ampcode/plugin` API exposes thread creation and message append, but no model-change operation for
+an existing thread. Workers therefore wait even when `workerModel` is configured. The factory
+never replaces a worker, changes the Foreman's model, selects providers automatically, or routes
+by cost.
+
+### Progress watchdog
 
 Serialized lifecycle reconciliation also checks a progress watchdog. The optional definition setting
 `watchdog` contains positive safe integers `suspicionMs` (default 1800000), `spendingFirstAttempt`
