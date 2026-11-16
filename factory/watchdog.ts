@@ -4,6 +4,13 @@ import type { State, Task } from "./persistence";
 
 const recurrence = "RRULE:FREQ=MINUTELY;INTERVAL=30";
 
+/** Stable identity of this factory at its original root and Git storage paths. */
+export function watchdogFingerprint(root: string, directory: string) {
+  return createHash("sha256")
+    .update(`software-factory-watchdog-v1\0${root}\0${directory}`)
+    .digest("hex");
+}
+
 function anchor(at: number) {
   return `DTSTART:${new Date(at)
     .toISOString()
@@ -27,9 +34,14 @@ function scheduleRecord(raw: unknown): Record<string, unknown> | null {
   return result;
 }
 
-async function readSchedule(tools: PluginTools) {
+async function readSchedule(tools: PluginTools, thread?: ThreadID) {
   try {
-    return scheduleRecord(await tools.call("amp.get_schedule", {}));
+    const schedule = scheduleRecord(
+      await tools.call("amp.get_schedule", thread ? { thread } : {}),
+    );
+    if (thread && schedule && schedule.targetThreadID !== thread)
+      throw new Error("Schedule target does not match the previous owner");
+    return schedule;
   } catch (error) {
     throw new WatchdogUnavailable(
       `Watchdog inspection failed: ${String(error)}`,
@@ -170,6 +182,104 @@ async function changeRegistration(
   return registration(await readSchedule(tools), expected, wakeAt);
 }
 
+async function sendNotification(
+  monitor: NonNullable<State["monitor"]>,
+  tools: PluginTools,
+  notice: { id: string; title: string; body: string },
+  now: () => number,
+  save: () => void,
+  acknowledge = () => {},
+) {
+  if (monitor.notifications.some((delivery) => delivery.id === notice.id))
+    return;
+  const at = now();
+  if (
+    monitor.notifications.filter((delivery) => at - delivery.at < 3_600_000)
+      .length >= 10
+  )
+    return;
+  const delivery = {
+    id: notice.id,
+    at,
+    outcome: "sending" as "sending" | "sent" | "unknown",
+  };
+  monitor.notifications.push(delivery);
+  save();
+  try {
+    await tools.call("amp.notify_user", {
+      title: notice.title,
+      body: notice.body,
+    });
+  } catch {
+    delivery.outcome = "unknown";
+    save();
+    return;
+  }
+  delivery.outcome = "sent";
+  acknowledge();
+  save();
+}
+
+async function clearPreviousOwner(
+  state: State,
+  handoff: NonNullable<State["foreman"]>["handoffs"][number],
+  tools: PluginTools,
+  save: () => void,
+) {
+  try {
+    const previous = await readSchedule(tools, handoff.from);
+    if (!String(previous?.title).includes(state.monitor!.fingerprint))
+      throw new WatchdogUnavailable(
+        "Previous owner's watchdog inspection is unconfirmed; preserve unrelated schedules",
+      );
+    await tools
+      .call("amp.clear_schedule", { thread: handoff.from })
+      .catch(() => undefined);
+    if ((await readSchedule(tools, handoff.from)) !== null)
+      throw new WatchdogUnavailable(
+        "Previous owner's watchdog clear is unconfirmed",
+      );
+  } catch (error) {
+    handoff.clear = "unreachable";
+    handoff.problem = String(error);
+    save();
+    return;
+  }
+  // One confirmed clear settles every outstanding handoff from that thread.
+  for (const previous of state.foreman!.handoffs) {
+    if (previous.from !== handoff.from) continue;
+    previous.clear = "cleared";
+    delete previous.problem;
+  }
+  save();
+}
+
+async function clearPreviousOwners(
+  state: State,
+  tools: PluginTools,
+  save: () => void,
+  at: number,
+) {
+  const monitor = state.monitor!;
+  for (const [index, handoff] of (state.foreman?.handoffs ?? []).entries()) {
+    // Hand-back makes this registration the current owner's wake, not stale cleanup.
+    if (handoff.clear === "cleared" || handoff.from === state.owner) continue;
+    await clearPreviousOwner(state, handoff, tools, save);
+    if (handoff.clear !== "unreachable") continue;
+    await sendNotification(
+      monitor,
+      tools,
+      {
+        id: `handoff-${index}`,
+        title: "Factory watchdog cleanup unconfirmed",
+        body: "The previous Foreman's watchdog clear could not be confirmed. New-owner registration proceeds independently. Read factory status for the handoff problem. Connected reconciles retry cleanup; do not clear unrelated schedules.",
+      },
+      () => at,
+      save,
+    );
+  }
+}
+
 /** Reconcile only this factory's existing-thread schedule under the lifecycle lock.
  * @throws On conflict, unavailable inspection, or an unconfirmed remote effect.
  */
@@ -184,10 +294,8 @@ export async function reconcileSchedule(
   thread: ThreadID | undefined = state.owner,
   at = Date.now(),
 ) {
-  if (!tools || (state.enabled && !execute)) return;
-  const fingerprint = createHash("sha256")
-    .update(`software-factory-watchdog-v1\0${root}\0${directory}`)
-    .digest("hex");
+  if (!tools) return;
+  const fingerprint = watchdogFingerprint(root, directory);
   const monitor = monitorState(state, fingerprint, thread, save);
   const title = `Factory watchdog ${fingerprint}`;
   const prompt = `${title}. Factory root: ${root}. Read factory status and match this fingerprint to durable monitor state before acting. Use the supported factory reconcile action in this connected owner thread. Diagnose current incidents against private evidence and worker activity; use only the supported exact-incident recovery action after resolving its cause. For resume supply ticket, current incident ID and diagnosis decision; paused factories stay paused. Running or unknown activity retains the same worker. Never blindly resume, grant permission, replace a worker, accept code or retry an uncertain remote effect. Inspect actual schedule state after ambiguous create or clear; held sending/unknown alert reservations are not retry instructions. Do not separately notify for a reserved intent. Preserve unrelated schedules and second roots. Normal gates and cold review still apply. Report the current incident and next safe action briefly, or give one short no-change update. This wake grants no permission. The factory source's foreman.md Saved watchdog turn section has further operating guidance; it need not exist in the managed repository.`;
@@ -215,6 +323,8 @@ export async function reconcileSchedule(
   });
   const wakeAt = resets.length ? Math.min(...resets) : undefined;
   try {
+    await clearPreviousOwners(state, tools, save, at);
+    if (state.enabled && !execute) return;
     const current = registration(await readSchedule(tools), expected, wakeAt);
     if (current === "conflict" && wanted) {
       monitor.schedule = "conflict";
@@ -279,39 +389,23 @@ export async function deliverAlerts(
       : (run.watchdog?.alerts ?? []).map((alert) => ({ ticket, alert })),
   );
   for (const { ticket, alert } of pending) {
-    if (
-      alert.acknowledgedAt !== undefined ||
-      monitor.notifications.some((delivery) => delivery.id === alert.id)
-    )
-      continue;
-    const at = now();
-    if (
-      monitor.notifications.filter((delivery) => at - delivery.at < 3_600_000)
-        .length >= 10
-    )
-      return;
-    const delivery = {
-      id: alert.id,
-      at,
-      outcome: "sending" as "sending" | "sent" | "unknown",
-    };
-    monitor.notifications.push(delivery);
-    save();
-    try {
-      await tools.call("amp.notify_user", {
+    if (alert.acknowledgedAt !== undefined) continue;
+    await sendNotification(
+      monitor,
+      tools,
+      {
+        id: alert.id,
         title: "Factory needs diagnosis",
         body: `Ticket ${ticket.slice(0, 80)}, attempt ${alert.attempt}. ${alert.kind === "spending" ? "Repeated repair spending" : "No lifecycle progress"}. Incident ${alert.episode}. Read factory status and private evidence; this alert grants no permission.`.slice(
           0,
           300,
         ),
-      });
-    } catch {
-      delivery.outcome = "unknown";
-      save();
-      continue;
-    }
-    delivery.outcome = "sent";
-    alert.acknowledgedAt = now();
-    save();
+      },
+      now,
+      save,
+      () => {
+        alert.acknowledgedAt = now();
+      },
+    );
   }
 }

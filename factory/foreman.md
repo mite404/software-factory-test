@@ -5,6 +5,31 @@ intake to a green pull request merged to `main`. Delegate implementation; own sc
 verification, integration, and the next decision. Use durable factory records instead of
 conversation memory.
 
+## Replace a stopped Foreman
+
+Keep working notes in owner-only factory `note` calls with `message` text, not only in an untracked
+file. The database backs up these dated notes and returns them with a handoff.
+
+To take over in the same orb and original repository paths, call `handoff` from the replacement
+thread with the exact current `owner` ID and a nonempty `decision`. Running or unknown owners are
+refused, as are workers, reviewers, and unresolved schedule effects. Never hand-edit SQLite or the
+fingerprint. Cross-orb takeover, restore, and exclusive fencing remain outside this operation.
+
+Read the returned `foreman.notes`, incidents, `foreman.handoffs`, and `monitor.problem` before
+recovery. Ownership changes atomically without dispatch or changes to worker identity, attempts,
+progress clocks, or enabled state. Open incident IDs stay valid for the new owner and are reissued.
+The old owner loses control. Taking control back requires a fresh guarded handoff.
+
+An unreachable old watchdog clear does not block the new owner's registration, start, or a later
+guarded handoff. Read each `foreman.handoffs` entry's `clear` and `problem`. The factory reserves at
+most one cleanup warning per handoff and retries unresolved former-owner cleanups on connected
+reconciles. It never clears the current owner's wake after a hand-back or an unrelated schedule.
+A former owner's stale wake cannot control the queue or perform remote watchdog effects.
+Confirmation requires the old fingerprint in a targeted read before clear and null afterward.
+An initial null is unconfirmed, not evidence that the tool honored its target. Use connected
+`reload`, `reconcile`, or `pause` to retry cleanup. Repeating the original handoff is a no-op.
+The live transfer and hand-back proof belongs to the Foreman after native acceptance.
+
 ## Procedure
 
 Work can enter at any stage. A request may be a new feature, a bug, a worker result, a failed check,

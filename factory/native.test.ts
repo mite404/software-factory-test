@@ -220,6 +220,477 @@ afterEach(async () => {
     await rm(root, { recursive: true, force: true });
 });
 
+async function handoffFixture() {
+  const f = await preparationFixture(() => "");
+  const engine = createFactory(f.root, f.host, openStore, () => 1000);
+  const old = watchdogFixture();
+  const next = watchdogFixture("T-new", old.schedules);
+  await engine.tick("start", "T-owner", f.host.state, undefined, old.tools);
+  const storage = openPersistence(engine.directory, []);
+  try {
+    const run = storage.state.runs.A;
+    if (run?.kind !== "running") throw new Error("Expected dispatched fixture");
+    storage.state.runs.A = {
+      kind: "blocked",
+      thread: run.thread,
+      reason: "Verification rejected",
+      repair: { ...run, attempt: 2 },
+      watchdog: run.watchdog,
+      incident: {
+        id: "stop-exact",
+        owner: "T-owner",
+        ticket: "A",
+        attempt: 2,
+        base: run.base,
+        reason: "verification-rejected",
+        recovery: "resume",
+        delivery: "sent",
+        notifiedAt: 500,
+      },
+    };
+    storage.commit(storage.state, "A", "fixture-stop", "");
+  } finally {
+    storage.close();
+  }
+  f.host.state = async () => "idle";
+  const notices: { thread: string; message: string }[] = [];
+  f.host.send = async (thread, message) => {
+    notices.push({ thread, message });
+  };
+  return { ...f, engine, old, next, notices };
+}
+
+test("handoff preserves workers and incident identity, reissues stops, and permits exact recovery", async () => {
+  const f = await handoffFixture();
+  await f.engine.note("Keep the existing worker", "T-owner");
+  await f.engine.note("Live acceptance is pending", "T-owner");
+  const before = factoryStatus(f.engine.directory);
+  const engine = createFactory(f.root, f.host, openStore, () => 2000);
+  const request = {
+    owner: "T-owner",
+    decision: "Provider limit stopped the Foreman",
+  };
+  const result = await engine.handoff(request, "T-new", f.next.tools);
+  expect(result.owner).toBe("T-new");
+  expect(result.enabled).toBe(true);
+  expect(result.runs.A).toEqual({
+    ...before.runs.A,
+    incident: {
+      ...before.runs.A!.incident!,
+      owner: "T-new" as const,
+      delivery: "sent" as const,
+      notifiedAt: 2000,
+    },
+  });
+  expect(result.foreman?.notes).toEqual([
+    { at: 1000, thread: "T-owner", text: "Keep the existing worker" },
+    { at: 1000, thread: "T-owner", text: "Live acceptance is pending" },
+  ]);
+  expect(f.notices).toEqual([
+    { thread: "T-new", message: expect.stringContaining("stop-exact") },
+  ]);
+  expect([...f.old.schedules.keys()]).toEqual(["T-new"]);
+  expect(f.old.schedules.get("T-new")).toMatchObject({
+    enabled: true,
+    targetThreadID: "T-new",
+  });
+  const bytes = await readFile(join(engine.directory, "state.sqlite"));
+  expect(await engine.handoff(request, "T-new", f.next.tools)).toEqual(result);
+  expect(await readFile(join(engine.directory, "state.sqlite"))).toEqual(bytes);
+  expect(f.notices).toHaveLength(1);
+  for (const action of [
+    "start",
+    "pause",
+    "reconcile",
+    "reload",
+    "resume",
+  ] as const)
+    expect(engine.tick(action, "T-owner")).rejects.toThrow("Former Foreman");
+  expect(engine.note("Stale owner", "T-owner")).rejects.toThrow(
+    "Former Foreman",
+  );
+  await engine.tick("pause", "T-new", f.host.state, undefined, f.next.tools);
+  const resumed = await engine.tick(
+    "resume",
+    "T-new",
+    f.host.state,
+    {
+      ticket: "A",
+      incident: "stop-exact",
+      decision: "Fix the verification failure",
+    },
+    f.next.tools,
+  );
+  expect(resumed.enabled).toBe(false);
+  expect(resumed.runs.A).toMatchObject({
+    kind: "running",
+    thread: "T-prepared",
+    attempt: 3,
+    delivery: "queued",
+  });
+  expect(f.counts().creates).toBe(1);
+});
+
+async function handoffGuardFixture(fault: string) {
+  const f = await handoffFixture();
+  const storage = openPersistence(f.engine.directory, []);
+  try {
+    if (fault === "pending") storage.state.monitor!.pendingThread = "T-owner";
+    if (fault === "fingerprint")
+      storage.state.monitor!.fingerprint = "copied-root";
+    if (fault === "reviewer") {
+      const run = storage.state.runs.A;
+      if (run?.kind !== "blocked" || !run.repair)
+        throw new Error("Expected repair");
+      storage.state.runs.Review = {
+        ...run.repair,
+        review: {
+          ticket: "A",
+          attempt: 2,
+          base: run.repair.base,
+          revision: "b".repeat(40),
+          stage: "post-graft",
+          worktree: "/TEST/review",
+          report: "/TEST/verdict",
+          log: "/TEST/log",
+          model: "anthropic/reviewer",
+          command: "true",
+          delivery: "sent",
+          thread: "T-reviewer",
+        },
+      };
+    }
+    storage.commit(storage.state, "factory", "fixture-guard", "");
+  } finally {
+    storage.close();
+  }
+  return f;
+}
+
+test.each([
+  "wrong-owner",
+  "empty-decision",
+  "missing-decision",
+  "worker",
+  "reviewer",
+  "running",
+  "unknown",
+  "disconnected",
+  "pending",
+  "fingerprint",
+])("handoff refuses %s without changing state or schedules", async (fault) => {
+  const f = await handoffGuardFixture(fault);
+  const before = factoryStatus(f.engine.directory);
+  const bytes = await readFile(join(f.engine.directory, "state.sqlite"));
+  const schedules = structuredClone(f.old.schedules);
+  const request = {
+    owner: fault === "wrong-owner" ? "T-wrong" : "T-owner",
+    decision:
+      fault === "empty-decision"
+        ? "  "
+        : fault === "missing-decision"
+          ? undefined
+          : "Take over",
+  };
+  const caller =
+    fault === "worker"
+      ? "T-prepared"
+      : fault === "reviewer"
+        ? "T-reviewer"
+        : "T-new";
+  expect(
+    f.engine.handoff(
+      request,
+      caller,
+      fault === "disconnected" ? undefined : f.next.tools,
+      async () =>
+        fault === "running"
+          ? "running"
+          : fault === "unknown"
+            ? "unknown"
+            : "idle",
+    ),
+  ).rejects.toThrow();
+  expect(factoryStatus(f.engine.directory)).toEqual(before);
+  expect(await readFile(join(f.engine.directory, "state.sqlite"))).toEqual(
+    bytes,
+  );
+  expect(f.old.schedules).toEqual(schedules);
+  expect(f.notices).toEqual([]);
+});
+
+async function handoffScheduleFixture(fault: string) {
+  const f = await handoffFixture();
+  let effects = 0;
+  let clears = 0;
+  let targetedReads = 0;
+  let blocked = true;
+  if (fault === "foreign")
+    f.old.schedules.set("T-owner", {
+      title: "Unrelated",
+      prompt: "Keep",
+      targetThreadID: "T-owner",
+    });
+  if (fault === "wrong-target")
+    f.old.schedules.get("T-owner")!.targetThreadID = "T-other";
+  async function readOld() {
+    targetedReads++;
+    if (blocked && fault === "ignored-target") return null;
+    if (
+      blocked &&
+      (fault === "unreadable" || (fault === "lost-inspection" && clears > 0))
+    )
+      throw new Error("Old thread unavailable");
+    return f.next.tools.call("amp.get_schedule", { thread: "T-owner" });
+  }
+  async function clearOld() {
+    clears++;
+    expect(factoryStatus(f.engine.directory).owner).toBe("T-new");
+    if (fault === "denied" && blocked) throw new Error("Permission refused");
+    if (fault === "false-success" && blocked) return { deleted: true };
+    const result = await f.next.tools.call("amp.clear_schedule", {
+      thread: "T-owner",
+    });
+    if (fault === "lost-ack") throw new Error("Lost clear acknowledgment");
+    return result;
+  }
+  const tools = {
+    async call(name: string, input: Record<string, unknown>) {
+      if (name === "amp.get_schedule" && input.thread === "T-owner")
+        return readOld();
+      if (name === "amp.clear_schedule" && input.thread === "T-owner")
+        return clearOld();
+      if (name === "amp.set_schedule") effects++;
+      return f.next.tools.call(name, input);
+    },
+  };
+  return {
+    ...f,
+    tools,
+    effects: () => ({ installs: effects, clears, reads: targetedReads }),
+    unblock() {
+      blocked = false;
+      if (fault === "wrong-target")
+        f.old.schedules.get("T-owner")!.targetThreadID = "T-owner";
+    },
+  };
+}
+
+test.each([
+  ["cleared", false, 1, 2],
+  ["lost-ack", false, 1, 2],
+  ["denied", true, 1, 2],
+  ["false-success", true, 1, 2],
+  ["unreadable", true, 0, 1],
+  ["lost-inspection", true, 1, 2],
+  ["foreign", true, 0, 1],
+  ["wrong-target", true, 0, 1],
+  ["ignored-target", true, 0, 1],
+] as const)(
+  "handoff watchdog follows the owner despite %s cleanup",
+  async (fault, failed, clears, reads) => {
+    const f = await handoffScheduleFixture(fault);
+    const result = await f.engine.handoff(
+      { owner: "T-owner", decision: "Take over" },
+      "T-new",
+      f.tools,
+    );
+    expect(result.owner).toBe("T-new");
+    expect(result.monitor!.schedule).toBe("installed");
+    expect(result.foreman!.handoffs.at(-1)!.clear).toBe(
+      failed ? "unreachable" : "cleared",
+    );
+    expect(f.effects()).toEqual({ installs: 1, clears, reads });
+    if (failed) {
+      expect(result.foreman?.handoffs.at(-1)?.problem).toMatch(
+        /inspection|unconfirmed/,
+      );
+      expect(f.next.notifications).toHaveLength(1);
+      f.unblock();
+      const engine = createFactory(f.root, f.host, openStore);
+      const recovered = await engine.tick(
+        "reload",
+        "T-new",
+        f.host.state,
+        undefined,
+        f.tools,
+      );
+      expect(recovered.monitor?.schedule).toBe("installed");
+      const confirmed = !["foreign", "lost-inspection"].includes(fault);
+      expect(recovered.foreman?.handoffs.at(-1)?.clear).toBe(
+        confirmed ? "cleared" : "unreachable",
+      );
+      expect(f.old.schedules.has("T-new")).toBe(true);
+      expect(f.next.notifications).toHaveLength(1);
+      expect(f.effects().installs).toBe(1);
+    }
+    if (fault === "foreign")
+      expect(f.old.schedules.get("T-owner")).toEqual({
+        title: "Unrelated",
+        prompt: "Keep",
+        targetThreadID: "T-owner",
+      });
+  },
+);
+
+test("unreachable cleanup permits start and hand-back without clearing the returning owner's wake", async () => {
+  const f = await handoffScheduleFixture("denied");
+  await f.engine.handoff(
+    { owner: "T-owner", decision: "Take over" },
+    "T-new",
+    f.tools,
+  );
+  await f.engine.tick("pause", "T-new", f.host.state, undefined, f.tools);
+  const started = await f.engine.tick(
+    "start",
+    "T-new",
+    f.host.state,
+    undefined,
+    f.tools,
+  );
+  expect(started.enabled).toBe(true);
+  expect(started.monitor?.schedule).toBe("installed");
+  expect(started.foreman?.handoffs[0]?.clear).toBe("unreachable");
+  expect(f.next.notifications).toHaveLength(1);
+  expect(
+    f.engine.tick("reconcile", "T-owner", f.host.state, undefined, f.old.tools),
+  ).rejects.toThrow(/handoff/);
+  const back = await f.engine.handoff(
+    { owner: "T-new", decision: "Hand back despite unreachable cleanup" },
+    "T-owner",
+    f.old.tools,
+  );
+  expect(back.owner).toBe("T-owner");
+  expect(back.enabled).toBe(true);
+  expect(back.foreman?.handoffs.map((handoff) => handoff.clear)).toEqual([
+    "unreachable",
+    "cleared",
+  ]);
+  await f.engine.tick(
+    "reload",
+    "T-owner",
+    f.host.state,
+    undefined,
+    f.old.tools,
+  );
+  expect([...f.old.schedules.keys()]).toEqual(["T-owner"]);
+  expect(factoryStatus(f.engine.directory).monitor?.schedule).toBe("installed");
+  expect(f.counts().creates).toBe(1);
+  const third = watchdogFixture("T-third", f.old.schedules);
+  const movedAgain = await f.engine.handoff(
+    { owner: "T-owner", decision: "Take over after hand-back" },
+    "T-third",
+    third.tools,
+  );
+  expect(movedAgain.foreman?.handoffs.map((handoff) => handoff.clear)).toEqual([
+    "cleared",
+    "cleared",
+    "cleared",
+  ]);
+  expect([...f.old.schedules.keys()]).toEqual(["T-third"]);
+  expect(movedAgain.monitor?.schedule).toBe("installed");
+  expect(third.notifications).toHaveLength(0);
+});
+
+test("connected reconciles retry unresolved cleanup from earlier handoffs", async () => {
+  const f = await handoffScheduleFixture("denied");
+  await f.engine.handoff(
+    { owner: "T-owner", decision: "Take over" },
+    "T-new",
+    f.tools,
+  );
+  const third = watchdogFixture("T-third", f.old.schedules);
+  const tools = {
+    async call(name: string, input: Record<string, unknown>) {
+      if (name === "amp.clear_schedule" && input.thread === "T-owner")
+        throw new Error("Old thread still unreachable");
+      return third.tools.call(name, input);
+    },
+  };
+  const moved = await f.engine.handoff(
+    { owner: "T-new", decision: "Further guarded takeover" },
+    "T-third",
+    tools,
+  );
+  expect(moved.monitor?.schedule).toBe("installed");
+  expect(moved.foreman?.handoffs.map((handoff) => handoff.clear)).toEqual([
+    "unreachable",
+    "cleared",
+  ]);
+  expect([...f.old.schedules.keys()]).toEqual(["T-owner", "T-third"]);
+  const reopened = createFactory(f.root, f.host, openStore);
+  const recovered = await reopened.tick(
+    "reload",
+    "T-third",
+    f.host.state,
+    undefined,
+    third.tools,
+  );
+  expect(recovered.foreman?.handoffs.map((handoff) => handoff.clear)).toEqual([
+    "cleared",
+    "cleared",
+  ]);
+  expect([...f.old.schedules.keys()]).toEqual(["T-third"]);
+  expect(f.next.notifications).toHaveLength(1);
+  expect(third.notifications).toHaveLength(0);
+});
+
+test("a handoff cleanup alert is durably reserved and not resent after an unknown send", async () => {
+  const f = await handoffScheduleFixture("denied");
+  const tools = {
+    async call(name: string, input: Record<string, unknown>) {
+      if (name !== "amp.notify_user") return f.tools.call(name, input);
+      expect(factoryStatus(f.engine.directory).monitor?.notifications).toEqual([
+        { id: "handoff-0", at: 1000, outcome: "sending" },
+      ]);
+      await f.tools.call(name, input);
+      throw new Error("Notification acknowledgment lost");
+    },
+  };
+  const moved = await f.engine.handoff(
+    { owner: "T-owner", decision: "Take over" },
+    "T-new",
+    tools,
+  );
+  expect(moved.monitor?.schedule).toBe("installed");
+  expect(moved.monitor?.notifications).toEqual([
+    { id: "handoff-0", at: 1000, outcome: "unknown" },
+  ]);
+  const reopened = createFactory(f.root, f.host, openStore);
+  await reopened.tick("reload", "T-new", f.host.state, undefined, tools);
+  expect(f.next.notifications).toHaveLength(1);
+  expect(factoryStatus(f.engine.directory).foreman?.handoffs[0]?.clear).toBe(
+    "unreachable",
+  );
+});
+
+test("paused handoff and hand-back never start execution or install a watchdog", async () => {
+  const f = await handoffFixture();
+  await f.engine.tick("pause", "T-owner", f.host.state, undefined, f.old.tools);
+  const next = await f.engine.handoff(
+    { owner: "T-owner", decision: "Paused takeover" },
+    "T-new",
+    f.next.tools,
+  );
+  expect(next.enabled).toBe(false);
+  expect(next.monitor?.schedule).toBe("cleared");
+  expect(f.old.schedules.size).toBe(0);
+  const back = await f.engine.handoff(
+    { owner: "T-new", decision: "Hand back" },
+    "T-owner",
+    f.old.tools,
+  );
+  expect(back.owner).toBe("T-owner");
+  expect(back.enabled).toBe(false);
+  expect(back.foreman?.handoffs).toHaveLength(2);
+  expect(back.runs.A?.incident).toMatchObject({
+    id: "stop-exact",
+    owner: "T-owner",
+  });
+  expect(f.old.schedules.size).toBe(0);
+  expect(f.counts().creates).toBe(1);
+});
+
 async function externalLandingFixture() {
   const f = await preparationFixture(() => "");
   await writeFile(

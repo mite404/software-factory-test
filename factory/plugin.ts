@@ -426,9 +426,23 @@ export default function registerFactory(
   }, 5000);
   void publish();
   const suffix = createHash("sha256").update(root).digest("hex").slice(0, 8);
-  const recordings = new Map<unknown, typeof factory.recordMerge>([
-    ["record-merge", factory.recordMerge],
-    ["record-landing", factory.recordLanding],
+  const recordings = new Map<
+    unknown,
+    (input: Record<string, unknown>, ctx: PluginToolContext) => Promise<State>
+  >([
+    ["record-merge", (input, ctx) => factory.recordMerge(input, ctx.thread.id)],
+    [
+      "record-landing",
+      (input, ctx) => factory.recordLanding(input, ctx.thread.id),
+    ],
+    ["note", (input, ctx) => factory.note(input.message, ctx.thread.id)],
+    [
+      "handoff",
+      (input, ctx) =>
+        factory.handoff(input, ctx.thread.id, ctx.tools, (id) =>
+          observe(id, ctx.tools),
+        ),
+    ],
   ]);
   amp.registerTool({
     name: `factory_control_${suffix}`,
@@ -464,8 +478,19 @@ export default function registerFactory(
             "For owner-only record-landing, a revision descending from the saved base and reachable from the worker worktree HEAD. Requires the current incident, decision, PR and merge commit. Git must prove the exact patch upstream and the merge in both upstream and root HEAD. Later blocked reports do not disqualify earlier candidates. No dispatch or schedule effects.",
         },
         decision: { type: "string" },
+        owner: {
+          type: "string",
+          pattern: "^T-[a-zA-Z0-9_-]+$",
+          description:
+            "For explicit same-orb handoff from the exact current owner. Requires a decision and connected tools; running or unknown owners, workers and reviewers are refused. Unconfirmed old-watchdog cleanup is recorded and retried without blocking new-owner monitoring or later guarded handoffs. Runs and execution permission do not change. The result includes durable Foreman notes.",
+        },
         incident: { type: "string", minLength: 1 },
-        message: { type: "string", minLength: 1 },
+        message: {
+          type: "string",
+          minLength: 1,
+          description:
+            "Worker message for message-foreman, or a private dated database note for owner-only note. Notes are included in SQLite backups.",
+        },
       },
       required: ["action"],
       additionalProperties: false,
@@ -479,7 +504,7 @@ export default function registerFactory(
         return JSON.stringify(await backup(root));
       }
       const record = recordings.get(requested);
-      if (record) return JSON.stringify(await record(input, ctx.thread.id));
+      if (record) return JSON.stringify(await record(input, ctx));
       const action = controlActions.find((action) => action === requested);
       if (!action) throw new Error("Unknown action");
       const tools = connectedTools(

@@ -294,7 +294,7 @@ process.exit(code);
       JSON.parse(await new Response(cli.stdout).text()).lastConfirmed.revision,
     ).toBe(revision);
     let execute!: (
-      input: { action: string },
+      input: Record<string, unknown>,
       ctx: PluginToolContext,
     ) => Promise<unknown>;
     registerFactory(
@@ -595,6 +595,16 @@ try {
         },
       },
     };
+    const noteStorage = openPersistence(directory, []);
+    noteStorage.commit(retainedState, "factory", "fixture-notes", "");
+    noteStorage.close();
+    await execute(
+      { action: "note", message: "Keep the original worker after takeover" },
+      {
+        thread: { id: "T-foreman" },
+      } as unknown as PluginToolContext,
+    );
+    retainedState.foreman = factoryStatus(directory).foreman;
     let writes = 0;
     writer = setInterval(() => {
       const storage = openPersistence(directory, []);
@@ -641,6 +651,13 @@ try {
       ...retainedState,
       enabled: Number(event.detail) % 2 === 1,
     });
+    expect(factoryStatus(snapshotDirectory).foreman!.notes).toEqual([
+      {
+        at: expect.any(Number),
+        thread: "T-foreman",
+        text: "Keep the original worker after takeover",
+      },
+    ]);
     const workspace = join(directory, "backup/repository");
     await writeFile(join(workspace, "conflict"), "do not discard");
     expect(backup(project)).rejects.toThrow(

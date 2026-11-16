@@ -13,6 +13,141 @@ import { watchdogFixture } from "./bookkeeping.fixture";
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 
+test("connected handoff observes the exact old owner and returns private durable notes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "factory-plugin-handoff-"));
+  const directory = join(root, ".git/factory");
+  const fixture = watchdogFixture("T-new");
+  let ownerActivity = "running";
+  let execute!: (
+    input: Record<string, unknown>,
+    ctx: PluginToolContext,
+  ) => Promise<unknown>;
+  let dispose = () => {};
+  let server: ReturnType<typeof startDashboard> | undefined;
+  try {
+    git(root, "init", "-qb", "main");
+    git(root, "config", "user.name", "Fixture");
+    git(root, "config", "user.email", "fixture@example.invalid");
+    await writeFile(join(root, "prd.md"), "Fixture");
+    await writeFile(join(root, "tickets.json"), "[]");
+    await writeFile(
+      join(root, ".factory.json"),
+      JSON.stringify({
+        version: 1,
+        capacity: 1,
+        workerModel: "openai/gpt-6.1-sol",
+        prd: "prd.md",
+        tickets: "tickets.json",
+        scope: ["src/"],
+        verify: "true",
+        permissions: { execute: false, publish: false, externalTickets: false },
+      }),
+    );
+    git(root, "add", ".");
+    git(root, "commit", "-qm", "fixture");
+    const storage = openPersistence(directory, []);
+    storage.commit(
+      { enabled: false, owner: "T-owner", runs: {} },
+      "factory",
+      "fixture",
+      "",
+    );
+    storage.close();
+    registerFactory(
+      {
+        createAgent() {
+          throw new Error("Handoff cannot dispatch");
+        },
+        threads: {
+          get() {
+            return {
+              state: {
+                async get() {
+                  throw new Error("Local unavailable");
+                },
+              },
+            };
+          },
+        },
+        logger: { log() {} },
+        on() {},
+        registerTool(tool: { execute: typeof execute }) {
+          execute = tool.execute;
+        },
+        onDispose(fn: () => void) {
+          dispose = fn;
+        },
+      } as unknown as PluginAPI,
+      root,
+      () => ({
+        async init() {},
+        async close() {},
+        ledger: { async record() {} },
+      }),
+    );
+    const tools = {
+      async call(name: string, input: Record<string, unknown>) {
+        if (name === "amp.get_thread_status") {
+          expect(input).toEqual({ thread: "T-owner" });
+          return {
+            metadata: { threadID: "T-owner" },
+            agentState: { state: ownerActivity },
+          };
+        }
+        return fixture.tools.call(name, input);
+      },
+    };
+    const old = { thread: { id: "T-owner" } } as unknown as PluginToolContext;
+    const next = {
+      thread: { id: "T-new" },
+      tools,
+    } as unknown as PluginToolContext;
+    expect(execute({ action: "note", message: "  " }, old)).rejects.toThrow(
+      "nonempty",
+    );
+    expect(
+      execute({ action: "note", message: "Cannot write" }, next),
+    ).rejects.toThrow("owning Foreman");
+    await execute({ action: "note", message: "PRIVATE-HANDOFF-NOTE" }, old);
+    const before = factoryStatus(directory);
+    const request = {
+      action: "handoff",
+      owner: "T-owner",
+      decision: "Take over",
+    };
+    expect(execute(request, next)).rejects.toThrow("running or unknown");
+    expect(factoryStatus(directory)).toEqual(before);
+    ownerActivity = "idle";
+    const result = JSON.parse(String(await execute(request, next)));
+    expect(result).toMatchObject({
+      owner: "T-new",
+      enabled: false,
+      foreman: {
+        notes: [{ thread: "T-owner", text: "PRIVATE-HANDOFF-NOTE" }],
+        handoffs: [{ clear: "unreachable" }],
+      },
+      monitor: { schedule: "cleared" },
+    });
+    expect(fixture.schedules.size).toBe(0);
+    expect(fixture.notifications).toHaveLength(1);
+    expect(JSON.stringify(fixture.notifications)).not.toContain(
+      "PRIVATE-HANDOFF-NOTE",
+    );
+    expect(factoryStatus(directory)).toEqual(result);
+    expect(execute({ action: "pause" }, old)).rejects.toThrow("Former Foreman");
+    server = startDashboard({ root, port: 0 });
+    for (const path of ["/api/status", "/api/events"]) {
+      const response = await fetch(`${server.url}${path}`);
+      expect(response.status).toBe(200);
+      expect(await response.text()).not.toContain("PRIVATE-HANDOFF-NOTE");
+    }
+  } finally {
+    dispose();
+    await server?.stop(true);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 function deliveryTranscript(history: string, message: string) {
   const transcript = Array.from(
     { length: history === "truncated" ? 2000 : 21 },

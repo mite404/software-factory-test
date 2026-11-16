@@ -41,20 +41,23 @@ function checkNotification(input: Record<string, unknown>) {
 }
 
 /** Controlled connected tools; never calls the real Amp control plane. */
-export function watchdogFixture() {
-  let schedule: Record<string, unknown> | null = null;
+export function watchdogFixture(
+  thread = "T-owner",
+  schedules = new Map<string, Record<string, unknown>>(),
+) {
   const notifications: Record<string, unknown>[] = [];
   const tools: PluginTools = {
     async call(name, input) {
+      const target = typeof input.thread === "string" ? input.thread : thread;
       switch (name) {
         case "amp.get_schedule":
-          return schedule;
+          return schedules.get(target) ?? null;
         case "amp.set_schedule":
-          schedule = {
+          schedules.set(target, {
             id: "TEST-schedule",
             title: input.title,
             prompt: input.prompt,
-            targetThreadID: "T-owner",
+            targetThreadID: target,
             trigger: {
               provider: "schedule",
               schedule: String(input.schedule).startsWith("DTSTART:")
@@ -68,10 +71,10 @@ export function watchdogFixture() {
             agentMode: null,
             reasoningEffort: null,
             lastRunError: null,
-          };
-          return schedule;
+          });
+          return schedules.get(target);
         case "amp.clear_schedule":
-          schedule = null;
+          schedules.delete(target);
           return { deleted: true };
         case "amp.notify_user":
           checkNotification(input);
@@ -82,7 +85,7 @@ export function watchdogFixture() {
       }
     },
   };
-  return { tools, notifications };
+  return { tools, notifications, schedules };
 }
 
 /** Test double for external bookkeeping; factory Git and SQLite operations remain real. */

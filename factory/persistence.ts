@@ -151,6 +151,17 @@ export type State = {
   enabled: boolean;
   owner?: ThreadID;
   runs: Record<string, Run>;
+  foreman?: {
+    notes: { at: number; thread: ThreadID; text: string }[];
+    handoffs: {
+      at: number;
+      from: ThreadID;
+      to: ThreadID;
+      decision: string;
+      clear: "pending" | "cleared" | "unreachable";
+      problem?: string;
+    }[];
+  };
   /** Last inspected registration and reserved notification effects; not a platform health guarantee. */
   monitor?: {
     fingerprint: string;
@@ -508,6 +519,32 @@ function validateMonitor(value: unknown) {
   }
 }
 
+function validateForeman(value: unknown) {
+  if (value !== undefined) {
+    const foreman = record(value);
+    if (
+      !Array.isArray(foreman.notes) ||
+      !foreman.notes.every((value: unknown) => {
+        const note = record(value);
+        return timestamp(note.at) && thread(note.thread) && text(note.text);
+      }) ||
+      !Array.isArray(foreman.handoffs) ||
+      !foreman.handoffs.every((value: unknown) => {
+        const handoff = record(value);
+        return (
+          timestamp(handoff.at) &&
+          thread(handoff.from) &&
+          thread(handoff.to) &&
+          text(handoff.decision) &&
+          optionalText(handoff.problem) &&
+          ["pending", "cleared", "unreachable"].includes(String(handoff.clear))
+        );
+      })
+    )
+      throw new Error("Invalid Foreman records");
+  }
+}
+
 function stateRecord(value: unknown): State {
   const state = record(value);
   if (
@@ -515,6 +552,7 @@ function stateRecord(value: unknown): State {
     (state.owner !== undefined && !thread(state.owner))
   )
     throw new Error("Invalid factory state");
+  validateForeman(state.foreman);
   validateMonitor(state.monitor);
   for (const [id, value] of Object.entries(record(state.runs)))
     validateRun(id, value);
@@ -598,11 +636,21 @@ function readState(db: Database): State {
         .query<{ data: string }, []>("SELECT data FROM monitor WHERE id = 1")
         .get()
     : null;
+  const foreman = db
+    .query(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'foreman'",
+    )
+    .get()
+    ? db
+        .query<{ data: string }, []>("SELECT data FROM foreman WHERE id = 1")
+        .get()
+    : null;
   return stateRecord({
     enabled: coordinator.enabled === 1,
     ...(coordinator.owner === null ? {} : { owner: coordinator.owner }),
     runs,
     ...(monitor ? { monitor: JSON.parse(monitor.data) } : {}),
+    ...(foreman ? { foreman: JSON.parse(foreman.data) } : {}),
   });
 }
 
@@ -615,6 +663,14 @@ function saveState(db: Database, state: State) {
   const insert = db.query("INSERT INTO runs (ticket, data) VALUES (?, ?)");
   for (const [id, run] of Object.entries(state.runs))
     insert.run(id, JSON.stringify(run));
+  if (state.foreman) {
+    db.run(
+      "CREATE TABLE IF NOT EXISTS foreman (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL)",
+    );
+    db.query("INSERT OR REPLACE INTO foreman (id, data) VALUES (1, ?)").run(
+      JSON.stringify(state.foreman),
+    );
+  }
   if (state.monitor) {
     db.run(
       "CREATE TABLE IF NOT EXISTS monitor (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL)",

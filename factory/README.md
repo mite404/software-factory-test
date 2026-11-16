@@ -7,6 +7,41 @@ worker retirement, and dashboard chat are not implemented. Remaining stories liv
 The [Foreman prompt](foreman.md) defines the current sequential orchestration procedure. It is a
 reusable prompt, not an automatically installed agent mode or a change to worker instructions.
 
+## Take over a stopped Foreman in the same orb
+
+In a replacement thread connected to the same repository and Git storage, call factory control
+with `action: "handoff"`, `owner` set to the exact current owner thread ID from status, and a
+nonempty `decision` explaining the takeover. This is explicit recovery, never automatic adoption.
+The current owner must be observed idle, stopped on an error, or awaiting approval. Running and
+unknown activity are refused. Workers and reviewers, including retained checkpoints, cannot take
+ownership. An uncertain schedule effect must be resolved on its recorded thread first. A changed
+root or Git storage fingerprint is refused; cross-orb restore and fencing remain separate work.
+
+The existing coordinator lock serializes the transfer. One SQLite commit changes the owner,
+records the decision, and reassigns open incidents without changing their IDs. Runs, workers,
+reviewers, attempts, progress clocks, enabled state, and execution permissions stay unchanged.
+Open incidents are reissued to the new owner. Use their exact current IDs for recovery. Former
+owners cannot control the queue unless they explicitly take it back with another guarded handoff.
+Repeating the same handoff request from the new owner is a no-op.
+
+The new owner inspects the old thread's schedule and clears only this factory's fingerprinted
+watchdog using the schedule tools' `thread` parameter. Every clear is followed by inspection,
+including after a lost acknowledgment. Confirmation requires a targeted read of the old watchdog
+before the clear and a null read-back afterward. An initial null or a foreign schedule cannot
+prove cleanup and is recorded as unreachable, without clearing a foreign registration.
+An unconfirmed clear does not block the new owner's watchdog, start, or a further guarded handoff.
+`foreman.handoffs` records `clear: "unreachable"` and its `problem` separately from new-owner
+monitoring. A stale former-owner wake cannot control the queue or perform watchdog effects.
+Connected reconciles retry all unresolved former-owner cleanups, except a thread that now owns the
+factory again. Each handoff reserves at most one cleanup warning through the durable notification
+budget, including unknown sends. Cleanup warnings can occur while paused; paused or completed
+factories still do not install a new watchdog. Never edit SQLite or clear an unrelated schedule.
+Live cross-thread clearing still needs Foreman acceptance.
+
+Use owner-only `action: "note"` with nonempty `message` to append private dated working notes.
+Notes survive reload in SQLite, travel in the existing private backup snapshot, and appear in
+`foreman.notes` in the handoff result. Notes are not dashboard data or public event details.
+
 ## Run the weekly failure audit
 
 Once a week, supply `TYPESAFE_API_KEY` through the process environment. Do not put its value in a
@@ -345,14 +380,30 @@ schedule or notification calls.
 
 - `clear_schedule` returned `{"deleted":true}`; the next `get_schedule` returned `null`.
 
+**Foreman-observed cross-thread contract, 2026-11-16 at about 03:25 UTC.** The connected Foreman
+inspected tool signatures and made read-only calls from
+`T-01a1d839-1f2a-7163-aca7-ff36ee2ba954`. `get_schedule`, `set_schedule`, `update_schedule`, and
+`clear_schedule` each accept an optional `{thread: "T-..."}` target instead of the caller. Each
+thread has at most one schedule or trigger. Clear takes no schedule ID and removes the target
+thread's linked registration, so inspection must establish ownership first.
+
+`get_schedule({thread: "T-01a1e1de-5d05-7143-8002-040650c600c4"})` returned null for an archived
+worker without a schedule. Targeting the Foreman returned the full record with ID
+`71cd8841-c79d-54a2-9d84-83580b36c81f`, the matching `targetThreadID`, title
+`Factory watchdog 89f80aca...`, `enabled`, `nextRunAt`, and `prompt`. These replies establish the
+targeted-read shape. The fixture copies the optional target and one-registration-per-thread rule.
+Cross-thread clear and plugin bridge wrapping have not been observed live. The Foreman's live
+takeover proof must exercise a fingerprinted old registration and confirm the clear by read-back;
+a paused transfer with two empty schedules cannot prove cross-thread clearing.
+
 Plugin bridge result wrapping remains unobserved. The adapter accepts parsed objects and JSON
 strings; other shapes leave monitoring unconfirmed without replacing a schedule. Controlled
 fixtures reproduce this observed contract and reject invalid notification input. They do not prove
 sleeping-orb wake, plugin bridge wrapping or actual push/email delivery.
 
 Explicitly paused factories, completed runs and planned/dependency-only work produce no watchdog
-nudges or alerts. Status, heartbeat publishing and HTTP reads remain read-only and do not deliver
-messages.
+progress nudges or alerts. Handoff cleanup warnings use the separate policy above.
+Status, heartbeat publishing and HTTP reads remain read-only and do not deliver messages.
 
 Coordinator status reads existing SQLite or validated legacy state without creating runtime files,
 initializing the lock store, or migrating. The plugin separately refreshes dashboard observations,
