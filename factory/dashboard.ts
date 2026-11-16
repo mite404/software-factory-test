@@ -248,6 +248,7 @@ function durableTask(id: string, steps: string[], run: Run | undefined) {
     creating: "unknown",
     running: "unknown",
     blocked: "blocked",
+    parked: "blocked",
     uncertain: "blocked",
     done: "accepted",
   } as const;

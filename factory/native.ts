@@ -33,6 +33,7 @@ import {
   taskSteps,
   ticketIntake,
   defaultWatchdog,
+  repairAttemptCap,
   validWatchdogPolicy,
   validProviderLimitPolicy,
   reviewerModel,
@@ -74,6 +75,7 @@ const progressActions = new Set([
   "accepted",
   "blocked",
   "escalated",
+  "parked",
   "review-stopped",
   "preparation-failed",
   "uncertain",
@@ -1236,7 +1238,11 @@ function retryAdmission(state: State, action: string) {
 function checkpointIdentity(run?: Run) {
   if (!run) return undefined;
   const checkpoint =
-    run.kind === "blocked" ? (run.repair ?? run.checkpoint) : run;
+    run.kind === "parked"
+      ? run.repair
+      : run.kind === "blocked"
+        ? (run.repair ?? run.checkpoint)
+        : run;
   if (!checkpoint || !("base" in checkpoint)) return undefined;
   return {
     base: checkpoint.base,
@@ -1262,6 +1268,10 @@ function requireIncident(
     )
   )
     throw new Error("Resume requires the exact current stop incident");
+}
+
+function stopNotice(ticket: string, run: Run, notice: StopIncident) {
+  return `Factory stop ${notice.id}. Ticket ${ticket}, attempt ${notice.attempt}, base ${notice.base}. Reason: ${notice.reason}. Recovery: ${notice.recovery}. Read current factory status and private evidence before deciding. ${notice.recovery === "wait" ? "Connected owner reconciliation reserves one continuation to the same thread after the provider reset. Do not send a separate continuation or retry an uncertain send. Paused factories stay paused." : notice.recovery === "resume" ? `Only the owning Foreman may resume with ticket ${ticket}, incident ${notice.id}, and ${run.kind === "parked" ? "the operator's decision. Attempt cap reached; do not automatically resume" : "a diagnosis decision"}. A paused factory stays paused.` : "Inspect and resolve this stop; this notice does not authorize resume or grant permission."}`;
 }
 
 /** Create the sequential dispatcher. Unknown remote effects are parked, never retried blindly. */
@@ -1366,13 +1376,22 @@ export function createFactory(
           const stop = lifecycleStop(run, "stopped", reason);
           if (stop) incident(ticket, run, ...stop);
         }
-        if (run)
+        if (run) {
           run.watchdog = watchdogProgress(
             run,
             savedRuns[ticket]?.watchdog,
             action,
             now(),
           );
+          if (action === "parked")
+            run.watchdog.alerts.push({
+              id: randomUUID(),
+              kind: "parked",
+              episode: run.watchdog.episode,
+              attempt: run.watchdog.attempt,
+              intendedAt: run.watchdog.progressAt,
+            });
+        }
         try {
           persistence!.commit(state, ticket, action, detail);
         } catch (error) {
@@ -1430,10 +1449,7 @@ export function createFactory(
           }
           if (notice.delivery !== "queued") continue;
           try {
-            await host.send(
-              notice.owner,
-              `Factory stop ${notice.id}. Ticket ${ticket}, attempt ${notice.attempt}, base ${notice.base}. Reason: ${notice.reason}. Recovery: ${notice.recovery}. Read current factory status and private evidence before deciding. ${notice.recovery === "wait" ? "Connected owner reconciliation reserves one continuation to the same thread after the provider reset. Do not send a separate continuation or retry an uncertain send. Paused factories stay paused." : notice.recovery === "resume" ? `Only the owning Foreman may resume with ticket ${ticket}, incident ${notice.id}, and a diagnosis decision. A paused factory stays paused.` : "Inspect and resolve this stop; this notice does not authorize resume or grant permission."}`,
-            );
+            await host.send(notice.owner, stopNotice(ticket, run, notice));
             notice.delivery = "sent";
             notice.notifiedAt = now();
             commit(ticket, "notice-sent", notice.id);
@@ -1451,7 +1467,11 @@ export function createFactory(
         if (!state.enabled || !config.execute || !state.owner) return;
         for (const [ticket, run] of Object.entries(state.runs)) {
           const limit = run.incident?.providerLimit;
-          if (run.kind === "done" || (limit && !limit.continuation)) continue;
+          if (
+            ["done", "parked"].includes(run.kind) ||
+            (limit && !limit.continuation)
+          )
+            continue;
           await reconcileRunWatchdog(ticket, run);
         }
       }
@@ -1583,7 +1603,7 @@ export function createFactory(
       acceptInitialDefinition();
       async function preflightCheckpoint(
         task: Task,
-        blocked: Extract<Run, { kind: "blocked" }>,
+        blocked: Extract<Run, { kind: "blocked" | "parked" }>,
         preflight: Record<string, unknown>,
       ): Promise<Extract<Run, { kind: "running" }>> {
         if (!blocked.thread) throw new Error("No resumable worker checkpoint");
@@ -1614,7 +1634,7 @@ export function createFactory(
       }
       async function legacyRepairCheckpoint(
         task: Task,
-        blocked: Extract<Run, { kind: "blocked" }>,
+        blocked: Extract<Run, { kind: "blocked" | "parked" }>,
       ): Promise<Extract<Run, { kind: "running" }>> {
         if (!blocked.thread)
           throw new Error("No resumable verification checkpoint");
@@ -1651,9 +1671,11 @@ export function createFactory(
       }
       async function repairCheckpoint(
         task: Task,
-        blocked: Extract<Run, { kind: "blocked" }>,
+        blocked: Extract<Run, { kind: "blocked" | "parked" }>,
       ) {
-        const saved = blocked.repair ?? blocked.checkpoint;
+        const saved =
+          blocked.repair ??
+          (blocked.kind === "blocked" ? blocked.checkpoint : undefined);
         if (saved) return saved;
         const preflight = await currentReport(directory, task, 1);
         return preflight?.kind === "blocked"
@@ -1686,7 +1708,7 @@ export function createFactory(
         const blocked = state.runs[ticket];
         if (!task || !admitsRun(blocked, "resume"))
           throw new Error(
-            "Resume requires a blocked ticket with its original worker",
+            "Resume requires a blocked or parked ticket with its original worker",
           );
         if (Object.values(state.runs).some((run) => runBlocks(run, "resume")))
           throw new Error(
@@ -1700,13 +1722,21 @@ export function createFactory(
           attempt: repair.attempt,
           base: repair.base,
         });
-        await verifyRepair(repair);
+        let checkpoint = repair;
+        let feedback = `${blocked.reason}\nForeman decision: ${decision}`;
+        if (blocked.kind === "parked") {
+          const base = git(root, "rev-parse", "HEAD");
+          git(root, "merge-base", "--is-ancestor", repair.base, base);
+          checkpoint = { ...repair, base };
+          feedback += `\nRebase onto ${base} before submitting the next candidate.`;
+        }
+        await verifyRepair(checkpoint);
         state.runs[ticket] = {
-          ...repair,
+          ...checkpoint,
           incident: undefined,
           attempt: repair.attempt + 1,
           delivery: "queued",
-          feedback: `${blocked.reason}\nForeman decision: ${decision}`,
+          feedback,
         };
         commit(
           ticket,
@@ -1969,20 +1999,26 @@ export function createFactory(
         feedback = evidence,
       ) {
         delete run.review;
-        if (run.attempt % 2 === 1) {
+        const capped = run.attempt >= repairAttemptCap;
+        if (!capped && run.attempt % 2 === 1) {
           run.attempt++;
           run.delivery = "queued";
           commit(task.id, "rejected", evidence);
         } else {
           state.runs[task.id] = {
-            kind: "blocked",
+            kind: capped ? "parked" : "blocked",
             definition: run.definition,
             thread: run.thread,
-            reason: `Verification rejected attempt ${run.attempt}; Foreman escalation required: ${evidence}`,
+            reason: `Verification rejected attempt ${run.attempt}; ${capped ? "operator decision" : "Foreman escalation"} required: ${evidence}`,
             repair: run,
             executor: run.executor,
           };
-          commit(task.id, "escalated", evidence, "verification-rejected");
+          commit(
+            task.id,
+            capped ? "parked" : "escalated",
+            evidence,
+            "verification-rejected",
+          );
         }
         if (state.runs[task.id]?.kind === "running") {
           await send(

@@ -439,7 +439,7 @@ export async function deliverAlerts(
       {
         id: alert.id,
         title: "Factory needs diagnosis",
-        body: `Ticket ${ticket.slice(0, 80)}, attempt ${alert.attempt}. ${alert.kind === "spending" ? "Repeated repair spending" : "No lifecycle progress"}. Incident ${alert.episode}. Read factory status and private evidence; this alert grants no permission.`.slice(
+        body: `Ticket ${ticket.slice(0, 80)}, attempt ${alert.attempt}. ${alert.kind === "parked" ? "Repair attempt cap reached; ticket parked" : alert.kind === "spending" ? "Repeated repair spending" : "No lifecycle progress"}. Incident ${alert.episode}. Read factory status and private evidence; this alert grants no permission.`.slice(
           0,
           300,
         ),

@@ -394,6 +394,103 @@ test.each([false, true])(
   },
 );
 
+test.each(["sent", "sending", "unknown"] as const)(
+  "parked alert delivery stays held across reopen after %s",
+  async (outcome) => {
+    const directory = await mkdtemp(join(tmpdir(), "factory-parked-alert-"));
+    let storage = openPersistence(directory, []);
+    const state: State = {
+      enabled: true,
+      owner: "T-owner",
+      monitor: {
+        fingerprint: "TEST",
+        schedule: "installed",
+        notifications:
+          outcome === "sending"
+            ? [{ id: "park-alert", at: 1000, outcome }]
+            : [],
+      },
+      runs: {
+        A: {
+          kind: "parked",
+          thread: "T-worker",
+          reason: "PRIVATE-REPORT-PATH",
+          repair: {
+            kind: "running",
+            base: "base",
+            worktree: "/PRIVATE",
+            thread: "T-worker",
+            attempt: 4,
+            delivery: "sent",
+          },
+          incident: {
+            id: "park-incident",
+            ticket: "A",
+            owner: "T-owner",
+            base: "base",
+            attempt: 4,
+            reason: "verification-rejected",
+            recovery: "resume",
+            delivery: "sent",
+          },
+          watchdog: {
+            episode: "park-incident",
+            progressAt: 1000,
+            attempt: 4,
+            alerts: [
+              {
+                id: "park-alert",
+                kind: "parked",
+                episode: "park-incident",
+                attempt: 4,
+                intendedAt: 1000,
+              },
+            ],
+          },
+        },
+      },
+    };
+    const fixture = watchdogFixture();
+    const tools: PluginTools = {
+      async call(name, input) {
+        expect(factoryStatus(directory).monitor!.notifications).toEqual([
+          { id: "park-alert", at: 1000, outcome: "sending" },
+        ]);
+        await fixture.tools.call(name, input);
+        if (outcome === "unknown") throw new Error("Lost acknowledgment");
+        return {};
+      },
+    };
+    const save = () => storage.commit(state, "factory", "alert-delivery", "");
+    try {
+      save();
+      await deliverAlerts(state, tools, () => 1000, save);
+      expect(state.monitor!.notifications).toEqual([
+        { id: "park-alert", at: 1000, outcome },
+      ]);
+      expect(fixture.notifications).toHaveLength(outcome === "sending" ? 0 : 1);
+      if (outcome !== "sending")
+        expect(fixture.notifications[0]).toEqual({
+          title: "Factory needs diagnosis",
+          body: "Ticket A, attempt 4. Repair attempt cap reached; ticket parked. Incident park-incident. Read factory status and private evidence; this alert grants no permission.",
+        });
+      storage.close();
+      storage = openPersistence(directory, []);
+      Object.assign(state, storage.state);
+      const events = factoryEvents(directory);
+      await deliverAlerts(state, tools, () => 2000, save);
+      expect(factoryEvents(directory)).toEqual(events);
+      expect(fixture.notifications).toHaveLength(outcome === "sending" ? 0 : 1);
+      expect(state.runs.A!.watchdog!.alerts[0]!.acknowledgedAt).toBe(
+        outcome === "sent" ? 1000 : undefined,
+      );
+    } finally {
+      storage.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
 test("alert reservations survive reopen, bound a rolling hour and never retry unknown sends", async () => {
   const directory = await mkdtemp(join(tmpdir(), "factory-alerts-"));
   let at = 1000;

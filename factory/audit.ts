@@ -43,6 +43,7 @@ const ENDPOINT = "https://api.typesafe.ai/v1/systemone";
 const FAILURE_ACTIONS = new Set([
   "rejected",
   "escalated",
+  "parked",
   "blocked",
   "review-stopped",
 ]);
