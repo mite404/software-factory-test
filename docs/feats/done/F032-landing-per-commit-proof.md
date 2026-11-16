@@ -95,8 +95,8 @@ A baseline failure goes back to the Foreman; it does not widen the worker's scop
 
 ## Done when
 
-- [ ] A multi-commit candidate landed as separate commits records through `record-landing` and
+- [x] A multi-commit candidate landed as separate commits records through `record-landing` and
       `record-merge`.
-- [ ] Squashed and single-commit landings verify as before.
-- [ ] A partial or altered landing is refused and changes nothing.
-- [ ] Full gates, guard and a fresh cold review pass on the accepted revision.
+- [x] Squashed and single-commit landings verify as before.
+- [x] A partial or altered landing is refused and changes nothing.
+- [x] Full gates, guard and a fresh cold review pass on the accepted revision.

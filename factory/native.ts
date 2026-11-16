@@ -645,30 +645,35 @@ function verifyMerge(
       "--",
     ),
   );
-  if (
-    !accepted ||
-    !git(root, "rev-list", "--no-merges", `${base}..${commit}`)
+  const patches = (head: string) =>
+    git(root, "rev-list", "--no-merges", `${base}..${head}`)
       .split("\n")
       .filter(Boolean)
-      .some(
-        (revision) =>
-          patchID(
+      .map((revision) =>
+        patchID(
+          root,
+          git(
             root,
-            git(
-              root,
-              "show",
-              "--format=",
-              "--no-ext-diff",
-              "--no-textconv",
-              "--binary",
-              "-U0",
-              revision,
-              "--",
-            ),
-          ) === accepted,
-      )
-  )
-    throw new Error("Merge commit does not contain the accepted change");
+            "show",
+            "--format=",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--binary",
+            "-U0",
+            revision,
+            "--",
+          ),
+        ),
+      );
+  const landed = Map.groupBy(patches(commit).filter(Boolean), (patch) => patch);
+  if (!landed.has(accepted)) {
+    const required = patches(run.revision);
+    if (
+      required.length === 0 ||
+      !required.every((patch) => landed.get(patch)?.pop())
+    )
+      throw new Error("Merge commit does not contain the accepted change");
+  }
   return new Date(
     git(root, "show", "-s", "--format=%cI", commit),
   ).toISOString();

@@ -715,12 +715,17 @@ After merging an accepted ticket, the owning Foreman calls the factory control t
 `commit`. Fetch the target branch first. The root checkout's configured upstream is the target
 as last fetched; the action does not fetch, push, or call GitHub.
 
-Recording requires a `done` run, ancestry of the commit in that upstream, and a matching stable
-Git patch ID in a non-merge commit reachable from the merge commit but not from the accepted base.
-The accepted patch is the revision's diff against its saved base. Both diffs use `-U0`, so changes
-to surrounding context do not affect patch identity. Older runs use the review base or, without
-review, the accepted revision's first parent. Cherry-picked integration commits can have different
-hashes and context.
+Recording requires a `done` run and ancestry of the commit in that fetched remote upstream.
+Both `record-merge` and `record-landing` prove the accepted change with stable Git patch IDs.
+Either the combined saved-base-to-revision diff matches one landed non-merge commit (a squash),
+or every non-merge commit in the accepted range has a patch-ID twin in the landed range.
+On the per-commit path, each landed commit proves at most one accepted commit, even when several
+accepted commits share a patch ID.
+Landed commits must be reachable from the merge commit but not from the accepted base.
+Empty diffs never count as matches, and an empty accepted range is refused. All diffs use `-U0`,
+so changes to surrounding context do not affect patch identity. Older runs use the review base or,
+without review, the accepted revision's first parent. Cherry-picked integration commits can have
+different hashes and context.
 Git verifies the change and ancestry, not whether GitHub assigned that PR number to the commit.
 
 The record stores `pr`, `commit`, and the commit time as `at`. Repeating the same number and commit
@@ -750,8 +755,9 @@ not `resume`. Checkpoint and repair identities keep their existing checks. Git m
 revision descends from the saved base and is reachable from the original worker worktree's HEAD.
 An earlier candidate can qualify even when the latest report is blocked at a later attempt.
 Neither report text nor the blocked reason proves ownership. The existing `verifyMerge` proof
-must find the exact saved base-to-revision patch and the merge commit on the fetched upstream;
-the merge commit must also be reachable from the root checkout's HEAD.
+must find either the combined accepted patch or every accepted non-merge commit's patch as
+described above, and the merge commit on the fetched upstream. The merge commit must also be
+reachable from the root checkout's HEAD.
 Git proves the patch and ancestry, not GitHub's association between the PR number and commit.
 Missing evidence, stale incidents, active or uncertain runs, and conflicting repeats are refused
 without changing the run or its events.
