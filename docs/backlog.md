@@ -18,13 +18,12 @@ Merged, but at least one box, usually a live proof, is still open.
 | [foreman-watchdog-ticket3](feats/foreman-watchdog/foreman-watchdog-ticket3.md) | Outside-orb wake-up and alert delivery        | 2/4       |
 | [F003-provider-limit-resume](feats/durability/F003-provider-limit-resume.md)   | Same threads resume after a provider limit    | 5/6       |
 
-## Not started (41)
+## Not started (40)
 
 In dispatch order.
 
 | Ticket                                                                                  | Outcome                                                   | Done when |
 | --------------------------------------------------------------------------------------- | --------------------------------------------------------- | --------- |
-| [F006-limit-fallback-setting](feats/durability/F006-limit-fallback-setting.md)          | Wait or fall back on a provider limit                     | 0/5       |
 | [F007-run-transition-table](feats/durability/F007-run-transition-table.md)              | One declared, tested run lifecycle table                  | 0/5       |
 | [F009-attempt-cap-parking](feats/repair-escalation/F009-attempt-cap-parking.md)         | Twice-escalated ticket parks; queue continues             | 0/6       |
 | [F011-step-actor-labels](feats/lifecycle-view/F011-step-actor-labels.md)                | Each step and exit names who performs it                  | 0/6       |
@@ -37,9 +36,9 @@ In dispatch order.
 | [F026-factory-automations](feats/config-layout/F026-factory-automations.md)             | Automations switch on, off and run on demand              | 0/5       |
 | [F027-dashboard-controls](feats/config-layout/F027-dashboard-controls.md)               | The dashboard switches and runs automations               | 0/5       |
 | [F028-role-credentials](feats/config-layout/F028-role-credentials.md)                   | Each role sees only its own credentials                   | 0/3       |
-| [F031-landing-without-checkpoint](feats/durability/F031-landing-without-checkpoint.md)  | A blocked run without a checkpoint can record its landing | 0/5       |
 | [F022-ticket-file-sync](feats/planned-intake/F022-ticket-file-sync.md)                  | Saved tickets appear as planned on their own              | 0/6       |
 | [F023-public-stop-reasons](feats/lifecycle-view/F023-public-stop-reasons.md)            | A blocked or rejected ticket says why                     | 0/6       |
+| [F031-landing-without-checkpoint](feats/durability/F031-landing-without-checkpoint.md)  | A blocked run without a checkpoint can record its landing | 0/5       |
 | [v1-ticket4](feats/v1/v1-ticket4.md)                                                    | Durable private evidence records                          | 0/3       |
 | [v1-ticket11](feats/v1/v1-ticket11.md)                                                  | Required and advisory verification tools                  | 0/3       |
 | [v1-ticket12](feats/v1/v1-ticket12.md)                                                  | Permission-bound native hooks                             | 0/3       |
@@ -66,7 +65,7 @@ In dispatch order.
 | [v1-ticket21](feats/v1/v1-ticket21.md)                                                  | Read-only effectiveness views                             | 0/3       |
 | [v1-ticket22](feats/v1/v1-ticket22.md)                                                  | Cross-orb v1 acceptance trial                             | 0/3       |
 
-## Done (22)
+## Done (23)
 
 | Ticket                                                                               | Outcome                                            | Done when |
 | ------------------------------------------------------------------------------------ | -------------------------------------------------- | --------- |
@@ -85,6 +84,7 @@ In dispatch order.
 | [F004-keyed-creation-delivery](feats/done/F004-keyed-creation-delivery.md)           | Unclear creation and delivery recover by lookup    | 5/5       |
 | [F030-record-external-landing](feats/done/F030-record-external-landing.md)           | A ticket landed outside the factory counts as done | 5/5       |
 | [F005-foreman-handoff](feats/done/F005-foreman-handoff.md)                           | Guarded same-orb Foreman takeover                  | 6/6       |
+| [F006-limit-fallback-setting](feats/done/F006-limit-fallback-setting.md)             | Wait or fall back on a provider limit              | 5/5       |
 | [F024-serial-test-runs](feats/done/F024-serial-test-runs.md)                         | Test runs on one machine take turns                | 5/5       |
 | [v1-ticket1](feats/done/v1-ticket1.md)                                               | Public titles never show private briefs            | 3/3       |
 | [v1-ticket2](feats/done/v1-ticket2.md)                                               | One versioned definition that never auto-runs      | 4/4       |
