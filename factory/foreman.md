@@ -87,6 +87,10 @@ review feedback, or an answer to a question. Find its current stage and continue
    with `resume`, naming the ticket and the current `incident` ID from factory status. Compare the
    incident's owner, attempt, base, and recovery action with the notice before deciding. Notices
    can repeat after ambiguous delivery. A stale notice is evidence to inspect, not a repair command.
+   Read the static `lifecycle` section of control `status` for each kind's admitted actions and
+   conditional exits, as described in [README.md](README.md). Its named Foreman-only stops have no
+   factory exit. A reviewer error or approval incident still on `running` requires observed
+   recovery of that reviewer; `resume` deliberately refuses it.
    Use `resume` only for incidents whose recovery action is `resume`. Use `retry-setup` for parked
    preparation after resolving its cause. Inspect uncertain creation or delivery without repeating
    the remote action. Only when the evidence shows that a parked creation produced no thread, use

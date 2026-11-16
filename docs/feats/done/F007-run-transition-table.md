@@ -112,11 +112,11 @@ Run the shared preflight in `docs/v1-execution.md`. Baseline gates have not run 
 
 ## Done when
 
-- [ ] One table lists every run kind with its stops, recoveries and exits.
-- [ ] The stop and admission rules read from it, and all existing tests pass unchanged.
-- [ ] A test fails when a non-terminal kind or stop has no exit and is not on the named list.
-- [ ] Status shows the table without private data.
-- [ ] Full gates, guard and fresh cold review pass on the exact candidate.
+- [x] One table lists every run kind with its stops, recoveries and exits.
+- [x] The stop and admission rules read from it, and all existing tests pass unchanged.
+- [x] A test fails when a non-terminal kind or stop has no exit and is not on the named list.
+- [x] Status shows the table without private data.
+- [x] Full gates, guard and fresh cold review pass on the exact candidate.
 
 ## Notes
 

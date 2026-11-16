@@ -17,12 +17,142 @@ import {
   factoryEvents,
   factoryRecords,
   factoryStatus,
+  lifecycleStatus,
   openPersistence,
   type State,
 } from "./persistence";
 
 const roots: string[] = [];
 const queue = [{ id: "A", brief: "Repair value", after: [] }];
+
+test("lifecycle walking names every exitless stop and validates recoveries and persisted reasons", async () => {
+  const table = lifecycleStatus();
+  const actions = new Set([
+    "retry-setup",
+    "retry-create",
+    "resume",
+    "record-landing",
+    "record-merge",
+  ]);
+  const observations = new Set([
+    "setup-finished",
+    "created",
+    "accepted",
+    "delivery-recovered",
+    "review-recovered",
+    "provider-continuation-sent",
+    "provider-recovered",
+    "review-fallback-creating",
+    "blocked",
+    "review-stopped",
+    "stop-recorded",
+  ]);
+  const expectedExitless = [
+    "blocked.withoutWorker",
+    "running.reviewerCreation",
+    "running.reviewerDeliveryLegacy",
+    "running.workerDeliveryLegacy",
+    "uncertain.legacy",
+  ];
+  const entries = Object.entries(table);
+  const stops = entries.flatMap(([kind, entry]) =>
+    Object.entries(entry.stops).map(([name, stop]) => ({
+      id: `${kind}.${name}`,
+      ...stop,
+    })),
+  );
+  const exitless = stops.filter((stop) => !stop.exits.length);
+  const exits = entries.flatMap(([kind, entry]) =>
+    [
+      ...entry.exits,
+      ...Object.values(entry.stops).flatMap((stop) => stop.exits),
+    ].map((exit) => ({ kind, admitted: entry.actions, ...exit })),
+  );
+  const directory = await mkdtemp(join(tmpdir(), "factory-lifecycle-walk-"));
+  roots.push(directory);
+  const storage = openPersistence(directory, queue);
+  expect(Object.keys(table).sort()).toEqual([
+    "blocked",
+    "creating",
+    "done",
+    "preparation-failed",
+    "preparing",
+    "running",
+    "uncertain",
+  ]);
+  try {
+    expect(exitless.map((stop) => stop.id).sort()).toEqual(expectedExitless);
+    expect(
+      stops
+        .filter((stop) => stop.foremanOnly)
+        .map((stop) => stop.id)
+        .sort(),
+    ).toEqual(expectedExitless);
+    expect(exitless.every((stop) => !!stop.foremanOnly?.trim())).toBe(true);
+    expect([...new Set(stops.map((stop) => stop.recovery))].sort()).toEqual([
+      "inspect",
+      "resume",
+      "retry-setup",
+      "wait",
+    ]);
+    for (const [kind] of entries.filter(([kind]) => kind !== "done"))
+      expect(
+        exits.some((exit) => exit.kind === kind),
+        kind,
+      ).toBe(true);
+    for (const exit of exits) {
+      expect(exit.when.length).toBeGreaterThan(0);
+      if ("action" in exit) {
+        expect(actions.has(exit.action), exit.action).toBe(true);
+        expect(exit.admitted).toContain(exit.action);
+      } else expect(observations.has(exit.event), exit.event).toBe(true);
+    }
+    for (const stop of stops.filter((stop) => actions.has(stop.recovery)))
+      expect(
+        stop.exits.some(
+          (exit) => "action" in exit && exit.action === stop.recovery,
+        ),
+        stop.id,
+      ).toBe(true);
+    for (const stop of stops) {
+      for (const reason of stop.reasons) {
+        const state: State = {
+          enabled: false,
+          owner: "T-owner",
+          runs: {
+            A: {
+              kind: "blocked",
+              reason: "Fixture",
+              incident: {
+                id: stop.id,
+                owner: "T-owner",
+                ticket: "A",
+                base: "base",
+                attempt: 1,
+                reason,
+                recovery: stop.recovery,
+                delivery: "queued",
+                ...(reason === "provider-limit"
+                  ? {
+                      providerLimit: {
+                        thread: "T-worker" as const,
+                        message: "Fixture limit",
+                        observedAt: 1,
+                      },
+                    }
+                  : {}),
+              },
+            },
+          },
+        };
+        storage.commit(state, "A", "fixture", "");
+        expect(factoryStatus(directory).runs.A.incident?.reason).toBe(reason);
+      }
+    }
+  } finally {
+    storage.close();
+  }
+});
 
 test("event reads never initialize legacy storage or upgrade a version-one database", async () => {
   const directory = await mkdtemp(join(tmpdir(), "factory-event-reader-"));

@@ -18,13 +18,12 @@ Merged, but at least one box, usually a live proof, is still open.
 | [foreman-watchdog-ticket3](feats/foreman-watchdog/foreman-watchdog-ticket3.md) | Outside-orb wake-up and alert delivery        | 2/4       |
 | [F003-provider-limit-resume](feats/durability/F003-provider-limit-resume.md)   | Same threads resume after a provider limit    | 5/6       |
 
-## Not started (39)
+## Not started (38)
 
 In dispatch order.
 
 | Ticket                                                                                  | Outcome                                       | Done when |
 | --------------------------------------------------------------------------------------- | --------------------------------------------- | --------- |
-| [F007-run-transition-table](feats/durability/F007-run-transition-table.md)              | One declared, tested run lifecycle table      | 0/5       |
 | [F009-attempt-cap-parking](feats/repair-escalation/F009-attempt-cap-parking.md)         | Twice-escalated ticket parks; queue continues | 0/6       |
 | [F011-step-actor-labels](feats/lifecycle-view/F011-step-actor-labels.md)                | Each step and exit names who performs it      | 0/6       |
 | [F014-lifecycle-stages](feats/lifecycle-view/F014-lifecycle-stages.md)                  | One named stage and actor for every run       | 0/6       |
@@ -64,7 +63,7 @@ In dispatch order.
 | [v1-ticket21](feats/v1/v1-ticket21.md)                                                  | Read-only effectiveness views                 | 0/3       |
 | [v1-ticket22](feats/v1/v1-ticket22.md)                                                  | Cross-orb v1 acceptance trial                 | 0/3       |
 
-## Done (26)
+## Done (27)
 
 | Ticket                                                                               | Outcome                                                   | Done when |
 | ------------------------------------------------------------------------------------ | --------------------------------------------------------- | --------- |
@@ -84,6 +83,7 @@ In dispatch order.
 | [F030-record-external-landing](feats/done/F030-record-external-landing.md)           | A ticket landed outside the factory counts as done        | 5/5       |
 | [F005-foreman-handoff](feats/done/F005-foreman-handoff.md)                           | Guarded same-orb Foreman takeover                         | 6/6       |
 | [F006-limit-fallback-setting](feats/done/F006-limit-fallback-setting.md)             | Wait or fall back on a provider limit                     | 5/5       |
+| [F007-run-transition-table](feats/done/F007-run-transition-table.md)                 | One declared, tested run lifecycle table                  | 5/5       |
 | [F024-serial-test-runs](feats/done/F024-serial-test-runs.md)                         | Test runs on one machine take turns                       | 5/5       |
 | [F031-landing-without-checkpoint](feats/done/F031-landing-without-checkpoint.md)     | A blocked run without a checkpoint can record its landing | 5/5       |
 | [F032-landing-per-commit-proof](feats/done/F032-landing-per-commit-proof.md)         | A multi-commit candidate can record its landing           | 4/4       |
