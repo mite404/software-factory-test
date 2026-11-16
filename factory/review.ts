@@ -19,7 +19,21 @@ export type Review = {
   evidence?: string;
   executor?: Executor;
   deliveryIntent?: DeliveryIntent;
+  fallback?: { model: string; thread: ThreadID; reason: string };
 };
+
+function validFallback(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  return (
+    nonempty(row.model) &&
+    /^[^/]+\/.+$/.test(row.model) &&
+    nonempty(row.thread) &&
+    /^T-.+/.test(row.thread) &&
+    nonempty(row.reason)
+  );
+}
 
 /** Validate persisted review ownership at the storage boundary. */
 export function validReview(value: unknown): boolean {
@@ -41,6 +55,7 @@ export function validReview(value: unknown): boolean {
     row.stage === "post-graft" &&
     validExecutor(row.executor) &&
     validDeliveryIntent(row.deliveryIntent) &&
+    validFallback(row.fallback) &&
     new Set<unknown>(["creating", "queued", "sending", "sent"]).has(
       row.delivery,
     ) &&

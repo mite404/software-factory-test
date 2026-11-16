@@ -6,6 +6,23 @@ import { validReview, type Review } from "./review";
 import { validExecutor, type Executor } from "./executor";
 import { validDeliveryIntent, type DeliveryIntent } from "./delivery";
 
+const modelFamilies = new Map<string, string>([
+  ["alibaba", "alibaba"],
+  ["anthropic", "anthropic"],
+  ["deepseek", "deepseek"],
+  ["meta", "meta"],
+  ["minimax", "minimax"],
+  ["moonshotai", "moonshotai"],
+  ["openai", "openai"],
+  ["thinkingmachines", "thinkingmachines"],
+  ["xai", "xai"],
+  ["zhipuai", "zhipuai"],
+]);
+const defaultReviewerModels = new Map<string, `${string}/${string}`>([
+  ["openai", "anthropic/claude-fable-5-2"],
+  ["anthropic", "openai/gpt-6-astra"],
+]);
+
 export type ThreadID = `T-${string}`;
 export type MergeRecord = {
   pr: number;
@@ -58,6 +75,13 @@ type Preparation = {
   log: string;
   pid?: number;
 };
+export type ProviderLimitPolicy =
+  | { mode: "wait" }
+  | {
+      mode: "fallback";
+      reviewerModel: `${string}/${string}`;
+      workerModel?: `${string}/${string}`;
+    };
 export type DefinitionPin = {
   digest: string;
   scope: string[];
@@ -69,6 +93,7 @@ export type DefinitionPin = {
   instructions: string;
   tickets: string;
   watchdog?: WatchdogPolicy;
+  providerLimit?: ProviderLimitPolicy;
   setup?: { command: string; timeoutMs: number };
 };
 export type ProviderLimit = {
@@ -140,6 +165,7 @@ export type Run = (
       thread: ThreadID;
       insight: string;
       review?: Review;
+      workerModel?: string;
     }
 ) & {
   definition?: string;
@@ -240,6 +266,47 @@ export function validWatchdogPolicy(value: unknown): value is WatchdogPolicy {
     ["suspicionMs", "spendingFirstAttempt", "spendingInterval"].every((key) =>
       positiveInteger(policy[key]),
     )
+  );
+}
+
+function modelFamily(model: string) {
+  return modelFamilies.get(model.split("/")[0]);
+}
+
+/** Resolve pstack's opposite-family adversary. @throws On unsupported worker families. */
+export function reviewerModel(worker: string): `${string}/${string}` {
+  const model = defaultReviewerModels.get(modelFamily(worker) ?? "");
+  if (!model)
+    throw new Error(
+      "Review requires an OpenAI or Anthropic implementation worker",
+    );
+  return model;
+}
+
+/** Validate authored and pinned limit policy, preserving known opposite-family review. */
+export function validProviderLimitPolicy(
+  value: unknown,
+  workerModel: string,
+): value is ProviderLimitPolicy | undefined {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const policy = value as Record<string, unknown>;
+  if (policy.mode === "wait") return Object.keys(policy).length === 1;
+  const workerFamily = modelFamily(workerModel);
+  const reviewerFamily = modelFamily(String(policy.reviewerModel));
+  const model = (value: unknown): value is string =>
+    typeof value === "string" && /^[^\s/]+\/[^\s]+$/.test(value);
+  return (
+    policy.mode === "fallback" &&
+    Object.keys(policy).every((key) =>
+      ["mode", "reviewerModel", "workerModel"].includes(key),
+    ) &&
+    model(policy.reviewerModel) &&
+    workerFamily !== undefined &&
+    reviewerFamily !== undefined &&
+    reviewerFamily !== workerFamily &&
+    policy.reviewerModel !== defaultReviewerModels.get(workerFamily) &&
+    (policy.workerModel === undefined || model(policy.workerModel))
   );
 }
 
@@ -383,6 +450,7 @@ function validDigest(value: unknown): value is string {
 function workerSettings(pin: Record<string, unknown>): boolean {
   return (
     optionalText(pin.workerRunner) &&
+    validProviderLimitPolicy(pin.providerLimit, String(pin.workerModel)) &&
     new Set<unknown>([
       undefined,
       "none",

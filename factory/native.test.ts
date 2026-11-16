@@ -29,6 +29,7 @@ import {
 import { startDashboard } from "./dashboard";
 import { audit } from "./audit";
 import {
+  factoryDefinition,
   factoryEvents,
   factoryRecords,
   factoryStatus,
@@ -950,6 +951,149 @@ test("provider reclassification cannot restore a second implementation owner", a
   expect(connected.runs.B).toMatchObject({ kind: "running", thread: "T-B" });
   expect(creates).toBe(2);
 });
+
+test("invalid limit policies fail before worker creation", async () => {
+  const f = await preparationFixture(() => "");
+  const path = join(f.root, ".factory.json");
+  const raw = JSON.parse(await readFile(path, "utf8"));
+  for (const providerLimit of [
+    null,
+    "fallback",
+    {},
+    { mode: "other" },
+    { mode: "wait", reviewerModel: "anthropic/claude-sonnet-4-6" },
+    { mode: "fallback" },
+    { mode: "fallback", reviewerModel: "openai/gpt-6-astra" },
+    { mode: "fallback", reviewerModel: "missing-provider" },
+    { mode: "fallback", reviewerModel: " anthropic/claude-sonnet-4-6" },
+    {
+      mode: "fallback",
+      reviewerModel: "anthropic/claude-sonnet-4-6",
+      workerModel: "bad",
+    },
+    {
+      mode: "fallback",
+      reviewerModel: "anthropic/claude-sonnet-4-6",
+      unknown: true,
+    },
+  ]) {
+    await writeFile(path, JSON.stringify({ ...raw, providerLimit }));
+    expect(f.factory().tick("start", "T-owner")).rejects.toThrow(
+      /providerLimit/,
+    );
+  }
+  await writeFile(
+    path,
+    JSON.stringify({
+      ...raw,
+      workerModel: "anthropic/claude-fable-5-2",
+      providerLimit: {
+        mode: "fallback",
+        reviewerModel: "anthropic/claude-sonnet-4-6",
+      },
+    }),
+  );
+  expect(f.factory().tick("start", "T-owner")).rejects.toThrow(/providerLimit/);
+  expect(f.counts()).toEqual({ creates: 0, sends: 0 });
+});
+
+test.each([
+  ["openai/gpt-6.1-sol", "anthropic/claude-fable-5-2"],
+  ["anthropic/claude-fable-5-2", "openai/gpt-6-astra"],
+  ["openai/gpt-6.1-sol", "openrouter/openai/gpt-6-astra"],
+  ["anthropic/claude-fable-5-2", "amp/claude-fable-5-2"],
+  ["anthropic/claude-fable-5-2", "fireworks-ai/claude-fable-5-2"],
+  ["openai/gpt-6.1-sol", "baseten/openai/gpt-6-astra"],
+  ["openai/gpt-6.1-sol", "google-vertex/claude-fable-5-2"],
+  ["openrouter/openai/gpt-6.1-sol", "anthropic/claude-fable-5-2"],
+] as const)(
+  "unsafe fallback models %s / %s fail authored and stored validation before creation",
+  async (workerModel, reviewerModel) => {
+    const f = await preparationFixture(() => "");
+    const path = join(f.root, ".factory.json");
+    const raw = JSON.parse(await readFile(path, "utf8"));
+    const config = await configuration(f.root);
+    const providerLimit = { mode: "fallback", reviewerModel } as const;
+    await writeFile(
+      path,
+      JSON.stringify({ ...raw, workerModel, providerLimit }),
+    );
+    f.git("add", ".factory.json");
+    f.git("commit", "-qm", "routed model definition");
+    expect(f.factory().tick("start", "T-owner")).rejects.toThrow(
+      /providerLimit/,
+    );
+    await writeFile(path, JSON.stringify(raw));
+    f.git("add", ".factory.json");
+    f.git("commit", "-qm", "restore first-party definition");
+    const engine = f.factory();
+    const storage = openPersistence(engine.directory, []);
+    try {
+      storage.definition({ ...config, workerModel, providerLimit }, true);
+    } finally {
+      storage.close();
+    }
+    expect(() => factoryDefinition(engine.directory)).toThrow(
+      "Invalid stored definition",
+    );
+    expect(() => factoryDefinition(engine.directory, config.digest)).toThrow(
+      "Invalid stored definition",
+    );
+    expect(engine.tick("start", "T-owner")).rejects.toThrow(
+      "Invalid stored definition",
+    );
+    expect(f.counts()).toEqual({ creates: 0, sends: 0 });
+  },
+);
+
+test.each([undefined, "google/gemini-2.5-pro"])(
+  "worker fallback %s waits on the same thread when the API cannot switch models",
+  async (workerModel) => {
+    const f = await preparationFixture(() => "");
+    const path = join(f.root, ".factory.json");
+    const raw = JSON.parse(await readFile(path, "utf8"));
+    await writeFile(
+      path,
+      JSON.stringify({
+        ...raw,
+        providerLimit: {
+          mode: "fallback",
+          reviewerModel: "anthropic/claude-sonnet-4-6",
+          workerModel,
+        },
+      }),
+    );
+    f.git("add", ".");
+    f.git("commit", "-qm", "fallback fixture");
+    let at = 1000;
+    const engine = f.factory(() => at);
+    await engine.tick("start", "T-owner");
+    f.host.state = async () => ({
+      kind: "provider-limit",
+      limit: { message: "Usage limit", observedAt: 1000, resetAt: 2000 },
+    });
+    const waiting = (await engine.tick("reconcile")).runs.A!;
+    expect(waiting).toMatchObject({
+      kind: "running",
+      thread: "T-prepared",
+      workerModel: "openai/gpt-6.1-sol",
+      incident: { reason: "provider-limit", recovery: "wait" },
+    });
+    expect(f.counts()).toEqual({ creates: 1, sends: 1 });
+    at = 2000;
+    await engine.tick("reconcile");
+    const reopened = f.factory(() => at);
+    const continued = (await reopened.tick("reconcile")).runs.A!;
+    expect(continued).toMatchObject({
+      kind: "running",
+      thread: "T-prepared",
+      workerModel: "openai/gpt-6.1-sol",
+      attempt: 1,
+      incident: { providerLimit: { continuation: { outcome: "sent" } } },
+    });
+    expect(f.counts()).toEqual({ creates: 1, sends: 2 });
+  },
+);
 
 test("a held provider continuation becomes an ordinary watchdog stall", async () => {
   const f = await preparationFixture(() => "");

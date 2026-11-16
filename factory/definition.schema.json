@@ -24,6 +24,29 @@
     },
     "orchestratorModel": { "type": "string", "pattern": "^[^/]+/.+$" },
     "review": { "type": "boolean" },
+    "providerLimit": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode"],
+          "properties": { "mode": { "const": "wait" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "reviewerModel"],
+          "properties": {
+            "mode": { "const": "fallback" },
+            "reviewerModel": {
+              "type": "string",
+              "pattern": "^[^\\s/]+/[^\\s]+$"
+            },
+            "workerModel": { "type": "string", "pattern": "^[^\\s/]+/[^\\s]+$" }
+          }
+        }
+      ]
+    },
     "watchdog": {
       "type": "object",
       "additionalProperties": false,
