@@ -90,7 +90,7 @@ Run the shared preflight in `docs/v1-execution.md`. Baseline gates have not run 
 
 ## Done when
 
-- [ ] A brief with a missing fact starts no worktree and no thread.
-- [ ] The stop names every missing fact and has a tested exit.
-- [ ] A complete brief is byte-identical to today's.
-- [ ] Full gates, guard and fresh cold review pass on the exact candidate.
+- [x] A brief with a missing fact starts no worktree and no thread.
+- [x] The stop names every missing fact and has a tested exit.
+- [x] A complete brief is byte-identical to today's.
+- [x] Full gates, guard and fresh cold review pass on the exact candidate.
