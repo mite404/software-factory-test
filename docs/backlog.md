@@ -63,6 +63,14 @@ In dispatch order.
 | [v1-ticket21](feats/v1/v1-ticket21.md)                                                   | Read-only effectiveness views                          | 0/3       |
 | [v1-ticket22](feats/v1/v1-ticket22.md)                                                   | Cross-orb v1 acceptance trial                          | 0/3       |
 
+## Deferred until the user asks (1)
+
+Written up but set aside; not dispatched until the operator asks for it.
+
+| Ticket                                                                                 | Outcome                                                  | Done when |
+| -------------------------------------------------------------------------------------- | -------------------------------------------------------- | --------- |
+| [F036-context-window-reminders](feats/worker-budgets/F036-context-window-reminders.md) | Context-window reminders with an operator-chosen handoff | 0/5       |
+
 ## Done (29)
 
 | Ticket                                                                               | Outcome                                                   | Done when |
