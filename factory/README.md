@@ -256,7 +256,9 @@ threads; earlier rejections link to their reviewers.
 The feed declares `stages` once per response, in order with each default actor. Each task adds
 `stage`, `actor`, `stageSince`, `step` (the index into `pipelineSteps`, or null), `rejectedBy`,
 `clearsAt` for a known provider reset, `acceptedAt` and `summary`, all from `runStage` and saved
-run fields. Accepted and landed runs keep the worker's `attempt`; older done runs show none.
+run fields. `kind` is the run's saved kind and `stopName` the declared stop that holds it (null
+when none does); both are keys of the declared lifecycle table, null before a run exists.
+Accepted and landed runs keep the worker's `attempt`; older done runs show none.
 The status action returns the same `stages` list and a `stage` map by ticket. The page draws its
 stage badges and stages-done count from `step` and `stage` when present, and falls back to the
 public status only for feeds without them. Stop notices name
@@ -1004,6 +1006,35 @@ For frontend development, `amp orb services ensure` starts the recorded replay a
 from `.amp/services.yaml`. That preview is labeled recorded data, not a live factory. To develop
 against a local dashboard, run `bun run web`; `FACTORY_API` overrides its default API proxy target
 `http://127.0.0.1:4310`. The built page reads both APIs on its own origin.
+
+### Lifecycle graph
+
+The page's Lifecycle section draws the declared transition table, which the feed carries as
+`lifecycle` (from `lifecycleStatus()`) beside `stages`. Nothing is drawn by hand: every state, stop
+and exit comes from the table, so a stop the table gives no exit is drawn with a "no exit" cue and
+its declared reason, and no exit appears that the table lacks. `queued` and `planned` come before
+the run kinds and are not in the table.
+
+- The path runs left to right, numbered: `planned`, `queued`, `preparing`, `creating`, `running`,
+  `done`. Below it, each state that has stops lists them, with the kinds that only hold stopped
+  runs (`preparation-failed`, `blocked`, `parked`, `uncertain`).
+- Each ticket is a marker on the state its feed `kind` and `stopName` select, linked to its
+  thread, and prints the ticket's own curated `stage` and `actor` (nobody when null), so a gating
+  run on `running` or an accepted and a merged run on `done` read differently. The state's own
+  actor is labelled "declared". The page never maps a status or stage to a state.
+- Groups and stops sort by who must act, most urgent first: the operator, the Foreman, a clock
+  wait (dim, with a countdown to `clearsAt`), then work in progress, then quiet states. The
+  actors are the ones `runLifecycle` declares. Ties keep table order.
+- A count of tickets whose `actor` is the operator is always shown at the top of the section.
+- A ticket on a stop gets a banner with who must act, the declared reason code, the stop's exit
+  actions, the causing thread with its role, and when the stage began. A run with no recorded stop
+  lists the exits its kind's stops declare, and says "no exit" only when none declares one.
+  Colour keeps the page's meaning (green done, orange now, red stopped with the text "stopped",
+  unlit when empty or queued; a clock wait stays dim); `uncertain` states say "outcome unknown".
+  The feed has no public reason label yet, so the banner prints the code.
+
+The five public statuses stay until F017. The section is read-only; `web/replay.ts` frames 19 to
+22 show an empty factory, one running ticket, one stopped ticket and four tickets on one state.
 
 ### Event trace
 

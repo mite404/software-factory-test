@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startDashboard } from "./dashboard";
 import { tasks } from "./native";
-import { openPersistence } from "./persistence";
+import { lifecycleStatus, openPersistence } from "./persistence";
 
 test("events are cursor ordered, bounded, read-only and expose only validated references", async () => {
   const root = await mkdtemp(join(tmpdir(), "factory-events-"));
@@ -255,7 +255,7 @@ test("HTTP retains authored labels across restarts and rejects untrusted labels 
         status: "planned",
         outcome: "Public plan",
       },
-      { id: "orphan", steps: [] },
+      { id: "orphan", steps: [], kind: "blocked", stopName: null },
     ];
     const check = async () => {
       const response = await fetch(url);
@@ -816,6 +816,110 @@ test("dashboard ignores observed titles, stops stale activity, and never serves 
     expect((await fetch(`${url}/api/status`, { method: "POST" })).status).toBe(
       405,
     );
+  } finally {
+    await server.stop(true);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the feed carries the declared lifecycle table and each run's kind and stop, and nothing private", async () => {
+  const root = await mkdtemp(join(tmpdir(), "factory-graph-"));
+  execFileSync("git", ["init", "-q", root]);
+  const directory = join(root, ".git/factory");
+  const canary = "PRIVATE-GRAPH-CANARY-/secret/brief.txt";
+  const base = "b".repeat(40);
+  const storage = openPersistence(directory, [
+    { id: "A", brief: canary, after: [] },
+    { id: "B", brief: canary, after: [] },
+    { id: "C", brief: canary, after: [] },
+  ]);
+  const worker = {
+    kind: "running",
+    base,
+    worktree: canary,
+    thread: "T-worker",
+    attempt: 1,
+    delivery: "sent",
+    requirements: canary,
+    feedback: canary,
+  } as const;
+  storage.commit(
+    {
+      enabled: true,
+      runs: {
+        A: {
+          ...worker,
+          incident: {
+            id: "stop-a",
+            ticket: "A",
+            owner: "T-owner",
+            cause: { thread: "T-worker", role: "worker" },
+            base,
+            attempt: 1,
+            reason: "provider-limit",
+            recovery: "wait",
+            providerLimit: {
+              message: canary,
+              observedAt: 1000,
+              resetAt: 9_000_000,
+              thread: "T-worker",
+            },
+            delivery: "queued",
+          },
+        },
+        B: {
+          kind: "blocked",
+          reason: canary,
+          base,
+          thread: "T-blocked",
+          incident: {
+            id: "stop-b",
+            ticket: "B",
+            owner: "T-owner",
+            base,
+            attempt: 1,
+            reason: "worker-blocked",
+            recovery: "inspect",
+            delivery: "queued",
+          },
+        },
+      },
+    },
+    "A",
+    "blocked",
+    canary,
+  );
+  storage.close();
+  const server = startDashboard({ root, port: 0 });
+  try {
+    const text = await (
+      await fetch(`http://localhost:${server.port}/api/status`)
+    ).text();
+    expect(text).not.toContain(canary);
+    const body = JSON.parse(text);
+    // The page draws this table, so it must be exactly the one the factory acts on.
+    expect(body.lifecycle).toEqual(
+      JSON.parse(JSON.stringify(lifecycleStatus())),
+    );
+    expect(body.lifecycle.blocked.stops.withoutWorker.exits).toEqual([]);
+    expect(body.tasks).toMatchObject([
+      {
+        id: "A",
+        kind: "running",
+        stopName: "providerLimit",
+        stage: "rate-limited",
+        actor: "computer",
+        clearsAt: new Date(9_000_000).toISOString(),
+        stop: { reason: "provider-limit", role: "worker" },
+      },
+      {
+        id: "B",
+        kind: "blocked",
+        stopName: "uncheckpointed",
+        actor: "foreman",
+      },
+      { id: "C", kind: null, stopName: null, stage: "queued" },
+    ]);
   } finally {
     await server.stop(true);
     await rm(root, { recursive: true, force: true });

@@ -110,9 +110,9 @@ Run the shared preflight in `docs/v1-execution.md`. Baseline gates have not run 
 
 ## Done when
 
-- [ ] The page shows every run kind, its stops and their exits from the declared table.
-- [ ] Each ticket sits on its current state and opens its thread.
-- [ ] States that wait for the operator come first, with a visible count.
-- [ ] No private field reaches the feed.
-- [ ] Rendered screenshots of the four cases are inspected and attached to the report.
-- [ ] Full gates, guard and fresh cold review pass on the exact candidate.
+- [x] The page shows every run kind, its stops and their exits from the declared table.
+- [x] Each ticket sits on its current state and opens its thread.
+- [x] States that wait for the operator come first, with a visible count.
+- [x] No private field reaches the feed.
+- [x] Rendered screenshots of the four cases are inspected and attached to the report.
+- [x] Full gates, guard and fresh cold review pass on the exact candidate.
