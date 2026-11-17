@@ -37,7 +37,7 @@ prerequisites, not permission to dispatch every draft against today's base.
 | [F007-run-transition-table](feats/done/F007-run-transition-table.md)                    | One declared, tested run lifecycle table                  | F003 to F006                                                             | F03, F07, operator durability priority    |
 | [F008-gate-failure-feedback](feats/done/F008-gate-failure-feedback.md)                  | A failed gate returns its output to the worker            | F003-provider-limit-resume                                               | F03, operator leverage priority           |
 | [F009-attempt-cap-parking](feats/done/F009-attempt-cap-parking.md)                      | Twice-escalated ticket parks; queue continues             | F007-run-transition-table                                                | F03, operator autonomy priority           |
-| [F010-brief-fact-check](feats/worker-feedback/F010-brief-fact-check.md)                 | No worker starts on an incomplete brief                   | F007-run-transition-table                                                | F02, F03                                  |
+| [F010-brief-fact-check](feats/done/F010-brief-fact-check.md)                            | No worker starts on an incomplete brief                   | F007-run-transition-table                                                | F02, F03                                  |
 | [F011-step-actor-labels](feats/lifecycle-view/F011-step-actor-labels.md)                | Each step and exit names who performs it                  | F007, F016-kit-page-default                                              | F07                                       |
 | [F012-lifecycle-graph-view](feats/lifecycle-view/F012-lifecycle-graph-view.md)          | Lifecycle drawn with tickets on their states              | F011, F014-lifecycle-stages                                              | F07                                       |
 | [F013-event-log-drawer](feats/done/F013-event-log-drawer.md)                            | Live event log drawer and read-only trace API             | F016-kit-page-default                                                    | F07, operator observability priority      |
@@ -178,9 +178,11 @@ F003-provider-limit-resume is also merged, but its file stays outside `feats/don
 proof at a real provider limit happens.
 
 F009 landed at attempt two: the first cold review found that a parked run could not resume once an
-independent ticket landed. The operator set the order after it: F010, F011 and F014, then F012 and
-F017 as their dependencies allow, then F023, then F022, F025, F029, F026, F027 and F028 last. All
-are placed. The factory runs one ticket at a time from merged main.
+independent ticket landed. F010 landed at attempt two: the first review found that an empty
+dependency insight left no real exit, that reload released refusals for any caller, and that any
+Markdown path counted as the ticket file. The operator set the order after them: F011 and F014,
+then F012 and F017 as their dependencies allow, then F023, then F022, F025, F029, F026, F027 and
+F028 last. All are placed. The factory runs one ticket at a time from merged main.
 
 v1-ticket10 keeps the recovery of outages that still happen, and v1-ticket8 keeps exclusive
 ownership across orbs. Keep preserved backup owners until required evidence preservation is
