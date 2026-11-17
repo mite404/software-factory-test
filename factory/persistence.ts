@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { validReview, type Review } from "./review";
 import { validExecutor, type Executor } from "./executor";
 import { validDeliveryIntent, type DeliveryIntent } from "./delivery";
-import type { Actor } from "./pipeline";
+import type { Actor, pipelineSteps } from "./pipeline";
 
 const modelFamilies = new Map<string, string>([
   ["alibaba", "alibaba"],
@@ -112,6 +112,7 @@ export type ProviderLimit = {
   observedAt: number;
   resetAt?: number;
 };
+type PipelineStep = (typeof pipelineSteps)[number]["id"];
 export type StopIncident = {
   id: string;
   ticket: string;
@@ -156,6 +157,11 @@ export type Run = (
       requirements?: string;
       feedback?: string;
       deliveryIntent?: DeliveryIntent;
+      /** Saved with its process group when the gate spawns and removed when it returns; a later
+       * reconcile retires it once that group has stopped, and an idle report gates again. */
+      gate?: { at: number; pid: number };
+      /** The pipeline step that rejected the previous attempt. */
+      rejectedBy?: Extract<PipelineStep, "gate" | "review" | "merge">;
       /** The factory rebased the reported revision `from` onto `base` as `revision`, moving the
        * worker's HEAD from `source`; `at` is "verified" only once that HEAD is at `revision`. */
       rebased?: {
@@ -189,6 +195,11 @@ export type Run = (
       kind: "done";
       revision: string;
       acceptedBase?: string;
+      acceptedAt?: number;
+      /** The worker attempt that was accepted or landed; omitted by runs saved before it. */
+      attempt?: number;
+      /** Curated by publicSummary at acceptance; the only report text the feed may show. */
+      summary?: string;
       merge?: MergeRecord;
       thread: ThreadID;
       insight: string;
@@ -202,6 +213,8 @@ export type Run = (
   executor?: Executor;
   /** Saved at dispatch; omission is the main lane. */
   lane?: "light";
+  /** When the run entered its current stage, stamped by commit; omitted in older state. */
+  stageAt?: number;
 };
 
 type RunAction =
@@ -771,6 +784,136 @@ export function lifecycleStatus() {
   );
 }
 
+const summaryLength = 120;
+
+/**
+ * Curate a worker's explicitly public one-line summary like a title: only text the worker marked
+ * public, one line, cut to a fixed length, never paths, URLs or thread IDs.
+ * @returns `{ summary }` when publishable, otherwise `{}` so the run omits the field.
+ */
+export function publicSummary(value: unknown): { summary?: string } {
+  if (typeof value !== "string") return {};
+  // ponytail: refuses known private shapes only; a reviewed allowlist if summaries widen.
+  const line = value.replace(/\s+/g, " ").trim();
+  if (!line || /[/\\]|https?:|\bT-[\w-]+|\p{Cc}/u.test(line)) return {};
+  return {
+    summary:
+      line.length > summaryLength
+        ? `${line.slice(0, summaryLength - 1)}…`
+        : line,
+  };
+}
+
+/** Every named stage in pipeline order, with who acts by default and its public status until F017. */
+export const stages = [
+  { id: "queued", actor: "computer", status: "queued" },
+  { id: "planned", actor: "foreman", status: "planned" },
+  { id: "preparing", actor: runLifecycle.preparing.actor, status: "unknown" },
+  { id: "creating", actor: runLifecycle.creating.actor, status: "unknown" },
+  { id: "building", actor: runLifecycle.running.actor, status: "unknown" },
+  { id: "gating", actor: "computer", status: "unknown" },
+  { id: "reviewing", actor: "model", status: "unknown" },
+  {
+    id: "escalated",
+    actor: runLifecycle.blocked.stops.repair.actor,
+    status: "blocked",
+  },
+  {
+    id: "parked",
+    actor: runLifecycle.parked.actor,
+    status: "blocked",
+  },
+  {
+    id: "rate-limited",
+    actor: runLifecycle.running.stops.providerLimit.actor,
+    status: "unknown",
+  },
+  {
+    id: "blocked",
+    actor: runLifecycle.blocked.actor,
+    status: "blocked",
+  },
+  {
+    id: "uncertain",
+    actor: runLifecycle.uncertain.actor,
+    status: "blocked",
+  },
+  { id: "accepted", actor: "foreman", status: "accepted" },
+  { id: "merged", actor: null, status: "accepted" },
+] as const satisfies readonly {
+  id: string;
+  actor: Actor | null;
+  status: string;
+}[];
+export type Stage = (typeof stages)[number]["id"];
+
+// The declared stop that holds a run, read from the transition table.
+function stopActor(run: Run): Actor {
+  const entry: LifecycleKind = runLifecycle[run.kind];
+  const reason = run.incident?.reason;
+  const stop = Object.values(entry.stops).find(
+    (stop) =>
+      (!reason || stop.reasons.includes(reason)) &&
+      (!stop.matches || stop.matches(run, reason)),
+  );
+  return stop?.actor ?? entry.actor;
+}
+
+type StageStep = [Stage, PipelineStep | null];
+
+function runningStage(run: Extract<Run, { kind: "running" }>): StageStep {
+  const step = run.review ? "review" : "builder";
+  if (run.gate) return ["gating", "gate"];
+  if (run.incident?.reason === "provider-limit") return ["rate-limited", step];
+  return [run.review ? "reviewing" : "building", step];
+}
+
+// Retained checkpoints never hold a review, so a stopped worker sits at the builder step. A
+// rejection saved before `rejectedBy` existed names no step rather than a guessed one.
+const kindStages: {
+  [K in Run["kind"]]: (run: Extract<Run, { kind: K }>) => StageStep;
+} = {
+  preparing: () => ["preparing", "setup"],
+  "preparation-failed": () => ["blocked", "setup"],
+  creating: () => ["creating", "builder"],
+  running: runningStage,
+  blocked: (run) =>
+    run.repair
+      ? ["escalated", run.repair.rejectedBy ?? null]
+      : ["blocked", run.checkpoint ? "builder" : null],
+  parked: (run) => ["parked", run.repair.rejectedBy ?? null],
+  uncertain: () => ["uncertain", "builder"],
+  done: (run) => [run.merge ? "merged" : "accepted", "merge"],
+};
+
+function stageOf(run: Run): StageStep {
+  return (kindStages[run.kind] as (run: Run) => StageStep)(run);
+}
+
+/**
+ * Name where a ticket is and who must act; the only stage mapping status, feed and notices use.
+ * @param intake Separates planned from queued tickets that have no run yet.
+ * @returns `actor` null means nobody; `since` is null for runs saved before stages were stamped.
+ */
+export function runStage(run: Run | undefined, intake?: Task["intake"]) {
+  const [stage, step] = run
+    ? stageOf(run)
+    : [intake === "planned" ? ("planned" as const) : ("queued" as const), null];
+  const declared = stages.find((entry) => entry.id === stage)!;
+  return {
+    stage,
+    // A stop on any stage names its own actor from the transition table.
+    actor: run?.incident ? stopActor(run) : declared.actor,
+    status: declared.status,
+    step,
+    since: run?.stageAt ?? null,
+    clearsAt:
+      stage === "rate-limited"
+        ? (run?.incident?.providerLimit?.resetAt ?? null)
+        : null,
+  };
+}
+
 export type State = {
   enabled: boolean;
   owner?: ThreadID;
@@ -943,6 +1086,8 @@ function validateTiming(id: string, run: Record<string, unknown>) {
     run.incident === undefined ? undefined : record(run.incident).notifiedAt;
   if (notifiedAt !== undefined && !timestamp(notifiedAt))
     throw new Error(`Invalid factory notice time ${id}`);
+  if (run.stageAt !== undefined && !timestamp(run.stageAt))
+    throw new Error(`Invalid factory stage time ${id}`);
 }
 
 function thread(value: unknown): value is ThreadID {
@@ -987,6 +1132,29 @@ function validRebase(value: unknown): boolean {
   );
 }
 
+// A running gate marker and the step that rejected the previous attempt.
+function validStageFacts(run: Record<string, unknown>): boolean {
+  const gate = run.gate === undefined ? { at: 0, pid: 1 } : record(run.gate);
+  return (
+    timestamp(gate.at) &&
+    positiveInteger(gate.pid) &&
+    Object.keys(gate).length === 2 &&
+    [undefined, "gate", "review", "merge"].includes(
+      run.rejectedBy as string | undefined,
+    )
+  );
+}
+
+// The acceptance time and the curated public summary, both optional for older runs.
+function validAcceptance(run: Record<string, unknown>): boolean {
+  return (
+    (run.acceptedAt === undefined || timestamp(run.acceptedAt)) &&
+    (run.attempt === undefined || positiveInteger(run.attempt)) &&
+    (run.summary === undefined ||
+      publicSummary(run.summary).summary === run.summary)
+  );
+}
+
 function validateMerge(id: string, run: Record<string, unknown>) {
   if (run.merge === undefined) return;
   const merge = record(run.merge);
@@ -1014,7 +1182,8 @@ const runValidators: Record<string, (run: Record<string, unknown>) => boolean> =
       ["queued", "sending", "sent"].includes(run.delivery) &&
       validDeliveryIntent(run.deliveryIntent) &&
       reviewFields(run) &&
-      validRebase(run.rebased),
+      validRebase(run.rebased) &&
+      validStageFacts(run),
     blocked: (run) =>
       text(run.reason) &&
       (run.thread === undefined || thread(run.thread)) &&
@@ -1047,6 +1216,7 @@ const runValidators: Record<string, (run: Record<string, unknown>) => boolean> =
       (run.acceptedBase === undefined ||
         (typeof run.acceptedBase === "string" &&
           /^[a-f0-9]{40}$/.test(run.acceptedBase))) &&
+      validAcceptance(run) &&
       thread(run.thread) &&
       typeof run.insight === "string" &&
       reviewFields(run),
@@ -1745,12 +1915,30 @@ export function openPersistence(
           )
           .get(ticket, action)?.detail;
       },
-      /** Persist state and its event together. @throws On transaction failure; both roll back. */
+      /** Persist state and its event together, stamping each run that changed stage. @throws On transaction failure; both roll back. */
       commit(state: State, ticket: string, action: string, detail: string) {
+        const at = now();
         db.transaction(() => {
+          const saved = new Map(
+            db
+              .query<{ ticket: string; data: string }, []>(
+                "SELECT ticket, data FROM runs",
+              )
+              .all()
+              .map((row) => [row.ticket, JSON.parse(row.data) as Run]),
+          );
+          for (const [id, run] of Object.entries(state.runs)) {
+            const before = saved.get(id);
+            const stageAt =
+              before && runStage(before).stage === runStage(run).stage
+                ? before.stageAt
+                : at;
+            if (stageAt === undefined) delete run.stageAt;
+            else run.stageAt = stageAt;
+          }
           saveState(db, state);
           saveEvent(db, {
-            at: new Date(now()).toISOString(),
+            at: new Date(at).toISOString(),
             ticket,
             action,
             detail,

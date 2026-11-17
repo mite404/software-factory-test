@@ -380,7 +380,18 @@ test("the recorded replay draws a reviewed landing, rejections, a stopped review
   const polls = (hit: (view: (typeof views)[number]) => unknown) =>
     views.flatMap((view, n) => (hit(view) ? [n] : []));
   expect(polls((view) => view.landed && view.reviewed)).toEqual([6]);
-  expect(polls((view) => view.backRow)).toEqual([3, 9, 13, 14]);
+  expect(polls((view) => view.backRow)).toEqual([3, 9, 13, 14, 17]);
+  expect(
+    [14, 15, 16, 17, 18].map((n) => views[n]!.tickets.at(-1)?.lifecycle),
+  ).toEqual([
+    "parked · operator",
+    "gating · computer",
+    "reviewing · model",
+    "escalated · foreman",
+    "rate-limited · computer · 03:00Z",
+  ]);
+  expect(views[15]!.tickets[1]?.lifecycle).toBe("merged · nobody");
+  expect(feedAt(15).tasks[1]?.summary).toBe("Landed after its recorded checks");
   expect(views[13]!.tickets.at(-1)?.stop?.href).toBe(
     "https://ampcode.com/threads/T-replay-review-2",
   );
@@ -534,4 +545,38 @@ test("event rows keep cursor order, exact ticket filters and safe thread links",
   ]);
   expect(eventRows(events, "missing")).toEqual([]);
   expect(eventRows(events, "AB")[0]?.href).toBeNull();
+});
+
+test("stage badges follow the factory's named step, not the public status", () => {
+  const named = (task: Partial<FeedTask>) =>
+    derive(
+      null,
+      {
+        ...feed(["unknown"]),
+        tasks: [{ ...feed(["unknown"]).tasks[0]!, ...task }],
+      },
+      NOW,
+    ).tickets[0]!;
+  const gating = named({ stage: "gating", actor: "computer", step: 4 });
+  expect(gating.steps).toEqual(["done", "done", "done", "done", "now", "", ""]);
+  expect(gating.stage).toBe(4);
+  const conflicted = named({
+    status: "blocked",
+    stage: "escalated",
+    actor: "foreman",
+    step: 6,
+    rejectedBy: "merge",
+    stop: { reason: "verification-rejected", role: "worker", thread: "T-w" },
+  });
+  expect(conflicted.steps).toEqual([
+    "done",
+    "done",
+    "done",
+    "done",
+    "done",
+    "done",
+    "fail",
+  ]);
+  // A feed without stages keeps the earlier inference.
+  expect(named({}).steps).toEqual(["", "", "", "", "", "", ""]);
 });

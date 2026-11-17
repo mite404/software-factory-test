@@ -324,6 +324,11 @@
   margin-top: 8px;
 }
 
+/* "<stage> · <actor> · <clear time>" needs the whole row, not one of three columns. */
+#kit [data-dash-detail] dl:not(#_) > [data-stage] {
+  grid-column: 1 / -1;
+}
+
 #kit [data-ticket="blocked"] > [data-status] {
   color: var(--fail);
 }

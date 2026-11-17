@@ -20,6 +20,10 @@ import {
   factoryStatus,
   lifecycleStatus,
   openPersistence,
+  publicSummary,
+  runStage,
+  stages,
+  type Run,
   type State,
 } from "./persistence";
 
@@ -176,6 +180,268 @@ test("lifecycle walking names every exitless stop and validates recoveries and p
   } finally {
     storage.close();
   }
+});
+
+test("every run kind and stop reason names exactly one declared stage and actor", () => {
+  const sha = "a".repeat(40);
+  const worker = {
+    kind: "running",
+    base: sha,
+    worktree: "/w",
+    thread: "T-worker",
+    attempt: 2,
+    delivery: "sent",
+  } as const;
+  const review = { thread: "T-reviewer", delivery: "sent" } as never;
+  const incident = (reason: string, extra = {}) => ({
+    incident: { reason, ...extra } as NonNullable<Run["incident"]>,
+  });
+  const prep = {
+    base: sha,
+    worktree: "/w",
+    command: "x",
+    timeoutMs: 1,
+    log: "l",
+  };
+  const cases: [string, Run | undefined, string, string | null][] = [
+    ["no run", undefined, "queued", "computer"],
+    ["preparing", { kind: "preparing", ...prep }, "preparing", "computer"],
+    [
+      "interrupted setup",
+      { kind: "preparing", ...prep, ...incident("preparation-interrupted") },
+      "preparing",
+      "foreman",
+    ],
+    [
+      "failed setup",
+      {
+        kind: "preparation-failed",
+        reason: "x",
+        ...prep,
+        ...incident("preparation-failed"),
+      },
+      "blocked",
+      "foreman",
+    ],
+    [
+      "creating",
+      { kind: "creating", base: sha, worktree: "/w" },
+      "creating",
+      "computer",
+    ],
+    [
+      "ambiguous creation",
+      {
+        kind: "creating",
+        base: sha,
+        worktree: "/w",
+        ...incident("creation-unknown"),
+      },
+      "creating",
+      "foreman",
+    ],
+    ["worker writing", worker, "building", "model"],
+    [
+      "gate running",
+      { ...worker, gate: { at: 1, pid: 1 } },
+      "gating",
+      "computer",
+    ],
+    ["cold review", { ...worker, review }, "reviewing", "model"],
+    [
+      "reviewer awaiting approval",
+      { ...worker, review, ...incident("approval-required") },
+      "reviewing",
+      "operator",
+    ],
+    [
+      "provider limit",
+      {
+        ...worker,
+        ...incident("provider-limit", { providerLimit: { resetAt: 9000 } }),
+      },
+      "rate-limited",
+      "computer",
+    ],
+    [
+      "two rejections",
+      {
+        kind: "blocked",
+        reason: "x",
+        thread: "T-worker",
+        repair: worker,
+        ...incident("verification-rejected"),
+      },
+      "escalated",
+      "foreman",
+    ],
+    [
+      "worker blocked",
+      {
+        kind: "blocked",
+        reason: "x",
+        thread: "T-worker",
+        checkpoint: worker,
+        ...incident("worker-blocked"),
+      },
+      "blocked",
+      "foreman",
+    ],
+    [
+      "four rejections",
+      {
+        kind: "parked",
+        reason: "x",
+        thread: "T-worker",
+        repair: { ...worker, attempt: 4 },
+        ...incident("verification-rejected"),
+      },
+      "parked",
+      "operator",
+    ],
+    [
+      "keyed unknown delivery",
+      {
+        kind: "uncertain",
+        reason: "x",
+        thread: "T-worker",
+        checkpoint: { ...worker, deliveryIntent: {} } as never,
+        ...incident("delivery-unknown"),
+      },
+      "uncertain",
+      "computer",
+    ],
+    [
+      "legacy unknown delivery",
+      {
+        kind: "uncertain",
+        reason: "x",
+        thread: "T-worker",
+        ...incident("delivery-unknown"),
+      },
+      "uncertain",
+      "foreman",
+    ],
+    [
+      "accepted",
+      { kind: "done", revision: sha, thread: "T-worker", insight: "" },
+      "accepted",
+      "foreman",
+    ],
+    [
+      "merged",
+      {
+        kind: "done",
+        revision: sha,
+        thread: "T-worker",
+        insight: "",
+        merge: { pr: 1, commit: sha, at: "2026-11-17T00:00:00Z" },
+      },
+      "merged",
+      null,
+    ],
+  ];
+  for (const [name, run, stage, actor] of cases)
+    expect([name, runStage(run).stage, runStage(run).actor]).toEqual([
+      name,
+      stage,
+      actor,
+    ]);
+  expect(runStage(undefined, "planned")).toMatchObject({
+    stage: "planned",
+    actor: "foreman",
+    status: "planned",
+  });
+  expect(runStage(cases[10]![1]).clearsAt).toBe(9000);
+  expect(runStage(cases[7]![1]).clearsAt).toBeNull();
+  // Public statuses keep their pre-stage meaning: one per kind, unknown until observed.
+  expect(cases.map(([, run]) => runStage(run).status)).toEqual([
+    "queued",
+    "unknown",
+    "unknown",
+    "blocked",
+    "unknown",
+    "unknown",
+    "unknown",
+    "unknown",
+    "unknown",
+    "unknown",
+    "unknown",
+    "blocked",
+    "blocked",
+    "blocked",
+    "blocked",
+    "blocked",
+    "accepted",
+    "accepted",
+  ]);
+  const ids = stages.map((entry) => entry.id);
+  expect(new Set(ids).size).toBe(ids.length);
+  const reasons = [
+    ...new Set(
+      Object.values(lifecycleStatus()).flatMap((entry) =>
+        Object.values(entry.stops).flatMap((stop) => stop.reasons),
+      ),
+    ),
+  ];
+  for (const [, run] of cases)
+    for (const reason of [undefined, ...reasons]) {
+      const named = runStage(
+        run && (reason ? { ...run, ...incident(reason) } : run),
+      );
+      expect(ids.filter((id) => id === named.stage)).toHaveLength(1);
+      expect([null, "computer", "model", "foreman", "operator"]).toContain(
+        named.actor,
+      );
+    }
+});
+
+test("acceptance summaries publish one bounded line and refuse private shapes", () => {
+  expect(publicSummary("  Names every\n run's  stage ")).toEqual({
+    summary: "Names every run's stage",
+  });
+  const long = publicSummary("word ".repeat(40)).summary!;
+  expect(long).toHaveLength(120);
+  expect(long.endsWith("…")).toBe(true);
+  for (const value of [
+    "See /home/user/report.json",
+    "Read C:\\reports",
+    "Thread T-01a1-worker has it",
+    "https://example.invalid",
+    "bell\u0007",
+    "   ",
+    42,
+    undefined,
+  ])
+    expect(publicSummary(value)).toEqual({});
+});
+
+test("state saved before stages opens unchanged and maps to a stage", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "factory-stage-legacy-"));
+  roots.push(directory);
+  openPersistence(directory, queue).close();
+  const saved = {
+    kind: "running",
+    base: "base",
+    worktree: "/w",
+    thread: "T-worker",
+    attempt: 1,
+    delivery: "sent",
+  };
+  const db = new Database(join(directory, "state.sqlite"));
+  db.query("INSERT INTO runs (ticket, data) VALUES ('A', ?)").run(
+    JSON.stringify(saved),
+  );
+  db.close();
+  const before = await readFile(join(directory, "state.sqlite"));
+  const run = factoryStatus(directory).runs.A;
+  expect(run).toEqual(saved as Run);
+  expect(runStage(run)).toMatchObject({
+    stage: "building",
+    status: "unknown",
+    since: null,
+  });
+  expect(await readFile(join(directory, "state.sqlite"))).toEqual(before);
 });
 
 test("event reads never initialize legacy storage or upgrade a version-one database", async () => {

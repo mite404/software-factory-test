@@ -9,7 +9,10 @@ import {
   factoryRecords,
   lifecycleStatus,
   runCheckpoint,
+  runStage,
+  stages,
   taskSteps,
+  type Task,
   type Run,
 } from "./persistence";
 import { pipelineSteps } from "./pipeline";
@@ -282,27 +285,21 @@ function rejectedReviews(
   );
 }
 
-function durableTask(id: string, steps: string[], run: Run | undefined) {
+function durableTask(
+  id: string,
+  steps: string[],
+  run: Run | undefined,
+  intake: Task["intake"],
+) {
   const row: DashboardSnapshot["tasks"][number] = {
     id,
     title: id,
     steps,
-    status: "queued",
+    status: runStage(run, intake).status,
     thread: null,
     revision: null,
   };
   if (!run) return row;
-  const statuses = {
-    preparing: "unknown",
-    "preparation-failed": "blocked",
-    creating: "unknown",
-    running: "unknown",
-    blocked: "blocked",
-    parked: "blocked",
-    uncertain: "blocked",
-    done: "accepted",
-  } as const;
-  row.status = statuses[run.kind];
   if ("thread" in run) row.thread = reference(run.thread ?? null, /^T-[\w-]+$/);
   if (run.kind === "done")
     row.revision = reference(run.revision, /^[a-f0-9]{40}$/);
@@ -380,9 +377,35 @@ function projectRunLinks(id: string, run: Run | undefined) {
   return {
     reviewerThread: reference(review?.thread ?? null, /^T-[\w-]+$/),
     stop: projectStop(run?.incident),
-    parked: run?.kind === "parked",
+    parked: runStage(run).stage === "parked",
     // The owning worker's attempt; a repair after rejection raises it.
     attempt: attemptOf(checkpoint),
+  };
+}
+
+function iso(at: number | null | undefined) {
+  return typeof at === "number" ? new Date(at).toISOString() : null;
+}
+
+// Curated at acceptance; the raw report insight never leaves storage.
+function projectAcceptance(run: Run | undefined) {
+  return run?.kind === "done"
+    ? { acceptedAt: iso(run.acceptedAt), summary: run.summary ?? null }
+    : { acceptedAt: null, summary: null };
+}
+
+// Only the stage's own curated fields: no reasons, briefs, report paths or thread content.
+function projectStage(run: Run | undefined, intake: Task["intake"]) {
+  const { stage, actor, step, since, clearsAt } = runStage(run, intake);
+  const work = runCheckpoint(run);
+  return {
+    stage,
+    actor,
+    stageSince: iso(since),
+    step: step ? pipelineSteps.findIndex((entry) => entry.id === step) : null,
+    rejectedBy: work && "rejectedBy" in work ? (work.rejectedBy ?? null) : null,
+    clearsAt: iso(clearsAt),
+    ...projectAcceptance(run),
   };
 }
 
@@ -390,11 +413,12 @@ function projectTask(
   id: string,
   steps: string[],
   run: Run | undefined,
+  intake: Task["intake"],
   observed: DashboardSnapshot["tasks"][number] | undefined,
   fresh: boolean,
   repository: string | null,
 ) {
-  const row = durableTask(id, steps, run);
+  const row = durableTask(id, steps, run, intake);
   const review = reviewFor(id, run);
   const workerThread = row.thread;
   const pending = row.status !== "accepted";
@@ -423,6 +447,7 @@ function projectTask(
   return {
     ...row,
     workerThread,
+    ...projectStage(run, intake),
     ...projectRunLinks(id, run),
     merge: projectMerge(run, repository),
     evidence: {
@@ -529,6 +554,7 @@ export function startDashboard({ root, port }: { root: string; port: number }) {
         project: basename(root),
         pipelineSteps,
         lifecycle: lifecycleStatus(),
+        stages,
         target: "",
         observedAt: snapshot?.observedAt ?? null,
         observations,
@@ -557,12 +583,11 @@ export function startDashboard({ root, port }: { root: string; port: number }) {
             id,
             steps.get(id) ?? [],
             Object.hasOwn(state.runs, id) ? state.runs[id] : undefined,
+            ticket?.intake,
             observed.get(id),
             fresh,
             repository,
           );
-          if (!Object.hasOwn(state.runs, id) && ticket?.intake === "planned")
-            row.status = "planned";
           return {
             ...row,
             outcome: ticket?.outcome ?? null,
