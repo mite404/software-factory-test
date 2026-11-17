@@ -69,6 +69,8 @@ export type Task = {
   steps?: string[];
   size?: "small" | "medium" | "large";
   risky?: boolean;
+  /** Omission keeps the main lane; only a definition with lightWorker admits "light". */
+  lane?: "light";
 };
 type Preparation = {
   base: string;
@@ -85,6 +87,10 @@ export type ProviderLimitPolicy =
       reviewerModel: `${string}/${string}`;
       workerModel?: `${string}/${string}`;
     };
+export type LightWorker = {
+  model: `${string}/${string}`;
+  effort: AgentReasoningEffort;
+};
 export type DefinitionPin = {
   digest: string;
   scope: string[];
@@ -93,6 +99,8 @@ export type DefinitionPin = {
   workerModel: `${string}/${string}`;
   workerEffort?: AgentReasoningEffort;
   workerRunner?: string;
+  /** Present exactly when the authored capacity is 2; omission is today's single lane. */
+  lightWorker?: LightWorker;
   instructions: string;
   tickets: string;
   watchdog?: WatchdogPolicy;
@@ -148,6 +156,14 @@ export type Run = (
       requirements?: string;
       feedback?: string;
       deliveryIntent?: DeliveryIntent;
+      /** The factory rebased the reported revision `from` onto `base` as `revision`, moving the
+       * worker's HEAD from `source`; `at` is "verified" only once that HEAD is at `revision`. */
+      rebased?: {
+        from: string;
+        source: string;
+        revision: string;
+        at: "intended" | "verified";
+      };
     }
   | {
       kind: "blocked";
@@ -184,6 +200,8 @@ export type Run = (
   incident?: StopIncident;
   watchdog?: Watchdog;
   executor?: Executor;
+  /** Saved at dispatch; omission is the main lane. */
+  lane?: "light";
 };
 
 type RunAction =
@@ -220,6 +238,8 @@ type LifecycleStop = {
   recovery: StopIncident["recovery"];
   exits: readonly LifecycleExit[];
   blocks?: readonly "dispatch"[];
+  /** Omission holds only the run's own lane; "factory" holds every lane. */
+  holds?: "factory";
   foremanOnly?: string;
   activity?: "error" | "awaiting-approval";
   matches?: (run: Run, reason?: StopIncident["reason"]) => boolean;
@@ -473,6 +493,7 @@ export const runLifecycle = {
           run.kind === "blocked" &&
           (reason ?? run.incident?.reason) === "brief-incomplete",
         blocks: ["dispatch"],
+        holds: "factory",
         exits: [
           {
             action: "reload",
@@ -529,6 +550,7 @@ export const runLifecycle = {
         trigger: "stopped",
         reasons: ["target-changed"],
         recovery: "inspect",
+        // A clean target that descends from the candidate's base is rebased, never stopped.
         matches: (run, reason) =>
           run.kind === "blocked" && !!run.thread && reason === "target-changed",
         exits: [
@@ -951,6 +973,20 @@ function reviewFields(run: Record<string, unknown>): boolean {
   );
 }
 
+function revision(value: unknown): boolean {
+  return typeof value === "string" && /^[a-f0-9]{40}$/.test(value);
+}
+
+function validRebase(value: unknown): boolean {
+  if (value === undefined) return true;
+  const rebase = record(value);
+  return (
+    [rebase.from, rebase.source, rebase.revision].every(revision) &&
+    (rebase.at === "intended" || rebase.at === "verified") &&
+    Object.keys(rebase).length === 4
+  );
+}
+
 function validateMerge(id: string, run: Record<string, unknown>) {
   if (run.merge === undefined) return;
   const merge = record(run.merge);
@@ -977,7 +1013,8 @@ const runValidators: Record<string, (run: Record<string, unknown>) => boolean> =
       typeof run.delivery === "string" &&
       ["queued", "sending", "sent"].includes(run.delivery) &&
       validDeliveryIntent(run.deliveryIntent) &&
-      reviewFields(run),
+      reviewFields(run) &&
+      validRebase(run.rebased),
     blocked: (run) =>
       text(run.reason) &&
       (run.thread === undefined || thread(run.thread)) &&
@@ -1037,20 +1074,77 @@ function validDigest(value: unknown): value is string {
   return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 }
 
+const efforts = new Set<unknown>([
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]);
+
+/** Validate an authored or pinned light lane: a known model family and a supported effort. */
+export function validLightWorker(value: unknown): value is LightWorker {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const light = value as Record<string, unknown>;
+  return (
+    Object.keys(light).every((key) => key === "model" || key === "effort") &&
+    typeof light.model === "string" &&
+    /^[^/]+\/.+$/.test(light.model) &&
+    modelFamily(light.model) !== undefined &&
+    efforts.has(light.effort)
+  );
+}
+
+export type Lane = "main" | "light";
+
+/** The lane a run was dispatched into; runs saved before lanes existed are main. */
+export function runLane(run: Run): Lane {
+  return run.lane ?? "main";
+}
+
+function factoryHold(run: Run, action: "resume" | "retry-setup" | "dispatch") {
+  const entry: LifecycleKind = runLifecycle[run.kind];
+  return Object.values(entry.stops).some(
+    (stop) =>
+      stop.holds === "factory" &&
+      stop.blocks?.includes(action as "dispatch") &&
+      (!stop.matches || stop.matches(run, run.incident?.reason)),
+  );
+}
+
+/** The one admission check for every transition that takes a lane: dispatch, resume,
+ * provider-error restoration and retry-setup. `except` names the run being restored.
+ * One lane keeps the rules from before lanes. With two lanes every other unfinished run of the
+ * lane holds it, parked included, and only factory-scoped stops hold the other lane.
+ */
+export function laneHeld(
+  runs: State["runs"],
+  lane: Lane,
+  action: "resume" | "retry-setup" | "dispatch",
+  twoLanes: boolean,
+  except?: string,
+) {
+  return Object.entries(runs).some(
+    ([id, run]) =>
+      id !== except &&
+      (twoLanes
+        ? (runLane(run) === lane && run.kind !== "done") ||
+          factoryHold(run, action)
+        : runBlocks(run, action) ||
+          (action === "dispatch" && runBlocks(run, "reconcile"))),
+  );
+}
+
 function workerSettings(pin: Record<string, unknown>): boolean {
   return (
     optionalText(pin.workerRunner) &&
     validProviderLimitPolicy(pin.providerLimit, String(pin.workerModel)) &&
-    new Set<unknown>([
-      undefined,
-      "none",
-      "minimal",
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-      "max",
-    ]).has(pin.workerEffort)
+    (pin.workerEffort === undefined || efforts.has(pin.workerEffort)) &&
+    (pin.lightWorker === undefined ||
+      (validLightWorker(pin.lightWorker) &&
+        validProviderLimitPolicy(pin.providerLimit, pin.lightWorker.model)))
   );
 }
 
@@ -1148,6 +1242,11 @@ function validateIncident(id: string, value: unknown) {
   if (!valid) throw new Error(`Invalid factory incident ${id}`);
 }
 
+function validateLane(id: string, lane: unknown) {
+  if (lane !== undefined && lane !== "light")
+    throw new Error(`Invalid factory lane ${id}`);
+}
+
 function validateRun(id: string, value: unknown) {
   const run = record(value);
   validateMerge(id, run);
@@ -1157,6 +1256,7 @@ function validateRun(id: string, value: unknown) {
     throw new Error(`Invalid factory executor ${id}`);
   if (run.definition !== undefined && !validDigest(run.definition))
     throw new Error(`Invalid definition pin ${id}`);
+  validateLane(id, run.lane);
   const validate =
     typeof run.kind === "string" && Object.hasOwn(runValidators, run.kind)
       ? runValidators[run.kind]

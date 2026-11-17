@@ -259,6 +259,55 @@ test("installer validates native effort before writes and dispatch rejects inval
   }
 }, 60_000);
 
+test("installer writes a light lane with capacity 2 and refuses an unknown light model before writes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "factory-light-"));
+  try {
+    execFileSync("git", ["init", "-q", root]);
+    await writeFile(join(root, "prd.md"), "# Fixture\n");
+    const store = join(root, "store.ts");
+    await writeFile(store, "export function openStore() {}\n");
+    const run = (flags: string[]) =>
+      spawnSync(
+        "bun",
+        [
+          installer,
+          "--repo",
+          root,
+          "--prd",
+          "prd.md",
+          "--verify",
+          "true",
+          "--scope",
+          "src/",
+          "--store",
+          store,
+          ...flags,
+        ],
+        { encoding: "utf8" },
+      );
+    const configPath = join(root, ".factory.json");
+    expect(run(["--light-worker-model", "unknown/model"]).status).toBe(1);
+    expect(await Bun.file(configPath).exists()).toBe(false);
+    expect(
+      run([
+        "--light-worker-model",
+        "anthropic/claude-sonnet-5-5",
+        "--light-worker-effort",
+        "xhigh",
+      ]).status,
+    ).toBe(0);
+    expect(await Bun.file(configPath).json()).toMatchObject({
+      capacity: 2,
+      lightWorker: { model: "anthropic/claude-sonnet-5-5", effort: "xhigh" },
+    });
+    expect(await configuration(root)).toMatchObject({
+      lightWorker: { model: "anthropic/claude-sonnet-5-5", effort: "xhigh" },
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}, 60_000);
+
 test("refresh rebuilds only the adapter in two repositories", async () => {
   const home = await mkdtemp(join(tmpdir(), "factory-refresh-"));
   try {

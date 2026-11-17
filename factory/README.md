@@ -4,8 +4,9 @@ The dispatcher uses Bun SQLite persistence and native Amp thread APIs. Cross-orb
 worker retirement, and dashboard chat are not implemented. Remaining stories live in
 [stories.md](../docs/stories.md) and their tickets in [the backlog](../docs/backlog.md).
 
-The [Foreman prompt](foreman.md) defines the current sequential orchestration procedure. It is a
-reusable prompt, not an automatically installed agent mode or a change to worker instructions.
+The [Foreman prompt](foreman.md) defines the current orchestration procedure: one worker per lane,
+at most two lanes. It is a reusable prompt, not an automatically installed agent mode or a change
+to worker instructions.
 
 ## Take over a stopped Foreman in the same orb
 
@@ -156,7 +157,7 @@ callers, and nonowners cannot admit work. Repeating admission is a no-op. Admiss
 ticket's scoped record against later planning refreshes. Owner `reload` may replace this record only
 when releasing a `brief-incomplete` refusal, retaining admission and recording the new ticket in a
 `configured` event. Admission neither starts a paused factory nor creates a worker; the ordinary
-capacity-one loop dispatches admitted work afterward. Existing accepted evidence and definition
+per-lane loop dispatches admitted work afterward. Existing accepted evidence and definition
 migration rules remain unchanged.
 
 The read-only `/api/status` feed exposes `status: "planned"` before admission and `"queued"` after
@@ -275,7 +276,7 @@ Assistant prose, bare reset text, malformed payloads and other errors remain `wo
 their existing recovery (`resume` for a checkpointed worker, `inspect` for a reviewer). A connected
 owner can reclassify a worker error recorded earlier without provider details, restoring its saved
 checkpoint without replacing the worker or advancing attempts. Restoration waits until no other
-active or uncertain work owns implementation capacity; otherwise the stop remains for the Foreman.
+active or uncertain work holds the same lane; otherwise the stop remains for the Foreman.
 
 The incident privately stores `providerLimit.message` (the raw provider message), `observedAt`,
 the same worker or reviewer `thread`, and optional `resetAt`, in milliseconds since the Unix epoch.
@@ -596,6 +597,46 @@ Repeated setup and refresh preserve saved model, effort, permissions, tickets, a
 To change future workers, edit `workerModel` and `workerEffort` in the project definition,
 then reload. These settings apply only when creating a new worker. Corrections continue with
 the original settings, not a replacement.
+
+### Two worker lanes
+
+A definition runs one lane by default: `capacity: 1` and no `lightWorker`, dispatching exactly as
+before lanes existed. Set `capacity: 2` together with `lightWorker: { "model": "provider/model",
+"effort": "high" }` to add a light lane; either without the other fails parsing. The light model
+needs a known family, and with `review: true` an opposite-family default reviewer, like
+`workerModel`. Setup accepts `--light-worker-model` and `--light-worker-effort` (default `high`).
+
+Mark a queue entry `"lane": "light"` to run it on the light worker. Every other entry runs on the
+main lane. `lane: "light"` fails the definition check unless the definition has a light lane.
+Dispatch keeps at most one open run per lane. Each run saves its `lane` and the `workerModel` it
+was created with, and review routing follows that saved model. Every unfinished run occupies its
+lane, including a parked run and a worker blocked on approval, an error or its own report, so a
+second ticket never starts or resumes beside a worker that could still continue. One check admits
+dispatch, resume, provider-error restoration and retry-setup alike. A stop in one lane,
+including an escalated repair or an unknown creation or delivery, holds only that lane. A single
+lane keeps today's rule, where only active work and repairs hold dispatch. Factory-wide holds
+still hold both: a paused or ownerless factory, a dirty root checkout, and `brief-incomplete`.
+Saved runs without `lane` are main-lane runs. A light run never falls back to the main worker:
+retry-setup refuses, leaving the saved preparation unchanged, once the definition drops
+`lightWorker`. Gates still run one at a time through the test lock.
+
+Landing order follows completion. When a candidate's target moved past its base, at acceptance or
+before review starts, the factory waits for the worker to be idle, replays the candidate onto the
+target in a disposable staging worktree, saves the source and replayed revisions in a
+`rebase-intended` event, moves the worker worktree to the replayed revision, and records `rebased`
+only once the worker's HEAD is verified there. A reconcile after an interruption finishes that move
+before checking the candidate, then reruns the full gate on the replayed revision. Review, when
+required, then covers that revision, and only it can land. The worker's report keeps naming the
+revision it built. A replay conflict leaves the worker worktree unchanged and returns to the same
+worker thread as repair feedback with the rebase log, counting as an attempt. A target that no
+longer descends from the base, or a dirty root checkout, still stops at `target-changed`. With a
+light lane, resuming a blocked repair also accepts a target that moved forward, and its next
+candidate is rebased; a single lane still refuses it.
+
+A reviewer whose target moved forward during review is not stopped. Its verdict for the reviewed
+revision is read first: `issues` returns to the worker as repair feedback, and `pass` leads to the
+rebase above, with a fresh gate and review. Only a rewritten target or a changed candidate or
+staging worktree still stops at `review-identity-changed`.
 
 ### Run workers on a supervised runner
 

@@ -18,6 +18,7 @@ import { parseArgs } from "node:util";
 import {
   configuration,
   effectiveDefinition,
+  lightRole,
   localPath,
   migrateDefinition,
   parseSetup,
@@ -111,6 +112,20 @@ async function refreshPlugin(pluginPath: string, plugin: string) {
   process.stdout.write("REFRESH OK; reload the factory plugin.\n");
 }
 
+// Without --light-worker-model the definition keeps today's single lane.
+function workerLanes(
+  model: string | undefined,
+  effort: string,
+  review: boolean,
+) {
+  if (model === undefined) return { capacity: 1 };
+  const lightWorker = { model, effort };
+  return {
+    capacity: 2,
+    lightWorker: lightRole({ capacity: 2, lightWorker }, review),
+  };
+}
+
 function options() {
   const { values } = parseArgs({
     options: {
@@ -122,6 +137,8 @@ function options() {
       scope: { type: "string", multiple: true },
       "worker-model": { type: "string", default: "openai/gpt-6.1-sol" },
       "worker-effort": { type: "string", default: "medium" },
+      "light-worker-model": { type: "string" },
+      "light-worker-effort": { type: "string", default: "high" },
       review: { type: "boolean", default: false },
       store: { type: "string" },
       check: { type: "boolean", default: false },
@@ -138,7 +155,12 @@ function options() {
         ? undefined
         : Number(values["setup-timeout-ms"]),
     ) ?? {};
-  return { ...values, setup, setupTimeoutMs };
+  const lanes = workerLanes(
+    values["light-worker-model"],
+    values["light-worker-effort"],
+    values.review,
+  );
+  return { ...values, setup, setupTimeoutMs, lanes };
 }
 
 function repository(path: string) {
@@ -224,7 +246,7 @@ async function main() {
     setup: values.setup,
     setupTimeoutMs: values.setupTimeoutMs,
     scope: values.scope,
-    capacity: 1,
+    ...values.lanes,
     mode: "bug-finding",
     workerModel: values["worker-model"],
     workerEffort,
