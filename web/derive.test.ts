@@ -8,6 +8,7 @@ import {
 } from "./derive";
 import { eventsAt, feedAt, FRAMES } from "./replay";
 import { pipelineSteps } from "../factory/pipeline";
+import { lifecycleStatus, runStage, stages } from "../factory/persistence";
 
 const NOW = Date.parse("2026-11-13T12:00:10Z");
 
@@ -380,7 +381,7 @@ test("the recorded replay draws a reviewed landing, rejections, a stopped review
   const polls = (hit: (view: (typeof views)[number]) => unknown) =>
     views.flatMap((view, n) => (hit(view) ? [n] : []));
   expect(polls((view) => view.landed && view.reviewed)).toEqual([6]);
-  expect(polls((view) => view.backRow)).toEqual([3, 9, 13, 14, 17]);
+  expect(polls((view) => view.backRow)).toEqual([3, 9, 13, 14, 17, 21]);
   expect(
     [14, 15, 16, 17, 18].map((n) => views[n]!.tickets.at(-1)?.lifecycle),
   ).toEqual([
@@ -388,7 +389,7 @@ test("the recorded replay draws a reviewed landing, rejections, a stopped review
     "gating · computer",
     "reviewing · model",
     "escalated · foreman",
-    "rate-limited · computer · 03:00Z",
+    `rate-limited · computer · ${feedAt(18).tasks.at(-1)!.clearsAt!.slice(11, 16)}Z`,
   ]);
   expect(views[15]!.tickets[1]?.lifecycle).toBe("merged · nobody");
   expect(feedAt(15).tasks[1]?.summary).toBe("Landed after its recorded checks");
@@ -579,4 +580,500 @@ test("stage badges follow the factory's named step, not the public status", () =
   ]);
   // A feed without stages keeps the earlier inference.
   expect(named({}).steps).toEqual(["", "", "", "", "", "", ""]);
+});
+
+function graphFeed(
+  tasks: Partial<FeedTask>[],
+  lifecycle: Feed["lifecycle"] = lifecycleStatus(),
+): Feed {
+  const base = feed(
+    tasks.map(() => "unknown"),
+    { lifecycle, stages },
+  );
+  base.tasks = base.tasks.map((task, i) => ({ ...task, ...tasks[i] }));
+  return base;
+}
+
+test("the graph draws only the declared table: a stop without an exit is exitless", () => {
+  const table = {
+    running: {
+      actor: "model",
+      exits: [{ event: "accepted", when: "w", actor: "computer" }],
+      stops: {
+        stuck: {
+          actor: "foreman",
+          reasons: ["worker-blocked"],
+          recovery: "inspect",
+          exits: [],
+          foremanOnly: "Nothing in the factory can clear this.",
+        },
+        clears: {
+          actor: "operator",
+          reasons: ["approval-required"],
+          recovery: "inspect",
+          exits: [{ action: "resume", when: "w", actor: "operator" }],
+        },
+      },
+    },
+  } as const satisfies Feed["lifecycle"];
+  const view = derive(null, graphFeed([], table), NOW);
+  const running = view.graph!.path.find((node) => node.id === "running")!;
+  const stuck = running.stops.find((node) => node.id === "running/stuck")!;
+  const clears = running.stops.find((node) => node.id === "running/clears")!;
+  expect(stuck.exitless).toBe(true);
+  expect(stuck.exits).toEqual([]);
+  expect(stuck.note).toBe("Nothing in the factory can clear this.");
+  expect(clears.exitless).toBe(false);
+  expect(clears.exits).toEqual([
+    { name: "resume", actor: "operator", when: "w" },
+  ]);
+  expect(running.exits.map((exit) => exit.name)).toEqual(["accepted"]);
+  // Stops are listed most urgent first: the operator's before the Foreman's.
+  expect(running.stops.map((node) => node.id)).toEqual([
+    "running/clears",
+    "running/stuck",
+  ]);
+  // The table names no other kind, so none is drawn.
+  expect(view.graph!.path.map((node) => node.id)).toEqual([
+    "planned",
+    "queued",
+    "running",
+  ]);
+  expect(view.graph!.stops.map((node) => node.id)).toEqual(["running"]);
+});
+
+test("each ticket lands on the node its kind and stop name select", () => {
+  const at = (
+    kind: string | null,
+    stopName: string | null,
+    stage: FeedTask["stage"],
+  ): Partial<FeedTask> => ({ kind, stopName, stage });
+  const view = derive(
+    null,
+    graphFeed([
+      { ...at(null, null, "planned"), id: "P" },
+      { ...at(null, null, "queued"), id: "Q" },
+      { ...at("preparing", null, "preparing"), id: "PR" },
+      { ...at("creating", null, "creating"), id: "CR" },
+      { ...at("running", null, "building"), id: "RU" },
+      { ...at("running", "providerLimit", "rate-limited"), id: "RL" },
+      { ...at("blocked", "repair", "escalated"), id: "ES" },
+      { ...at("parked", "repair", "parked"), id: "PK" },
+      { ...at("uncertain", "legacy", "uncertain"), id: "UN" },
+      { ...at("preparation-failed", "failed", "blocked"), id: "PF" },
+      { ...at("done", null, "merged"), id: "DN" },
+    ]),
+    NOW,
+  );
+  const graph = view.graph!;
+  const nodes = [...graph.path, ...graph.stops].flatMap((node) => [
+    node,
+    ...node.stops,
+  ]);
+  const placed = Object.fromEntries(
+    nodes
+      .filter((node) => node.markers.length)
+      .map((node) => [node.id, node.markers.map((marker) => marker.id)]),
+  );
+  expect(placed).toEqual({
+    planned: ["P"],
+    queued: ["Q"],
+    preparing: ["PR"],
+    creating: ["CR"],
+    running: ["RU"],
+    "running/providerLimit": ["RL"],
+    "blocked/repair": ["ES"],
+    "parked/repair": ["PK"],
+    "uncertain/legacy": ["UN"],
+    "preparation-failed/failed": ["PF"],
+    done: ["DN"],
+  });
+});
+
+test("operator-owned stops sort first and the waiting count is the operator's tickets", () => {
+  const view = derive(
+    null,
+    graphFeed([
+      {
+        id: "A",
+        kind: "blocked",
+        stopName: "repair",
+        stage: "escalated",
+        actor: "foreman",
+        stop: {
+          reason: "verification-rejected",
+          role: "worker",
+          thread: "T-a",
+        },
+      },
+      {
+        id: "B",
+        kind: "parked",
+        stopName: "repair",
+        stage: "parked",
+        actor: "operator",
+        stop: {
+          reason: "verification-rejected",
+          role: "reviewer",
+          thread: "T-b",
+        },
+        stageSince: "2026-11-14T01:47:42.000Z",
+      },
+      {
+        id: "C",
+        kind: "running",
+        stopName: "providerLimit",
+        stage: "rate-limited",
+        actor: "computer",
+        clearsAt: new Date(NOW + 25 * 60_000).toISOString(),
+        stop: { reason: "provider-limit", role: "worker", thread: "T-c" },
+      },
+      {
+        id: "D",
+        kind: "running",
+        stopName: null,
+        stage: "building",
+        actor: "model",
+      },
+    ]),
+    NOW,
+  );
+  const graph = view.graph!;
+  expect(graph.waiting).toBe(1);
+  // A state is as urgent as its most urgent stop: the operator's first, then the Foreman's in
+  // table order, then work in progress.
+  expect(graph.stops.map((node) => node.id)).toEqual([
+    "running",
+    "parked",
+    "preparing",
+    "preparation-failed",
+    "creating",
+    "blocked",
+    "uncertain",
+  ]);
+  expect(graph.banners.map((banner) => banner.id)).toEqual(["B", "A", "C"]);
+  expect(graph.banners[0]).toEqual({
+    id: "B",
+    urgency: 0,
+    tone: "danger",
+    title: "B · parked · repair · operator must act",
+    text: "Reason verification-rejected. Exit: resume, record-landing.",
+    cause: { role: "reviewer", href: "https://ampcode.com/threads/T-b" },
+    when: "Stage began 2026-11-14 01:47Z.",
+  });
+  // A clock wait is a warning, and says when it clears.
+  expect(graph.banners[2]).toMatchObject({
+    tone: "warning",
+    when: "clears in 25 min.",
+  });
+  // Marker tone and print cues follow where tickets sit.
+  const parked = graph.stops.find((node) => node.id === "parked")!.stops[0]!;
+  expect([parked.tone, parked.cues]).toEqual(["stop", ["stopped"]]);
+  const nobody = graph.stops.find((node) => node.id === "uncertain")!;
+  expect([nobody.tone, nobody.cues]).toEqual(["", ["outcome unknown"]]);
+  // A clock wait sorts after any wait on a person.
+  const running = graph.path.find((node) => node.id === "running")!;
+  expect(running.stops[0]!.id).not.toBe("running/providerLimit");
+});
+
+test("the replay draws an empty factory, one running, one stopped and several tickets on one state", () => {
+  const graph = (n: number) => derive(null, feedAt(n), NOW).graph!;
+  const marked = (n: number) => {
+    const { path, stops } = graph(n);
+    // A state that has stops is in both lists, as one node.
+    return [
+      ...new Set([...path, ...stops].flatMap((node) => [node, ...node.stops])),
+    ]
+      .filter((node) => node.markers.length)
+      .map((node) => [node.id, node.markers.length]);
+  };
+  expect(marked(19)).toEqual([]);
+  expect(graph(19).waiting).toBe(0);
+  expect(marked(20)).toEqual([["running", 1]]);
+  expect(marked(21)).toEqual([["parked/repair", 1]]);
+  expect(graph(21).waiting).toBe(1);
+  expect(marked(22)).toEqual([["running", 4]]);
+});
+
+test("markers print the ticket's own stage and actor, not the state's declared actor", () => {
+  const view = derive(
+    null,
+    graphFeed([
+      {
+        id: "G",
+        kind: "running",
+        stopName: null,
+        stage: "gating",
+        actor: "computer",
+        step: 4,
+      },
+      {
+        id: "AC",
+        kind: "done",
+        stopName: null,
+        stage: "accepted",
+        actor: "foreman",
+        step: 6,
+      },
+      {
+        id: "MG",
+        kind: "done",
+        stopName: null,
+        stage: "merged",
+        actor: null,
+        step: 6,
+      },
+    ]),
+    NOW,
+  );
+  const at = (id: string) => view.graph!.path.find((node) => node.id === id)!;
+  // The table declares the model for running and the computer for done; the markers differ.
+  expect([at("running").actor, at("done").actor]).toEqual([
+    "model",
+    "computer",
+  ]);
+  expect(at("running").markers.map((m) => m.text)).toEqual([
+    "G · gating · computer acts · gate · 10 min cap",
+  ]);
+  expect(at("done").markers.map((m) => m.text)).toEqual([
+    "AC · accepted · foreman acts · ff-merge",
+    "MG · merged · nobody acts · ff-merge",
+  ]);
+});
+
+test("a banner never calls the stage start a stop time", () => {
+  // The reviewer's stage began at 10:00; it stopped for approval at 10:20 without a stage change,
+  // so the feed's stageSince still reads 10:00 and says nothing about the stop.
+  const view = derive(
+    null,
+    graphFeed([
+      {
+        id: "R",
+        kind: "running",
+        stopName: "reviewerApproval",
+        stage: "reviewing",
+        actor: "operator",
+        stageSince: "2026-11-14T10:00:00.000Z",
+        stop: { reason: "approval-required", role: "reviewer", thread: "T-r" },
+      },
+    ]),
+    NOW,
+  );
+  const banner = view.graph!.banners[0]!;
+  expect(banner.when).toBe("Stage began 2026-11-14 10:00Z.");
+  expect(banner.when).not.toContain("Stopped");
+  // Recovered: the stop is gone, so the ticket sits on its kind and has no banner.
+  const recovered = derive(
+    null,
+    graphFeed([
+      {
+        id: "R",
+        kind: "running",
+        stopName: null,
+        stage: "reviewing",
+        actor: "model",
+        stageSince: "2026-11-14T10:00:00.000Z",
+      },
+    ]),
+    NOW,
+  );
+  expect(recovered.graph!.banners).toEqual([]);
+});
+
+const node = (view: ReturnType<typeof derive>, id: string) =>
+  [...view.graph!.path, ...view.graph!.stops]
+    .flatMap((column) => [column, ...column.stops])
+    .find((entry) => entry.id === id)!;
+
+test("a state is exitless when neither it nor any of its stops declares an exit", () => {
+  const table = {
+    running: {
+      actor: "model",
+      exits: [],
+      stops: {
+        stuck: {
+          actor: "foreman",
+          reasons: ["worker-blocked"],
+          recovery: "inspect",
+          exits: [],
+        },
+      },
+    },
+    blocked: {
+      actor: "foreman",
+      exits: [],
+      stops: {
+        clears: {
+          actor: "foreman",
+          reasons: ["worker-blocked"],
+          recovery: "resume",
+          exits: [{ action: "resume", when: "w", actor: "foreman" }],
+        },
+      },
+    },
+  } as const satisfies Feed["lifecycle"];
+  const view = derive(null, graphFeed([], table), NOW);
+  // Both the kind and its only stop lack exits: both say so.
+  expect(node(view, "running").cues).toEqual(["no exit"]);
+  expect(node(view, "running/stuck").cues).toEqual(["no exit"]);
+  // A kind with no own exit but a stop that has one is not exitless, and the stop that has one
+  // is not either.
+  expect(node(view, "blocked").cues).toEqual([]);
+  expect(node(view, "blocked/clears").cues).toEqual([]);
+});
+
+test("tones and cues follow the ticket's colour rules", () => {
+  const stopped = (
+    stopName: string,
+    kind: string,
+    stage: FeedTask["stage"],
+  ) => ({
+    kind,
+    stopName,
+    stage,
+    stop: {
+      reason: "worker-blocked" as const,
+      role: "worker" as const,
+      thread: "T-x",
+    },
+  });
+  const occupied = derive(
+    null,
+    graphFeed([
+      {
+        id: "Q",
+        kind: null,
+        stopName: null,
+        stage: "queued",
+        actor: "computer",
+        thread: "T-q",
+      },
+      {
+        id: "W",
+        kind: null,
+        stopName: null,
+        stage: "planned",
+        actor: "foreman",
+      },
+      {
+        id: "RU",
+        kind: "running",
+        stopName: null,
+        stage: "building",
+        actor: "model",
+      },
+      { id: "DN", kind: "done", stopName: null, stage: "merged", actor: null },
+      { id: "PK", ...stopped("repair", "parked", "parked"), actor: "operator" },
+      {
+        id: "UN",
+        ...stopped("legacy", "uncertain", "uncertain"),
+        actor: "foreman",
+      },
+      {
+        id: "RL",
+        ...stopped("providerLimit", "running", "rate-limited"),
+        actor: "computer",
+        clearsAt: new Date(NOW + 25 * 60_000).toISOString(),
+      },
+    ]),
+    NOW,
+  );
+  const empty = derive(null, graphFeed([]), NOW);
+  // Orange now: work in progress. Unlit queued: waiting tickets keep their marker and link.
+  expect(node(occupied, "running").tone).toBe("now");
+  expect(node(occupied, "queued").tone).toBe("");
+  expect(node(occupied, "planned").tone).toBe("");
+  expect(node(occupied, "queued").markers).toMatchObject([
+    { id: "Q", href: "https://ampcode.com/threads/T-q" },
+  ]);
+  // Green done.
+  expect(node(occupied, "done").tone).toBe("done");
+  // Red blocked, with a cue that is not colour.
+  expect(node(occupied, "parked/repair").tone).toBe("stop");
+  expect(node(occupied, "parked/repair").cues).toContain("stopped");
+  // Uncertain has its own cue, lit or not.
+  expect(node(occupied, "uncertain/legacy").cues).toContain("outcome unknown");
+  expect(node(empty, "uncertain").cues).toEqual(["outcome unknown"]);
+  // A clock wait is dim, not red, and shows its countdown.
+  expect(node(occupied, "running/providerLimit").clock).toBe(true);
+  expect(node(occupied, "running/providerLimit").tone).toBe("");
+  expect(node(occupied, "running/providerLimit").markers[0]!.clears).toBe(
+    "clears in 25 min",
+  );
+  // Nothing is lit in an empty factory.
+  const tones = [...empty.graph!.path, ...empty.graph!.stops]
+    .flatMap((column) => [column, ...column.stops])
+    .map((entry) => entry.tone);
+  expect(tones.filter(Boolean)).toEqual([]);
+  // Operator first: the operator's state precedes the Foreman's, and the count is the operator's.
+  const order = occupied.graph!.stops.map((entry) => entry.id);
+  expect(order.indexOf("parked")).toBeLessThan(order.indexOf("blocked"));
+  expect(occupied.graph!.waiting).toBe(1);
+});
+
+test("a setup failure saved without an incident still shows its declared exit", () => {
+  const run = {
+    kind: "preparation-failed",
+    reason: "x",
+    base: "a".repeat(40),
+    worktree: "/w",
+    command: "x",
+    timeoutMs: 1,
+    log: "l",
+  } as const;
+  // Saved before incidents existed: no stop is named, yet retry-setup admits the kind (native.ts).
+  const named = runStage(run);
+  expect(named.stopName).toBeNull();
+  const view = derive(
+    null,
+    graphFeed([
+      {
+        id: "S",
+        kind: named.kind,
+        stopName: named.stopName,
+        stage: named.stage,
+        actor: named.actor,
+      },
+    ]),
+    NOW,
+  );
+  const failed = view.graph!.stops.find((c) => c.id === "preparation-failed")!;
+  expect(failed.exitless).toBe(false);
+  expect(view.graph!.banners[0]!.text).toBe(
+    "Reason not recorded. Stop not recorded; declared exits by stop: retry-setup.",
+  );
+  // A kind whose stops all lack exits is still called terminal.
+  const none = {
+    blocked: {
+      actor: "foreman",
+      exits: [],
+      stops: {
+        s: {
+          actor: "foreman",
+          reasons: ["worker-blocked"],
+          recovery: "inspect",
+          exits: [],
+        },
+      },
+    },
+  } as const satisfies Feed["lifecycle"];
+  const terminal = derive(
+    null,
+    graphFeed(
+      [
+        {
+          id: "T",
+          kind: "blocked",
+          stopName: null,
+          stage: "blocked",
+          actor: "foreman",
+        },
+      ],
+      none,
+    ),
+    NOW,
+  );
+  expect(terminal.graph!.banners[0]!.text).toBe(
+    "Reason not recorded. No exit in the factory.",
+  );
 });

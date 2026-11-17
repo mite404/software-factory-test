@@ -5,6 +5,7 @@
 import type { DashboardEvent } from "../factory/dashboard";
 import type { Feed, FeedTask } from "./derive";
 import { pipelineSteps } from "../factory/pipeline";
+import { lifecycleStatus, stages } from "../factory/persistence";
 
 // Illustrative event rows alongside the recorded status polls, not a private log export.
 const EVENTS: DashboardEvent[] = [
@@ -138,9 +139,15 @@ const TICKETS = [
 ];
 
 // One poll each: the newest ticket in the feed, its status and stage, and its pending review.
-// Stages were not in the 2026-11 recording; frames 15 to 18 are illustrative stage examples.
+// Stages were not in the 2026-11 recording; frames 15 to 18 are illustrative stage examples, and
+// frames 19 to 22 are the lifecycle graph's cases: an empty factory, one running ticket, one
+// stopped ticket and several tickets on one state. Every frame names the run's kind, and its
+// stop when one holds it, as keys of the declared table.
 type Frame = {
-  ticket: number;
+  ticket: number; // index of the newest ticket; -1 is an empty factory
+  kind: string | null;
+  stopName?: string;
+  crowd?: true; // every ticket up to `ticket` is in this frame's state, none landed
   status: FeedTask["status"];
   stage: NonNullable<FeedTask["stage"]>;
   actor: NonNullable<FeedTask["actor"]>;
@@ -150,8 +157,16 @@ type Frame = {
   escalated?: boolean;
 };
 
-const BUILDING = { stage: "building", actor: "model" } as const;
-const REVIEWING = { stage: "reviewing", actor: "model" } as const;
+const BUILDING = {
+  stage: "building",
+  actor: "model",
+  kind: "running",
+} as const;
+const REVIEWING = {
+  stage: "reviewing",
+  actor: "model",
+  kind: "running",
+} as const;
 
 export const FRAMES: Frame[] = [
   { ticket: 2, status: "working", ...BUILDING },
@@ -160,10 +175,28 @@ export const FRAMES: Frame[] = [
   { ticket: 2, status: "working", ...BUILDING }, // 23:33:28 review record gone: rejected, same worker repairs
   { ticket: 2, status: "blocked", pending: 6, ...REVIEWING }, // 23:45:44
   { ticket: 2, status: "working", pending: 6, ...REVIEWING },
-  { ticket: 2, status: "accepted", stage: "accepted", actor: "foreman" }, // 23:53:45 landed on attempt 6
-  { ticket: 3, status: "unknown", stage: "creating", actor: "computer" }, // 00:01:27 next ticket appears
+  {
+    ticket: 2,
+    status: "accepted",
+    stage: "accepted",
+    actor: "foreman",
+    kind: "done",
+  }, // 23:53:45 landed on attempt 6
+  {
+    ticket: 3,
+    status: "unknown",
+    stage: "creating",
+    actor: "computer",
+    kind: "creating",
+  }, // 00:01:27 next ticket appears
   { ticket: 3, status: "working", ...BUILDING },
-  { ticket: 3, status: "blocked", stage: "blocked", actor: "foreman" }, // 00:02:35 blocked before any review, for 1 h 45 min
+  {
+    ticket: 3,
+    status: "blocked",
+    stage: "blocked",
+    actor: "foreman",
+    kind: "blocked",
+  }, // 00:02:35 blocked before any review, for 1 h 45 min
   { ticket: 3, status: "idle", ...BUILDING }, // 01:47:42 resumed by the foreman
   { ticket: 3, status: "unknown", ...BUILDING },
   { ticket: 3, status: "working", ...BUILDING },
@@ -174,6 +207,8 @@ export const FRAMES: Frame[] = [
     stopped: true,
     stage: "reviewing",
     actor: "foreman",
+    kind: "running",
+    stopName: "reviewerError",
   },
   {
     ticket: 3,
@@ -182,8 +217,16 @@ export const FRAMES: Frame[] = [
     parked: true,
     stage: "parked",
     actor: "operator",
+    kind: "parked",
+    stopName: "repair",
   },
-  { ticket: 3, status: "unknown", stage: "gating", actor: "computer" },
+  {
+    ticket: 3,
+    status: "unknown",
+    stage: "gating",
+    actor: "computer",
+    kind: "running",
+  },
   { ticket: 3, status: "unknown", pending: 5, ...REVIEWING },
   {
     ticket: 3,
@@ -192,8 +235,36 @@ export const FRAMES: Frame[] = [
     escalated: true,
     stage: "escalated",
     actor: "foreman",
+    kind: "blocked",
+    stopName: "repair",
   },
-  { ticket: 3, status: "unknown", stage: "rate-limited", actor: "computer" },
+  {
+    ticket: 3,
+    status: "unknown",
+    stage: "rate-limited",
+    actor: "computer",
+    kind: "running",
+    stopName: "providerLimit",
+  },
+  {
+    ticket: -1,
+    status: "unknown",
+    stage: "queued",
+    actor: "computer",
+    kind: null,
+  },
+  { ticket: 0, status: "working", ...BUILDING },
+  {
+    ticket: 0,
+    status: "blocked",
+    stopped: true,
+    parked: true,
+    stage: "parked",
+    actor: "operator",
+    kind: "parked",
+    stopName: "repair",
+  },
+  { ticket: 3, status: "working", crowd: true, ...BUILDING },
 ];
 
 const STOPPED_REVIEW = {
@@ -228,7 +299,13 @@ const ESCALATED_REVIEW = {
   stop: { ...PARKED_REVIEW.stop, thread: "T-replay-review-6" },
 } satisfies Partial<FeedTask>;
 
+const PROVIDER_LIMIT = {
+  stop: { reason: "provider-limit", role: "worker", thread: "T-replay-3" },
+  rejections: [],
+} satisfies Partial<FeedTask>;
+
 function stopFrame(frame: Frame): Partial<FeedTask> {
+  if (frame.stopName === "providerLimit") return PROVIDER_LIMIT;
   if (frame.parked) return PARKED_REVIEW;
   return frame.escalated ? ESCALATED_REVIEW : STOPPED_REVIEW;
 }
@@ -245,6 +322,8 @@ const STEP: Partial<Record<Frame["stage"], number>> = {
   parked: 5,
 };
 
+const STOPPED_AT = "2026-11-14T01:47:42.000Z";
+
 // Landed tickets read merged once a merge is recorded; the active ticket reads its frame.
 function stageFrame(
   frame: Frame,
@@ -259,12 +338,23 @@ function stageFrame(
       rejectedBy:
         frame.stopped && frame.stage !== "reviewing" ? "review" : null,
       clearsAt:
-        frame.stage === "rate-limited" ? "2026-11-14T03:00:00.000Z" : null,
+        frame.stage === "rate-limited"
+          ? new Date(Date.now() + 25 * 60_000).toISOString()
+          : null,
+      kind: frame.kind,
+      stopName: frame.stopName ?? null,
+      stageSince: STOPPED_AT,
     };
   const summary = "Landed after its recorded checks";
+  const done = {
+    kind: "done",
+    stopName: null,
+    stageSince: STOPPED_AT,
+    summary,
+  };
   return merged
-    ? { stage: "merged", actor: null, step: 6, summary }
-    : { stage: "accepted", actor: "foreman", step: 6, summary };
+    ? { ...done, stage: "merged", actor: null, step: 6 }
+    : { ...done, stage: "accepted", actor: "foreman", step: 6 };
 }
 
 function reviewFrame(
@@ -277,6 +367,45 @@ function reviewFrame(
     attempt: attempt ?? null,
     evidence: { review: attempt ? { pending: !landed, attempt } : null },
     revision: attempt || landed ? revision : null,
+  };
+}
+
+const landedIn = (frame: Frame, i: number) =>
+  !frame.crowd && (i < frame.ticket || frame.status === "accepted");
+
+const stoppedIn = (frame: Frame, landed: boolean) =>
+  !landed && (frame.stopped || !!frame.stopName);
+
+function outcomeFrame(
+  frame: Frame,
+  ticket: (typeof TICKETS)[number],
+  landed: boolean,
+) {
+  return {
+    status: landed ? "accepted" : frame.status,
+    parked: !landed && frame.parked === true,
+    merge: landed ? ticket.merge : null,
+  } as const;
+}
+
+function taskAt(frame: Frame, ticket: (typeof TICKETS)[number], i: number) {
+  const landed = landedIn(frame, i);
+  return {
+    id: ticket.id,
+    title: ticket.id,
+    steps: ticket.steps,
+    thread: `T-replay-${i}`,
+    workerThread: `T-replay-${i}`,
+    ...reviewFrame(
+      landed ? ticket.attempt : frame.pending,
+      landed,
+      ticket.revision,
+    ),
+    stop: null,
+    rejections: [],
+    ...(stoppedIn(frame, landed) ? stopFrame(frame) : {}),
+    ...stageFrame(frame, landed, !!ticket.merge),
+    ...outcomeFrame(frame, ticket, landed),
   };
 }
 
@@ -293,26 +422,11 @@ export function feedAt(n: number): Feed {
     enabled: true,
     fresh: true,
     pipelineSteps,
-    tasks: TICKETS.slice(0, frame.ticket + 1).map((ticket, i) => {
-      const landed = i < frame.ticket || frame.status === "accepted";
-      const attempt = landed ? ticket.attempt : frame.pending;
-      const stopped = !landed && frame.stopped;
-      return {
-        id: ticket.id,
-        title: ticket.id,
-        steps: ticket.steps,
-        status: landed ? "accepted" : frame.status,
-        thread: `T-replay-${i}`,
-        workerThread: `T-replay-${i}`,
-        ...reviewFrame(attempt, landed, ticket.revision),
-        stop: null,
-        rejections: [],
-        ...(stopped ? stopFrame(frame) : {}),
-        ...stageFrame(frame, landed, !!ticket.merge),
-        parked: !landed && frame.parked === true,
-        merge: landed ? ticket.merge : null,
-      };
-    }),
+    lifecycle: lifecycleStatus(),
+    stages,
+    tasks: TICKETS.slice(0, frame.ticket + 1).map((ticket, i) =>
+      taskAt(frame, ticket, i),
+    ),
   };
 }
 

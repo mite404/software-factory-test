@@ -55,12 +55,36 @@ export type FeedTask = DashboardSnapshot["tasks"][number] & {
   parked?: boolean;
   rejections?: { attempt: number; thread: string }[];
   stage?: Stage; // the factory's named stage; the page prints it, never infers it
+  kind?: string | null; // the run's saved kind, a key of the lifecycle table; null before a run
+  stopName?: string | null; // the declared stop holding the run, a key of that kind's stops
+  stageSince?: string | null; // when the run entered its stage, null for older state
   actor?: Actor | null; // who must act now; null is nobody
   clearsAt?: string | null; // when a provider limit clears, if known
   step?: number | null; // index into pipelineSteps where the run sits; null before one exists
   rejectedBy?: "gate" | "review" | "merge" | null; // the step that rejected the last attempt
   summary?: string | null; // curated public one-line outcome, set at acceptance
 };
+
+// The declared lifecycle table as GET /api/status serves it: only what the drawing reads.
+type TableExit = ({ action: string } | { event: string }) & {
+  actor: Actor;
+  when: string;
+};
+type TableStop = {
+  actor: Actor;
+  reasons: readonly string[];
+  recovery: string;
+  exits: readonly TableExit[];
+  foremanOnly?: string;
+};
+export type LifecycleTable = Record<
+  string,
+  {
+    actor: Actor;
+    exits: readonly TableExit[];
+    stops: Record<string, TableStop>;
+  }
+>;
 
 // One step chip of a COMING row, placed in SVG units.
 type Chip = { text: string; x: number; width: number };
@@ -73,6 +97,8 @@ export type Feed = {
   enabled: boolean;
   fresh: boolean;
   pipelineSteps?: readonly (typeof pipelineSteps)[number][];
+  lifecycle?: LifecycleTable; // the declared run lifecycle; the lifecycle graph is drawn from it
+  stages?: readonly { id: string; actor: Actor | null }[]; // named stages, in pipeline order
   tasks: FeedTask[];
 };
 
@@ -101,6 +127,56 @@ export type Ticket = Cell & {
   lifecycle: string; // "<stage> · <actor>[ · <limit clear time>]", "" for feeds without stages
 };
 
+// A ticket on the lifecycle graph, placed by the factory's own kind, stop and stage.
+type Marker = {
+  id: string;
+  href: string | null;
+  stage: string;
+  step: string; // the pipeline step label, "" when the run sits at none
+  actor: Actor | null;
+  since: string; // when the stage began, "2026-11-14 01:47Z"; "" for runs saved before stamping
+  text: string; // the ticket, its curated stage and who must act now, as the page prints it
+  clears: string; // "clears in 25 min" for a provider limit with a known clear time
+};
+
+// One state of the graph: a run kind, a declared stop that holds a run, or a stage before a run.
+export type GraphNode = {
+  id: string; // "running", "running/providerLimit" or a pre-run stage
+  label: string;
+  actor: Actor | null;
+  urgency: number; // index into URGENCY; smaller must be acted on sooner
+  held: boolean; // a stop, or a kind that only holds stopped runs
+  clock: boolean; // waits for a clock, not a person
+  declared: boolean; // false for stages the table does not cover
+  exits: { name: string; actor: Actor; when: string }[]; // only what the table declares
+  exitless: boolean; // declared, and the table gives it no exit at all
+  reasons: string[];
+  note: string; // the table's reason a stop has no factory exit
+  uncertain: boolean; // its outcome is unknown, so it says so as well as showing its colour
+  markers: Marker[];
+  tone: "" | "now" | "done" | "stop"; // set once tickets are placed; "" is unlit
+  cues: string[]; // what the box says in print, not by colour alone
+};
+export type GraphColumn = GraphNode & { stops: GraphNode[] };
+
+// A stopped ticket's banner, the facts the feed carries about who must act and why.
+type Banner = {
+  id: string;
+  urgency: number; // index into URGENCY
+  tone: "danger" | "warning"; // a clock wait is a warning, a wait on a person is danger
+  title: string;
+  text: string; // the declared reason code and the exit actions the table gives the stop
+  cause: { role: "worker" | "reviewer"; href: string | null } | null;
+  when: string; // when the stage began and when a limit clears; the stop time is not recorded
+};
+
+export type Graph = {
+  waiting: number; // tickets the operator must act on
+  path: GraphColumn[]; // the states a run passes through, left to right
+  stops: GraphColumn[]; // every state that has stops, or only holds stopped runs, most urgent first
+  banners: Banner[]; // stopped tickets, most urgent first
+};
+
 // One recorded event, worded for a notification.
 type News = {
   at: string;
@@ -119,6 +195,7 @@ export type View = {
   counts: { landed: number; queued: number; blocked: number }; // the tally, as numbers
   tickets: Ticket[]; // every ticket in feed order, for search, paging and the landed card
   pipelineSteps: NonNullable<Feed["pipelineSteps"]>;
+  graph: Graph | null; // null for a feed without the lifecycle table
   news: News[]; // newly received durable events
   head: string;
   next: string;
@@ -433,6 +510,246 @@ function settle(feed: Feed): Feed {
   };
 }
 
+// Who must act, most urgent first: the operator, the Foreman, a clock, work in progress, quiet.
+const URGENCY = ["operator", "foreman", "clock", "work", "quiet"];
+// The kinds a run passes through, in order. Every other kind in the table holds stopped runs.
+const PATH = ["preparing", "creating", "running", "done"];
+
+function urgency(actor: Actor | null, clock: boolean, quiet: boolean): number {
+  const who =
+    actor === "operator" || actor === "foreman"
+      ? actor
+      : clock
+        ? "clock"
+        : quiet
+          ? "quiet"
+          : "work";
+  return URGENCY.indexOf(who);
+}
+
+function exits(list: readonly TableExit[]): GraphNode["exits"] {
+  return list.map((exit) => ({
+    name: "action" in exit ? exit.action : exit.event,
+    actor: exit.actor,
+    when: exit.when,
+  }));
+}
+
+function node(
+  id: string,
+  label: string,
+  rest: Partial<GraphNode> & { actor: Actor | null },
+): GraphNode {
+  return {
+    id,
+    label,
+    urgency: urgency(rest.actor, rest.clock ?? false, false),
+    held: false,
+    clock: false,
+    declared: true,
+    exits: [],
+    exitless: false,
+    reasons: [],
+    note: "",
+    uncertain: id.startsWith("uncertain"),
+    markers: [],
+    tone: "",
+    cues: [],
+    ...rest,
+  };
+}
+
+function stopNode(kind: string, name: string, stop: TableStop): GraphNode {
+  const clock = stop.recovery === "wait";
+  // The table keys stops in camel case; the id keeps the key, the label reads as words.
+  const words = name.replace(/[A-Z]/g, (letter) => ` ${letter.toLowerCase()}`);
+  return node(`${kind}/${name}`, `${kind} · ${words}`, {
+    actor: stop.actor,
+    clock,
+    held: true,
+    exits: exits(stop.exits),
+    exitless: stop.exits.length === 0,
+    reasons: [...stop.reasons],
+    note: stop.foremanOnly ?? "",
+  });
+}
+
+function column(
+  kind: string,
+  entry: LifecycleTable[string],
+  held: boolean,
+): GraphColumn {
+  const stops = Object.entries(entry.stops)
+    .map(([name, stop]) => stopNode(kind, name, stop))
+    .sort((a, b) => a.urgency - b.urgency);
+  const own = node(kind, kind, {
+    actor: entry.actor,
+    held,
+    exits: exits(entry.exits),
+    // Exitless means no declared exit on the kind or on any of its stops.
+    exitless:
+      entry.exits.length === 0 &&
+      stops.every((stop) => stop.exits.length === 0),
+  });
+  if (kind === "done") own.urgency = urgency(entry.actor, false, true);
+  return { ...own, stops };
+}
+
+function when(at: string | null | undefined): string {
+  return at ? `${at.slice(0, 10)} ${at.slice(11, 16)}Z` : "";
+}
+
+function countdown(clearsAt: string | null | undefined, now: number): string {
+  if (!clearsAt) return "";
+  const minutes = Math.ceil((Date.parse(clearsAt) - now) / 60_000);
+  if (minutes <= 0) return "clearing now";
+  return minutes < 60
+    ? `clears in ${minutes} min`
+    : `clears in ${Math.floor(minutes / 60)} h ${minutes % 60} min`;
+}
+
+function marker(
+  task: FeedTask,
+  steps: NonNullable<Feed["pipelineSteps"]>,
+  now: number,
+): Marker {
+  const stage = task.stage ?? "";
+  const step = steps[task.step ?? -1]?.label ?? "";
+  const actor = task.actor ?? null;
+  const clears = countdown(task.clearsAt, now);
+  return {
+    id: task.id,
+    href: threadHref(task.thread),
+    stage,
+    step,
+    actor,
+    since: when(task.stageSince),
+    clears,
+    // The feed's stage and actor, never the enclosing node's declared actor: a gating run sits on
+    // running, and accepted and merged runs share done.
+    text: [task.id, stage, `${actor ?? "nobody"} acts`, step, clears]
+      .filter(Boolean)
+      .join(" · "),
+  };
+}
+
+// A kind node has no exits of its own when its stops carry them; with no recorded stop the
+// banner names those declared exits instead of calling the run terminal.
+type Placed = GraphNode & { stops?: GraphNode[] };
+
+function exitText(at: Placed): string {
+  const own = at.exits.map((exit) => exit.name);
+  const declared = (at.stops ?? []).flatMap((stop) =>
+    stop.exits.map((exit) => exit.name),
+  );
+  if (own.length) return ` Exit: ${own.join(", ")}.`;
+  if (declared.length)
+    return ` Stop not recorded; declared exits by stop: ${[...new Set(declared)].join(", ")}.`;
+  return " No exit in the factory.";
+}
+
+// The feed has no public label for a reason yet, so the declared code is printed.
+function bannerText(code: string | undefined, at: Placed): string {
+  return `Reason ${code || "not recorded"}.${exitText(at)}`;
+}
+
+function bannerWhen({ since, clears }: Marker): string {
+  // stageSince is when the stage began, not when a stop was recorded: a reviewer can stop for
+  // approval long after its stage began, and the feed records no stop time.
+  return [since && `Stage began ${since}.`, clears && `${clears}.`]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function causeOf(stop: FeedTask["stop"]): Banner["cause"] {
+  return stop?.role ? { role: stop.role, href: threadHref(stop.thread) } : null;
+}
+
+function banner(task: FeedTask, at: Placed, found: Marker): Banner {
+  return {
+    id: task.id,
+    urgency: urgency(found.actor, task.stage === "rate-limited", false),
+    tone: found.actor === "computer" ? "warning" : "danger",
+    title: `${task.id} · ${at.label} · ${found.actor ?? "nobody"} must act`,
+    text: bannerText(task.stop?.reason, at),
+    cause: causeOf(task.stop),
+    when: bannerWhen(found),
+  };
+}
+
+// Green done, red stopped, orange now. A clock wait stays dim, and planned and queued tickets
+// wait for work to start, so their states stay unlit; their markers still show.
+function toneOf(own: GraphNode): GraphNode["tone"] {
+  if (!own.markers.length || !own.declared || own.clock) return "";
+  if (own.held) return "stop";
+  return own.id === "done" ? "done" : "now";
+}
+
+// What a state shows once tickets sit on it: its colour, and the same facts in print.
+function look(own: GraphNode) {
+  own.tone = toneOf(own);
+  own.cues = [
+    own.tone === "stop" && "stopped",
+    own.uncertain && "outcome unknown",
+    own.exitless && own.declared && "no exit",
+  ].filter((cue) => typeof cue === "string");
+}
+
+/**
+ * Draw the declared lifecycle table with every ticket on its current state. Nodes, exits and
+ * stops come only from the table, so a state it gives no exit is drawn exitless and no exit
+ * appears that the table lacks. A ticket sits where its feed kind and stop name say.
+ * @returns Null when the feed carries no table.
+ */
+function graph(feed: Feed, now: number): Graph | null {
+  const table = feed.lifecycle;
+  if (!table) return null;
+  const steps = feed.pipelineSteps ?? pipelineSteps;
+  const before = ["planned", "queued"].map((id) =>
+    node(id, id, {
+      actor: feed.stages?.find((stage) => stage.id === id)?.actor ?? null,
+      declared: false,
+    }),
+  );
+  const columns = Object.entries(table).map(([kind, entry]) =>
+    column(kind, entry, !PATH.includes(kind)),
+  );
+  const path = [
+    ...before.map((own): GraphColumn => ({ ...own, stops: [] })),
+    ...PATH.flatMap((kind) => columns.find((entry) => entry.id === kind) ?? []),
+  ];
+  // A state with stops is as urgent as its most urgent stop.
+  const soonest = (entry: GraphColumn) =>
+    Math.min(
+      entry.held ? entry.urgency : Infinity,
+      ...entry.stops.map((s) => s.urgency),
+    );
+  const stops = columns
+    .filter((entry) => entry.held || entry.stops.length)
+    .sort((a, b) => soonest(a) - soonest(b));
+  const nodes = new Map(
+    [...path, ...stops].flatMap((entry) =>
+      [entry, ...entry.stops].map((own): [string, Placed] => [own.id, own]),
+    ),
+  );
+  const banners: Banner[] = [];
+  for (const task of feed.tasks) {
+    const kind = task.kind ?? task.stage;
+    const at = nodes.get(`${kind}/${task.stopName}`) ?? nodes.get(String(kind));
+    if (!at) continue;
+    const found = marker(task, steps, now);
+    at.markers.push(found);
+    if (at.held) banners.push(banner(task, at, found));
+  }
+  for (const own of nodes.values()) look(own);
+  return {
+    waiting: feed.tasks.filter((task) => task.actor === "operator").length,
+    path,
+    stops,
+    banners: banners.sort((a, b) => a.urgency - b.urgency),
+  };
+}
+
 function nextLabel(active: FeedTask | undefined, total: number): string {
   // Older feeds carry the attempt only on a pending review record.
   const attempt = active?.attempt ?? active?.evidence?.review?.attempt;
@@ -506,6 +823,7 @@ export function derive(
     counts: count,
     tickets,
     pipelineSteps: stages,
+    graph: graph(next, now),
     news: events.map((event) => ({
       at: event.at,
       tone:

@@ -623,6 +623,161 @@
     transform: translateY(16px);
   }
 }
+/* LIFECYCLE: the declared states left to right, stops below, tickets as markers on their state. */
+#kit [data-area="lifecycle"] {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 14px;
+}
+
+#kit [data-area="lifecycle"] > h3 {
+  margin: 6px 0 0;
+  font: 500 8.5px/1 var(--mono, monospace);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+#kit [data-waiting] {
+  font: 600 12px/1 var(--mono, monospace);
+  color: var(--dim);
+}
+
+#kit [data-waiting][data-on] {
+  color: var(--fail);
+}
+
+#kit :is([data-path], [data-held]) {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+#kit [data-column] > ol {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+#kit [data-held] > [data-column] {
+  grid-column: 1 / -1;
+}
+
+#kit
+  [data-column]
+  > ol
+  > :is([data-group], [data-state]:not([data-stop="true"])) {
+  grid-column: 1 / -1;
+}
+
+#kit [data-group] {
+  font: 500 10px/1.3 var(--mono, monospace);
+  color: var(--dim);
+}
+
+/* The path's states are numbered, so their order reads without arrows. */
+#kit [data-path] {
+  counter-reset: state;
+}
+
+#kit [data-path] > [data-column] strong::before {
+  counter-increment: state;
+  content: counter(state) ". ";
+  color: var(--dim);
+}
+
+#kit [data-path] > [data-column] > ol {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+#kit [data-markers] a {
+  color: inherit;
+  text-decoration: underline;
+}
+
+#kit [data-state] {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in oklch, currentColor 25%, transparent);
+  border-radius: 6px;
+  font: 400 11px/1.35 var(--mono, monospace);
+  overflow-wrap: anywhere;
+}
+
+#kit [data-state][data-stop="true"] {
+  border-style: dashed;
+}
+
+#kit [data-state] small,
+#kit [data-state] ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--dim);
+  font-size: 10px;
+}
+
+#kit [data-state] ul:empty,
+#kit [data-state] small:empty {
+  display: none;
+}
+
+#kit [data-state] [data-cue] {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 9px;
+}
+
+#kit [data-state][data-tone="now"] {
+  border-color: var(--key-color);
+  box-shadow: 0 0 0 1px var(--key-color);
+}
+
+#kit [data-state][data-tone="done"] {
+  border-color: var(--done);
+  box-shadow: 0 0 0 1px var(--done);
+}
+
+#kit [data-state][data-tone="stop"] {
+  border-color: var(--fail);
+  border-width: 2px;
+  box-shadow: 0 0 0 1px var(--fail);
+}
+
+#kit [data-state][data-tone="stop"] [data-cue] {
+  color: var(--fail);
+}
+
+#kit [data-state][data-uncertain="true"] {
+  border-style: dotted;
+}
+
+#kit [data-state][data-clock="true"] {
+  opacity: 0.6;
+}
+
+#kit [data-state][data-exitless="true"] {
+  background: repeating-linear-gradient(
+    135deg,
+    transparent 0 6px,
+    color-mix(in oklch, currentColor 8%, transparent) 6px 7px
+  );
+}
+
+#kit [data-markers] [data-marker] {
+  color: inherit;
+  font-weight: 600;
+}
+
 @media (max-width: 600px) {
   #kit [data-device]:not(#_):not(#_) {
     grid-template-columns: minmax(0, 1fr);
@@ -652,6 +807,9 @@
   }
   #kit [data-section] {
     min-width: 0;
+  }
+  #kit :is([data-path], [data-held]) {
+    grid-template-columns: minmax(0, 1fr);
   }
   #kit :is([data-kit="item-list-head"], [data-kit="item-list-row"]) {
     grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) 64px;

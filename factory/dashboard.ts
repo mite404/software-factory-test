@@ -394,15 +394,21 @@ function projectAcceptance(run: Run | undefined) {
     : { acceptedAt: null, summary: null };
 }
 
-// Only the stage's own curated fields: no reasons, briefs, report paths or thread content.
+// Only the stage's own curated fields: no reasons, briefs, report paths or thread content. The
+// kind and stop name are keys of the declared table, so the page can place a run on its drawing.
 function projectStage(run: Run | undefined, intake: Task["intake"]) {
-  const { stage, actor, step, since, clearsAt } = runStage(run, intake);
+  const { stage, actor, step, kind, stopName, since, clearsAt } = runStage(
+    run,
+    intake,
+  );
   const work = runCheckpoint(run);
   return {
     stage,
     actor,
     stageSince: iso(since),
     step: step ? pipelineSteps.findIndex((entry) => entry.id === step) : null,
+    kind,
+    stopName,
     rejectedBy: work && "rejectedBy" in work ? (work.rejectedBy ?? null) : null,
     clearsAt: iso(clearsAt),
     ...projectAcceptance(run),

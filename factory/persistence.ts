@@ -855,15 +855,14 @@ export const stages = [
 export type Stage = (typeof stages)[number]["id"];
 
 // The declared stop that holds a run, read from the transition table.
-function stopActor(run: Run): Actor {
+function heldBy(run: Run): [string, LifecycleStop] | undefined {
   const entry: LifecycleKind = runLifecycle[run.kind];
   const reason = run.incident?.reason;
-  const stop = Object.values(entry.stops).find(
-    (stop) =>
+  return Object.entries(entry.stops).find(
+    ([, stop]) =>
       (!reason || stop.reasons.includes(reason)) &&
       (!stop.matches || stop.matches(run, reason)),
   );
-  return stop?.actor ?? entry.actor;
 }
 
 type StageStep = [Stage, PipelineStep | null];
@@ -901,18 +900,24 @@ function stageOf(run: Run): StageStep {
  * Name where a ticket is and who must act; the only stage mapping status, feed and notices use.
  * @param intake Separates planned from queued tickets that have no run yet.
  * @returns `actor` null means nobody; `since` is null for runs saved before stages were stamped.
+ * `kind` is the run's saved kind and `stopName` the declared stop that holds it, both table keys.
  */
 export function runStage(run: Run | undefined, intake?: Task["intake"]) {
   const [stage, step] = run
     ? stageOf(run)
     : [intake === "planned" ? ("planned" as const) : ("queued" as const), null];
   const declared = stages.find((entry) => entry.id === stage)!;
+  const held = run?.incident ? heldBy(run) : undefined;
   return {
     stage,
     // A stop on any stage names its own actor from the transition table.
-    actor: run?.incident ? stopActor(run) : declared.actor,
+    actor: run?.incident
+      ? (held?.[1].actor ?? runLifecycle[run.kind].actor)
+      : declared.actor,
     status: declared.status,
     step,
+    kind: run?.kind ?? null,
+    stopName: held?.[0] ?? null,
     since: run?.stageAt ?? null,
     clearsAt:
       stage === "rate-limited"

@@ -393,7 +393,35 @@ test("every run kind and stop reason names exactly one declared stage and actor"
       expect([null, "computer", "model", "foreman", "operator"]).toContain(
         named.actor,
       );
+      // The graph places a run by these two keys, so both must name the table's own entries.
+      expect(named.kind).toBe(run?.kind ?? null);
+      if (named.stopName)
+        expect(Object.keys(lifecycleStatus()[run!.kind]!.stops)).toContain(
+          named.stopName,
+        );
     }
+  const stopNames = cases.map(([, run]) => runStage(run).stopName);
+  // Only runs holding an incident name a stop; the rest sit on their kind.
+  expect(stopNames).toEqual([
+    null, // no run
+    null, // preparing
+    "interrupted",
+    "failed",
+    null, // creating
+    "unknown",
+    null, // worker writing
+    null, // gate running
+    null, // cold review
+    "reviewerApproval",
+    "providerLimit",
+    "repair",
+    "checkpoint",
+    "repair",
+    "keyed",
+    "legacy",
+    null, // accepted
+    null, // merged
+  ]);
 });
 
 test("acceptance summaries publish one bounded line and refuse private shapes", () => {

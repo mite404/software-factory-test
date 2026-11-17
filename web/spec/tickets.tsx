@@ -28,7 +28,14 @@ import { PageWheel } from "@/components/ui/page-wheel";
 import { ItemList, type Column } from "@/components/ui/item-list";
 import { Lcd, LcdDigits } from "@/components/ui/lcd";
 import { Toasts, notify } from "@/components/ui/toaster";
-import { eventRows, type EventRow, type Ticket, type View } from "../derive";
+import {
+  eventRows,
+  type EventRow,
+  type GraphColumn,
+  type GraphNode,
+  type Ticket,
+  type View,
+} from "../derive";
 import "./kit.css";
 import "./tickets.css";
 
@@ -482,6 +489,130 @@ function Coming({
   );
 }
 
+function Marker({ marker }: { marker: GraphNode["markers"][number] }) {
+  const text = marker.text;
+  return (
+    <li data-marker>
+      {marker.href ? (
+        <a
+          href={marker.href}
+          target="_blank"
+          rel="noreferrer"
+          aria-label={`Open ${marker.id} thread`}
+        >
+          {text}
+        </a>
+      ) : (
+        text
+      )}
+    </li>
+  );
+}
+
+function Exits({ node }: { node: GraphNode }) {
+  return (
+    <ul data-exits aria-label={`Exits of ${node.label}`}>
+      {node.exits.map((exit) => (
+        <li key={`${exit.name}-${exit.actor}`} title={exit.when}>
+          → {exit.name} · {exit.actor}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+// One state of the lifecycle. Its look comes from the feed's tickets on it and the table's own
+// facts, so an exitless state says so in print, not only by colour.
+function State({ node, stop }: { node: GraphNode; stop: boolean }) {
+  return (
+    <li
+      data-state
+      data-stop={String(stop)}
+      data-tone={node.tone}
+      data-clock={String(node.clock)}
+      data-exitless={String(node.exitless)}
+      data-uncertain={String(node.uncertain)}
+    >
+      <strong>{node.label}</strong>
+      <small
+        data-actor
+        title="The state's declared actor; a ticket's own actor is on its marker"
+      >
+        declared · {node.actor ?? "nobody"}
+      </small>
+      {node.cues.map((cue) => (
+        <b key={cue} data-cue>
+          {cue}
+        </b>
+      ))}
+      <small>{node.note}</small>
+      <Exits node={node} />
+      <ul data-markers aria-label={`Tickets on ${node.label}`}>
+        {node.markers.map((marker) => (
+          <Marker key={marker.id} marker={marker} />
+        ))}
+      </ul>
+    </li>
+  );
+}
+
+// A state's own box, with the stops that leave it grouped under it when `stops` is set.
+function Column({ column, stops }: { column: GraphColumn; stops?: boolean }) {
+  return (
+    <li data-column>
+      <ol>
+        {stops && !column.held ? (
+          <li data-group>leaving {column.label}</li>
+        ) : (
+          <State node={column} stop={false} />
+        )}
+        {stops &&
+          column.stops.map((stop) => <State key={stop.id} node={stop} stop />)}
+      </ol>
+    </li>
+  );
+}
+
+function Banner({
+  banner,
+}: {
+  banner: NonNullable<View["graph"]>["banners"][number];
+}) {
+  return (
+    <Alert tone={banner.tone} title={banner.title}>
+      {banner.text}
+      <CauseThread stop={banner.cause} />
+      {` ${banner.when}`}
+    </Alert>
+  );
+}
+
+// The declared lifecycle with every ticket on its state: the operator's own queue first.
+function Lifecycle({ graph }: { graph: NonNullable<View["graph"]> }) {
+  return (
+    <section data-section data-area="lifecycle">
+      <h2>Lifecycle</h2>
+      <p data-waiting data-on={graph.waiting > 0 || undefined}>
+        {graph.waiting} waiting for the operator
+      </p>
+      {graph.banners.map((banner) => (
+        <Banner key={banner.id} banner={banner} />
+      ))}
+      <ol data-path aria-label="States a run passes through">
+        {graph.path.map((column) => (
+          <Column key={column.id} column={column} />
+        ))}
+      </ol>
+      <h3>Stops · who must act first</h3>
+      <ol data-held aria-label="Stops below each state, most urgent first">
+        {graph.stops.map((column) => (
+          <Column key={column.id} column={column} stops />
+        ))}
+      </ol>
+    </section>
+  );
+}
+
 function Everything({ view }: { view: View }) {
   return (
     <section data-section data-area="queue">
@@ -840,6 +971,7 @@ function Tickets({
             live={shown === active}
           />
           <Coming pending={pending} shown={shown} choose={setChosen} />
+          {view.graph && <Lifecycle graph={view.graph} />}
           <Everything view={view} />
         </Device>
         <Toasts />
