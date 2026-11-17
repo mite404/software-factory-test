@@ -136,12 +136,12 @@ Run the shared preflight in `docs/v1-execution.md`. Baseline gates have not run 
 
 ## Done when
 
-- [ ] Every run maps to exactly one named stage with one actor, proven by a table test.
-- [ ] A gate in progress shows `gating`, and an interrupted gate recovers without a manual step.
-- [ ] `reviewing`, `escalated` and `parked` are distinct stages in status and the feed.
-- [ ] A verified merge commit moves an accepted ticket to `merged`; an unverified one is refused.
-- [ ] Saved state opens unchanged and the five public statuses keep their meaning.
-- [ ] Full gates, guard and fresh cold review pass on the exact candidate.
+- [x] Every run maps to exactly one named stage with one actor, proven by a table test.
+- [x] A gate in progress shows `gating`, and an interrupted gate recovers without a manual step.
+- [x] `reviewing`, `escalated` and `parked` are distinct stages in status and the feed.
+- [x] A verified merge commit moves an accepted ticket to `merged`; an unverified one is refused.
+- [x] Saved state opens unchanged and the five public statuses keep their meaning.
+- [x] Full gates, guard and fresh cold review pass on the exact candidate.
 
 ## Notes
 
