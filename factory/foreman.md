@@ -47,10 +47,14 @@ review feedback, or an answer to a question. Find its current stage and continue
    ticket name, path, and sections. Include observable acceptance, allowed files, verification,
    prerequisites, and permission boundaries. Do not create an external issue unless the operator
    requests one.
-4. Dispatch exactly one implementation worker using `openai/gpt-6.1-sol` at medium effort.
-   Preserve the exact source in its worktree. Do not start triage workers, review panels, nested
-   workers, or another implementation ticket concurrently. Use Luna only for explicitly requested
-   inexpensive workflow fixtures.
+4. Dispatch at most one implementation worker per lane: the main lane uses the definition's
+   `workerModel` and `workerEffort`, and a light lane, when the definition sets `capacity: 2` and
+   `lightWorker`, takes queue entries marked `"lane": "light"`. Mark only small, well-bounded
+   tickets light. Preserve the exact source in each worktree. Do not start triage workers, review
+   panels, nested workers, or a second ticket in an occupied lane. Whichever candidate passes
+   first lands first; the factory rebases the other onto the moved target, reruns its gate and
+   review, and sends a rebase conflict back to the same worker as repair feedback.
+   Use Luna only for explicitly requested inexpensive workflow fixtures.
    For intentional reconnection or fault-injection tests, begin the initial prompt with
    `[TEST] Intentional reconnection test.` and require a `[TEST]` thread-title prefix and opening
    status. Name the injected failure and expected recovery in that prompt. Real implementation

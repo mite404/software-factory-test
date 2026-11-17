@@ -15,7 +15,18 @@
   ],
   "properties": {
     "version": { "const": 1 },
-    "capacity": { "const": 1 },
+    "capacity": { "enum": [1, 2] },
+    "lightWorker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "effort"],
+      "properties": {
+        "model": { "type": "string", "pattern": "^[^/]+/.+$" },
+        "effort": {
+          "enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+        }
+      }
+    },
     "mode": { "type": "string", "minLength": 1 },
     "workerModel": { "type": "string", "pattern": "^[^/]+/.+$" },
     "workerRunner": { "type": "string", "pattern": "\\S" },
@@ -114,5 +125,8 @@
       }
     }
   },
-  "dependentRequired": { "setupTimeoutMs": ["setup"] }
+  "dependentRequired": { "setupTimeoutMs": ["setup"] },
+  "if": { "properties": { "capacity": { "const": 2 } } },
+  "then": { "required": ["lightWorker"] },
+  "else": { "not": { "required": ["lightWorker"] } }
 }

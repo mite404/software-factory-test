@@ -1015,7 +1015,14 @@ test.each(["base", "code", "stage"])(
       const path = paths[change as keyof typeof paths];
       await writeFile(join(path, "src/value"), "changed");
       git(path, "add", ".");
-      git(path, "commit", "-qm", "identity changed");
+      // A base that moved forward is rebased after the verdict; a rewritten one is a stop.
+      git(
+        path,
+        "commit",
+        ...(change === "base" ? ["--amend"] : []),
+        "-qm",
+        "identity changed",
+      );
       const blocked = (await f.tick()).runs.A!;
       expect(blocked).toMatchObject({
         kind: "blocked",

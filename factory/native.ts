@@ -1,5 +1,5 @@
 import type { AgentReasoningEffort, PluginTools } from "@ampcode/plugin";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, existsSync } from "node:fs";
 import {
@@ -43,10 +43,14 @@ import {
   runCheckpoint,
   admitsRun,
   runBlocks,
+  laneHeld,
+  runLane,
+  validLightWorker,
   type ThreadID,
   type Task,
   type Run,
   type DefinitionPin,
+  type Lane,
   type StopIncident,
   type State,
   type Watchdog,
@@ -70,6 +74,7 @@ const progressActions = new Set([
   "review-sent",
   "review-fallback-creating",
   "review-verdict",
+  "rebased",
   "review-recovered",
   "provider-recovered",
   "provider-continuation-sent",
@@ -338,7 +343,36 @@ function workerRole(raw: Record<string, unknown>) {
     throw new Error(
       "Invalid providerLimit; expected wait or fallback with a known independent, non-default reviewerModel and optional workerModel",
     );
-  return { workerModel, workerEffort, workerRunner, review, providerLimit };
+  return {
+    workerModel,
+    workerEffort,
+    workerRunner,
+    review,
+    providerLimit,
+    lightWorker: lightRole(raw, review),
+  };
+}
+
+/** Validate the optional light lane against review and limit policy.
+ * @throws When capacity 2 and lightWorker are not set together, or the light worker is invalid.
+ */
+export function lightRole(raw: Record<string, unknown>, review: boolean) {
+  if ((raw.capacity === 2) !== (raw.lightWorker !== undefined))
+    throw new Error(
+      "capacity 2 requires lightWorker, and lightWorker requires capacity 2",
+    );
+  const light = raw.lightWorker;
+  if (light === undefined) return undefined;
+  if (!validLightWorker(light))
+    throw new Error(
+      "Invalid lightWorker; expected a known provider/model and a supported effort",
+    );
+  if (review) reviewerModel(light.model);
+  if (!validProviderLimitPolicy(raw.providerLimit, light.model))
+    throw new Error(
+      "Invalid providerLimit for lightWorker; expected an independent reviewerModel",
+    );
+  return light;
 }
 
 function workerExecutor(workerRunner: string | undefined): Executor {
@@ -371,8 +405,8 @@ async function validateConfiguration(
   raw: Record<string, unknown>,
 ) {
   knownKeys(raw, definitionSchema.properties);
-  if (raw.version !== 1 || raw.capacity !== 1)
-    throw new Error("This slice requires version 1 and capacity 1");
+  if (raw.version !== 1 || (raw.capacity !== 1 && raw.capacity !== 2))
+    throw new Error("This slice requires version 1 and capacity 1 or 2");
   if (raw.mode !== undefined) text(raw.mode);
   if (
     raw.orchestratorModel !== undefined &&
@@ -393,7 +427,10 @@ async function validateConfiguration(
   const setup = parseSetup(raw.setup, raw.setupTimeoutMs);
   const watchdog = watchdogPolicy(raw.watchdog);
   const instructions = await readFile(prd, "utf8");
-  tasks(JSON.parse(await readFile(tickets, "utf8")));
+  tasks(
+    JSON.parse(await readFile(tickets, "utf8")),
+    role.lightWorker !== undefined,
+  );
   return {
     ...role,
     ...permissions,
@@ -485,6 +522,7 @@ export async function effectiveConfiguration(root: string) {
         workerEffort: loaded.workerEffort,
         workerRunner: loaded.workerRunner,
         providerLimit: loaded.providerLimit,
+        lightWorker: loaded.lightWorker,
       }
     : current;
 }
@@ -505,6 +543,7 @@ function definitionPin(
     setup,
     watchdog,
     providerLimit,
+    lightWorker,
   } = config;
   return {
     digest,
@@ -519,6 +558,7 @@ function definitionPin(
     setup,
     watchdog,
     ...(providerLimit === undefined ? {} : { providerLimit }),
+    ...(lightWorker === undefined ? {} : { lightWorker }),
   };
 }
 
@@ -559,8 +599,21 @@ export function missingBriefFacts(
   return [...new Set(missing)];
 }
 
-/** Parse ticket identities and dependencies at the file boundary. @throws On invalid tickets. */
-export function tasks(value: unknown): Task[] {
+function ticketLane(lane: unknown, light: boolean): Pick<Task, "lane"> {
+  if (lane === undefined) return {};
+  if (lane !== "light" || !light)
+    throw new Error(
+      'Invalid ticket lane; only "light", and only with a lightWorker definition',
+    );
+  return { lane };
+}
+
+/** Parse ticket identities and dependencies at the file boundary.
+ * @param light Whether `lane: "light"` is admitted. The authored check passes the definition's
+ * light lane; runtime readers pass true, and dispatch holds light tickets until it loads.
+ * @throws On invalid tickets.
+ */
+export function tasks(value: unknown, light = false): Task[] {
   if (!Array.isArray(value)) throw new Error("Tickets must be an array");
   const rows = value.map((item): Task => {
     const raw = object(item);
@@ -586,6 +639,7 @@ export function tasks(value: unknown): Task[] {
       ...(raw.steps === undefined ? {} : { steps: taskSteps(raw.steps) }),
       size,
       risky,
+      ...ticketLane(raw.lane, light),
     };
   });
   if (new Set(rows.map((row) => row.id)).size !== rows.length)
@@ -601,6 +655,36 @@ function git(root: string, ...args: string[]) {
   return execFileSync("git", ["-C", root, ...args], {
     encoding: "utf8",
   }).trim();
+}
+
+function descends(root: string, base: string, revision: string) {
+  try {
+    git(root, "merge-base", "--is-ancestor", base, revision);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Saved lane on every run built from another, so lane holds survive each transition.
+function laneField(run: { lane?: "light" }) {
+  return run.lane ? { lane: run.lane } : {};
+}
+
+/** The worker a pin creates for a lane; a light run never falls back to the main worker.
+ * @throws When a light-lane run's pin has no lightWorker.
+ */
+function laneWorker(
+  pinned: Pick<DefinitionPin, "workerModel" | "workerEffort" | "lightWorker">,
+  lane: { lane?: "light" },
+) {
+  if (!lane.lane)
+    return { model: pinned.workerModel, effort: pinned.workerEffort };
+  if (!pinned.lightWorker)
+    throw new Error(
+      "This light-lane run needs a definition with lightWorker; restore it before retrying",
+    );
+  return pinned.lightWorker;
 }
 
 function patchID(root: string, patch: string) {
@@ -767,8 +851,11 @@ function candidate(
   scope: string[],
 ) {
   const revision = git(run.worktree, "rev-parse", "HEAD");
+  // A factory rebase moves HEAD; the worker's report still names the revision it built.
+  const reported =
+    run.rebased?.revision === revision ? run.rebased.from : revision;
   const failure =
-    report.revision !== revision || revision === run.base
+    report.revision !== reported || revision === run.base
       ? "candidate revision check failed"
       : !cleanCandidate(run, revision)
         ? "clean tree check failed"
@@ -899,8 +986,10 @@ function cleanCandidate(
 }
 
 function reviewIdentity(root: string, worktree: string, review: Review) {
+  // A target that moved forward past the reviewed base waits for the verdict, then rebases.
   return (
-    unchanged(root, review.base) &&
+    !git(root, "status", "--porcelain") &&
+    descends(root, review.base, "HEAD") &&
     unchanged(worktree, review.revision) &&
     unchanged(review.worktree, review.revision)
   );
@@ -1083,6 +1172,7 @@ function verifiedLanding(
     kind: "done",
     definition: run.definition,
     executor: run.executor,
+    ...laneField(run),
     thread: checkpoint.thread,
     revision: evidence.revision,
     acceptedBase: checkpoint.base,
@@ -1254,11 +1344,18 @@ function restoreTickets(queue: Task[], persisted: Task[], state: State) {
   }
 }
 
-function retryAdmission(state: State, action: string) {
+function retryAdmission(state: State, action: string, twoLanes: boolean) {
   if (action !== "retry-setup") return true;
-  const runs = Object.values(state.runs);
-  if (runs.some((run) => runBlocks(run, "retry-setup"))) return false;
-  if (!state.enabled || !runs.some((run) => admitsRun(run, "retry-setup")))
+  const admitted = Object.entries(state.runs).filter(([, run]) =>
+    admitsRun(run, "retry-setup"),
+  );
+  const held = admitted.length
+    ? admitted.every(([id, run]) =>
+        laneHeld(state.runs, runLane(run), "retry-setup", twoLanes, id),
+      )
+    : Object.values(state.runs).some((run) => runBlocks(run, "retry-setup"));
+  if (held) return false;
+  if (!state.enabled || !admitted.length)
     throw new Error("No preparation to retry");
   return true;
 }
@@ -1376,8 +1473,12 @@ export function createFactory(
     try {
       await store.init();
       const config = await effectiveConfiguration(root);
+      const twoLanes = !!config.lightWorker;
       assertControlCaller(factoryStatus(directory), owner);
-      const queue = tasks(JSON.parse(await readFile(config.tickets, "utf8")));
+      const queue = tasks(
+        JSON.parse(await readFile(config.tickets, "utf8")),
+        true,
+      );
       persistence = openPersistence(directory, queue, now);
       const state = persistence.state;
       assertWatchdogCaller(state, action, owner, tools);
@@ -1745,8 +1846,13 @@ export function createFactory(
             "Original worker must be observed idle before repair",
           );
         requireWorktree(root, repair.worktree);
+        // With two lanes the other lane lands while this worker repairs; acceptance rebases
+        // its next candidate. A single lane keeps refusing a moved base, as before lanes.
         if (
-          !unchanged(root, repair.base) ||
+          git(root, "status", "--porcelain") ||
+          !(config.lightWorker
+            ? descends(root, repair.base, "HEAD")
+            : unchanged(root, repair.base)) ||
           git(repair.worktree, "status", "--porcelain")
         )
           throw new Error("Repair base or registered worker worktree changed");
@@ -1767,7 +1873,7 @@ export function createFactory(
           throw new Error(
             "Resume requires a blocked or parked ticket with its original worker",
           );
-        if (Object.values(state.runs).some((run) => runBlocks(run, "resume")))
+        if (laneHeld(state.runs, runLane(blocked), "resume", twoLanes, ticket))
           throw new Error(
             "Resolve active or uncertain work before resuming a repair",
           );
@@ -1790,6 +1896,7 @@ export function createFactory(
         await verifyRepair(checkpoint);
         state.runs[ticket] = {
           ...checkpoint,
+          ...laneField(blocked),
           incident: undefined,
           attempt: repair.attempt + 1,
           delivery: "queued",
@@ -1856,14 +1963,17 @@ export function createFactory(
       }
       if (action === "retry-create") return await retryCreate();
       await recoverUncertainDeliveries();
-      if (
+      // Without a light lane every run holds the one lane, exactly as before lanes existed.
+      const holdLane = (run: Run, lane: Lane) =>
+        !twoLanes || runLane(run) === lane;
+      // Unknown remote effects hold their own lane only; the other lane keeps settling.
+      const reconcileHeld = (lane: Lane) =>
         Object.values(state.runs).some(
           (run) =>
+            holdLane(run, lane) &&
             runBlocks(run, "reconcile") &&
             !(action === "retry-setup" && admitsRun(run, "retry-setup")),
-        )
-      )
-        return state;
+        );
       function deliveryIntent(
         task: Task,
         attempt: number,
@@ -1966,6 +2076,136 @@ export function createFactory(
         commit(task.id, "sent", run.thread);
       }
 
+      function blockTargetChanged(
+        task: Task,
+        run: Extract<Run, { kind: "running" }>,
+      ) {
+        state.runs[task.id] = {
+          kind: "blocked",
+          definition: run.definition,
+          thread: run.thread,
+          reason: "Integration target changed; reconcile before landing",
+          executor: run.executor,
+          ...laneField(run),
+        };
+        commit(
+          task.id,
+          "blocked",
+          "target-changed",
+          runLifecycle.blocked.stops.targetChanged.reasons[0],
+        );
+      }
+
+      // Land only the exact revision the gate and reviewer saw: replay a candidate whose
+      // target moved onto that target, then gate and review the replayed revision again.
+      async function rebaseCandidate(
+        task: Task,
+        run: Extract<Run, { kind: "running" }>,
+        report: Record<string, unknown>,
+        revision: string,
+      ): Promise<unknown> {
+        const target = git(root, "rev-parse", "HEAD");
+        if (
+          git(root, "status", "--porcelain") ||
+          !descends(root, run.base, target)
+        )
+          return blockTargetChanged(task, run);
+        // The rebase moves the worker's HEAD; wait, writing nothing, until it is idle.
+        if ((await observe(run.thread)) !== "idle") return;
+        const staging = join(
+          directory,
+          "staging",
+          `${task.id}-${run.attempt}-rebase-${randomUUID()}`,
+        );
+        const log = join(
+          directory,
+          `${task.id}-${run.attempt}-${target}.rebase.log`,
+        );
+        git(root, "worktree", "add", "--detach", staging, revision);
+        let rebased: string | null = null;
+        try {
+          // Keep the worker's committer identity; CI and fresh clones have no global one.
+          const [name, email] = git(
+            root,
+            "show",
+            "-s",
+            "--format=%cn%x00%ce",
+            revision,
+          ).split("\0");
+          const result = spawnSync(
+            "git",
+            [
+              "-C",
+              staging,
+              "-c",
+              "core.hooksPath=/dev/null",
+              "rebase",
+              "--onto",
+              target,
+              run.base,
+            ],
+            {
+              encoding: "utf8",
+              env: {
+                ...process.env,
+                GIT_COMMITTER_NAME: name,
+                GIT_COMMITTER_EMAIL: email,
+              },
+            },
+          );
+          await writeFile(
+            log,
+            `${result.stdout}${result.stderr}${result.error ?? ""}`,
+          );
+          if (result.status === 0) rebased = git(staging, "rev-parse", "HEAD");
+          else spawnSync("git", ["-C", staging, "rebase", "--abort"]);
+        } finally {
+          git(root, "worktree", "remove", "--force", staging);
+        }
+        run.base = target;
+        delete run.review;
+        if (!rebased)
+          return reject(
+            task,
+            run,
+            log,
+            `The integration target moved to ${target} and replaying your candidate onto it conflicted; your worktree is unchanged. Rebase onto ${target}, resolve the conflict and commit. Rebase log: ${log}`,
+          );
+        // Save the intent before moving the worker so a crash here is finished, not repeated.
+        run.rebased = {
+          from: run.rebased?.from ?? revision,
+          source: revision,
+          revision: rebased,
+          at: "intended",
+        };
+        commit(task.id, "rebase-intended", JSON.stringify(run.rebased));
+        finishRebase(task, run);
+        return checkCandidate(task, run, report);
+      }
+
+      // Finish a saved rebase intent: move the idle worker's worktree from the saved source to
+      // the saved result, then record completion only once its HEAD is verified there.
+      function finishRebase(
+        task: Task,
+        run: Extract<Run, { kind: "running" }>,
+      ) {
+        const rebase = run.rebased;
+        if (rebase?.at !== "intended") return;
+        // --keep refuses a dirty tree rather than lose work.
+        if (git(run.worktree, "rev-parse", "HEAD") === rebase.source)
+          git(run.worktree, "reset", "--keep", rebase.revision);
+        if (!unchanged(run.worktree, rebase.revision))
+          throw new Error(
+            "Worker worktree is at neither the rebase source nor its result; inspect before retrying",
+          );
+        rebase.at = "verified";
+        commit(
+          task.id,
+          "rebased",
+          JSON.stringify({ ...rebase, base: run.base }),
+        );
+      }
+
       async function accept(
         task: Task,
         run: Extract<Run, { kind: "running" }>,
@@ -1982,24 +2222,11 @@ export function createFactory(
             run.base,
             revision,
             runDefinition(run, config, directory).scope,
-          ) ||
-          (target !== run.base && target !== revision)
-        ) {
-          state.runs[task.id] = {
-            kind: "blocked",
-            definition: run.definition,
-            thread: run.thread,
-            reason: "Integration target changed; reconcile before landing",
-            executor: run.executor,
-          };
-          commit(
-            task.id,
-            "blocked",
-            "target-changed",
-            runLifecycle.blocked.stops.targetChanged.reasons[0],
-          );
-          return;
-        }
+          )
+        )
+          return blockTargetChanged(task, run);
+        if (target !== run.base && target !== revision)
+          return rebaseCandidate(task, run, report, revision);
         if (target !== revision) git(root, "merge", "--ff-only", revision);
         await store.ledger.record({
           pr: queue.indexOf(task) + 1,
@@ -2012,6 +2239,7 @@ export function createFactory(
           definition: run.definition,
           thread: run.thread,
           executor: run.executor,
+          ...laneField(run),
           revision,
           acceptedBase: run.base,
           workerModel: run.workerModel,
@@ -2044,7 +2272,7 @@ export function createFactory(
             runDefinition(run, config, directory).review &&
             (task.size !== "small" || task.risky || run.attempt > 1)
           ) {
-            await beginReview(task, run, revision, evidence);
+            await beginReview(task, run, report, revision, evidence);
           } else await accept(task, run, report, revision, evidence);
         } else await reject(task, run, log, feedback);
       }
@@ -2057,6 +2285,8 @@ export function createFactory(
       ) {
         const cause = stopCause(run);
         delete run.review;
+        // A new attempt reports a new revision; an earlier rebase alias must not vouch for it.
+        delete run.rebased;
         const capped = run.attempt >= repairAttemptCap;
         if (!capped && run.attempt % 2 === 1) {
           run.attempt++;
@@ -2070,6 +2300,7 @@ export function createFactory(
             reason: `Verification rejected attempt ${run.attempt}; ${capped ? "operator decision" : "Foreman escalation"} required: ${evidence}`,
             repair: run,
             executor: run.executor,
+            ...laneField(run),
           };
           commit(
             task.id,
@@ -2117,6 +2348,7 @@ export function createFactory(
       async function beginReview(
         task: Task,
         run: Extract<Run, { kind: "running" }>,
+        report: Record<string, unknown>,
         revision: string,
         log: string,
       ) {
@@ -2124,25 +2356,10 @@ export function createFactory(
           throw new Error(
             "Implementation provider is unknown; reconcile before review",
           );
-        if (
-          git(root, "rev-parse", "HEAD") !== run.base ||
-          git(root, "status", "--porcelain")
-        ) {
-          state.runs[task.id] = {
-            kind: "blocked",
-            definition: run.definition,
-            thread: run.thread,
-            reason: "Integration target changed; reconcile before landing",
-            executor: run.executor,
-          };
-          commit(
-            task.id,
-            "blocked",
-            "target-changed",
-            runLifecycle.blocked.stops.targetChanged.reasons[0],
-          );
-          return;
-        }
+        if (git(root, "status", "--porcelain"))
+          return blockTargetChanged(task, run);
+        if (git(root, "rev-parse", "HEAD") !== run.base)
+          return rebaseCandidate(task, run, report, revision);
         const model = reviewerModel(run.workerModel);
         const worktree = join(
           directory,
@@ -2342,6 +2559,7 @@ export function createFactory(
             reason:
               "Reviewed candidate or integration base changed; revalidate before landing",
             executor: run.executor,
+            ...laneField(run),
           };
           commit(
             task.id,
@@ -2354,8 +2572,10 @@ export function createFactory(
         if (!(await reviewIdle(task, run))) return;
         const verdict = await reviewVerdict(review);
         if (!verdict) return;
-        review.evidence = verdict.evidence;
-        commit(task.id, "review-verdict", verdict.evidence);
+        if (review.evidence !== verdict.evidence) {
+          review.evidence = verdict.evidence;
+          commit(task.id, "review-verdict", verdict.evidence);
+        }
         if (verdict.kind === "issues")
           return reject(task, run, verdict.evidence);
         const report = await currentReport(directory, task, run.attempt);
@@ -2404,6 +2624,7 @@ export function createFactory(
           thread: run.thread,
           reason: "Delivery outcome unknown; inspect thread before recovery",
           executor: run.executor,
+          ...laneField(run),
           checkpoint: run.deliveryIntent ? run : undefined,
         };
         commit(task.id, "uncertain", "delivery-unknown");
@@ -2425,10 +2646,12 @@ export function createFactory(
             reason: `Worker ${activity}; inspect before resuming`,
             checkpoint: run,
             executor: run.executor,
+            ...laneField(run),
           };
           commit(task.id, "blocked", activity, lifecycleActivity(activity)[0]);
           return;
         }
+        finishRebase(task, run);
         const report = await currentReport(directory, task, run.attempt);
         if (!report) return;
         if (report.kind === "blocked") {
@@ -2439,6 +2662,7 @@ export function createFactory(
             reason: text(report.reason),
             checkpoint: run,
             executor: run.executor,
+            ...laneField(run),
           };
           commit(task.id, "blocked", text(report.reason));
           return;
@@ -2452,6 +2676,9 @@ export function createFactory(
         const definition = state.runs[task.id]?.definition ?? config.digest;
         const pinned = factoryDefinition(directory, definition)!;
         const executor = workerExecutor(pinned.workerRunner);
+        const lane = savedLane(task);
+        // The run's saved lane picks the worker; review later follows the saved workerModel.
+        const worker = laneWorker(pinned, lane);
         if (state.runs[task.id]?.kind !== "creating") {
           state.runs[task.id] = {
             kind: "creating",
@@ -2459,13 +2686,14 @@ export function createFactory(
             worktree,
             definition,
             executor,
+            ...lane,
           };
           commit(task.id, "creating", base);
         }
         const thread = await host.create(
           state.owner!,
-          pinned.workerModel,
-          pinned.workerEffort,
+          worker.model,
+          worker.effort,
           undefined,
           executor,
         );
@@ -2473,12 +2701,13 @@ export function createFactory(
           kind: "running",
           definition,
           executor,
+          ...lane,
           base,
           worktree,
           thread,
           attempt: 1,
           delivery: "queued",
-          workerModel: pinned.workerModel,
+          workerModel: worker.model,
           requirements: task.brief,
         };
         state.runs[task.id] = run;
@@ -2505,6 +2734,7 @@ export function createFactory(
           command: preparationConfig.setup.command,
           timeoutMs: preparationConfig.setup.timeoutMs,
           log: join(directory, `${task.id}-setup-${randomUUID()}.log`),
+          ...savedLane(task),
         };
         await writeFile(
           run.log,
@@ -2566,14 +2796,29 @@ export function createFactory(
         );
       }
 
+      function taskLane(task: Task): { lane?: "light" } {
+        return task.lane ? { lane: task.lane } : {};
+      }
+
+      // A saved run keeps the lane it was dispatched into, even if the queue entry changes.
+      function savedLane(task: Task) {
+        return laneField(state.runs[task.id] ?? taskLane(task));
+      }
+
       async function dispatchNext() {
-        if (Object.values(state.runs).some((run) => runBlocks(run, "dispatch")))
-          return state;
         const next = queue.find(
           (task) =>
             task.intake !== "planned" &&
             !state.runs[task.id] &&
-            task.after.every((id) => state.runs[id]?.kind === "done"),
+            task.after.every((id) => state.runs[id]?.kind === "done") &&
+            // A light ticket waits until a loaded definition has the light lane.
+            (!task.lane || !!config.lightWorker) &&
+            !laneHeld(
+              state.runs,
+              taskLane(task).lane ?? "main",
+              "dispatch",
+              twoLanes,
+            ),
         );
         if (!next || !state.owner) return state;
         if (git(root, "status", "--porcelain"))
@@ -2592,22 +2837,28 @@ export function createFactory(
             base,
             definition: config.digest,
             reason,
+            ...taskLane(next),
           };
           commit(next.id, "blocked", reason, "brief-incomplete");
           return state;
         }
         const worktree = join(directory, "worktrees", next.id);
-        if (config.setup) return prepare(next, base, worktree);
-        state.runs[next.id] = {
-          kind: "creating",
-          base,
-          worktree,
-          definition: config.digest,
-          executor: workerExecutor(config.workerRunner),
-        };
-        commit(next.id, "creating", base);
-        addWorktree(next, base, worktree);
-        return createWorker(next, base, worktree);
+        if (config.setup) await prepare(next, base, worktree);
+        else {
+          state.runs[next.id] = {
+            kind: "creating",
+            base,
+            worktree,
+            definition: config.digest,
+            executor: workerExecutor(config.workerRunner),
+            ...taskLane(next),
+          };
+          commit(next.id, "creating", base);
+          addWorktree(next, base, worktree);
+          await createWorker(next, base, worktree);
+        }
+        // The new run now holds its lane, so this fills at most the other free lane.
+        return dispatchNext();
       }
 
       async function reclassifyProviderError(task: Task, run: Run | undefined) {
@@ -2616,7 +2867,7 @@ export function createFactory(
           run?.kind === "blocked" &&
           run.incident?.reason === "worker-error" &&
           run.checkpoint &&
-          !Object.values(state.runs).some((other) => runBlocks(other, "resume"))
+          !laneHeld(state.runs, runLane(run), "resume", twoLanes, task.id)
         ) {
           const activity = await observe(run.checkpoint.thread);
           if (typeof activity === "object") {
@@ -2634,6 +2885,7 @@ export function createFactory(
         }
         for (const task of queue) {
           const run = state.runs[task.id];
+          if (run && reconcileHeld(runLane(run))) continue;
           await reclassifyProviderError(task, run);
           if (run?.kind === "running") {
             const result = run.review
@@ -2647,8 +2899,15 @@ export function createFactory(
       async function retrySetup() {
         for (const task of queue) {
           const run = state.runs[task.id];
-          if (!admitsRun(run, "retry-setup")) continue;
+          if (
+            !admitsRun(run, "retry-setup") ||
+            laneHeld(state.runs, runLane(run), "retry-setup", twoLanes, task.id)
+          )
+            continue;
           requireSetupStopped(run.pid);
+          const next = await configuration(root);
+          // Refuse before any Git or saved-state change when the new pin lacks the run's lane.
+          laneWorker(next, laneField(run));
           if (git(root, "status", "--porcelain"))
             throw new Error("Commit existing changes before retrying setup");
           const base = git(root, "rev-parse", "HEAD");
@@ -2660,7 +2919,7 @@ export function createFactory(
               );
             git(run.worktree, "merge", "--ff-only", base);
           }
-          return prepare(task, base, run.worktree, await configuration(root));
+          return prepare(task, base, run.worktree, next);
         }
         throw new Error("No preparation to retry");
       }
@@ -2797,6 +3056,7 @@ export function createFactory(
             const config = await effectiveConfiguration(root);
             const queue = tasks(
               JSON.parse(await readFile(config.tickets, "utf8")),
+              true,
             );
             restoreTickets(queue, persistence.tickets, state);
             transferOwnership(state, state.owner!, owner, decision, now());
@@ -2944,7 +3204,10 @@ export function createFactory(
           ? await effectiveConfiguration(root)
           : await configuration(root);
       assertControlCaller(factoryStatus(directory), owner);
-      const queue = tasks(JSON.parse(await readFile(next.tickets, "utf8")));
+      const queue = tasks(
+        JSON.parse(await readFile(next.tickets, "utf8")),
+        true,
+      );
       const persistence = openPersistence(directory, queue, now);
       try {
         assertWatchdogCaller(persistence.state, action, owner, tools);
@@ -3032,8 +3295,9 @@ export function createFactory(
         if (action === "admit") assertOwner(initial, owner);
         if (action === "reload" || action === "admit")
           return loadDefinition(action, owner, tools, selectedTicket);
-        await configuration(root);
-        if (!retryAdmission(initial, action)) return initial;
+        const config = await effectiveConfiguration(root);
+        if (!retryAdmission(initial, action, !!config.lightWorker))
+          return initial;
         return reconcile(action, owner, observe, repairRequest, tools);
       });
     pending = result;

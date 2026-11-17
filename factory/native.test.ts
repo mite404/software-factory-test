@@ -1267,7 +1267,14 @@ async function externalLandingFixture(targetChanged = false) {
   await writeFile(reportPath, JSON.stringify(report));
   f.host.state = async () => "idle";
   if (targetChanged) {
-    f.git("commit", "--allow-empty", "-qm", "move integration target");
+    // A rewritten target no longer descends from the base, so it cannot be rebased onto.
+    f.git(
+      "commit",
+      "--amend",
+      "--allow-empty",
+      "-qm",
+      "rewrite integration target",
+    );
   } else {
     const repair = await engine.tick("reconcile", "T-owner");
     expect(repair.runs.A).toMatchObject({ kind: "running", attempt: 2 });

@@ -378,7 +378,10 @@ export default function registerFactory(
     publishing = true;
     try {
       const config = await effectiveConfiguration(root);
-      const queue = tasks(JSON.parse(await readFile(config.tickets, "utf8")));
+      const queue = tasks(
+        JSON.parse(await readFile(config.tickets, "utf8")),
+        true,
+      );
       const state = await factory.tick("status");
       const snapshot: DashboardSnapshot = {
         project: basename(root),

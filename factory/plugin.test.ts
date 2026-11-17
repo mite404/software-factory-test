@@ -1088,7 +1088,8 @@ async function damageCandidate(
   } else if (gate === "integration") {
     await writeFile(join(root, "prd.md"), "# Changed target\n");
     git(root, "add", "prd.md");
-    git(root, "commit", "-qm", "target moved");
+    // A rewritten target no longer descends from the base, so it cannot be rebased onto.
+    git(root, "commit", "--amend", "-qm", "target rewritten");
   } else {
     const path = gate === "scope" ? "outside" : "src/value";
     await writeFile(join(worktree, path), "bad");
