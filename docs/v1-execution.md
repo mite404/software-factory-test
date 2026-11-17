@@ -63,6 +63,7 @@ prerequisites, not permission to dispatch every draft against today's base.
 | [F033-provider-error-shape](feats/done/F033-provider-error-shape.md)                     | A real provider limit waits instead of stopping           | F006-limit-fallback-setting                                              | F03, operator autonomy priority           |
 | [F034-reviewer-retry-create](feats/durability/F034-reviewer-retry-create.md)             | An interrupted reviewer creation can be retried           | F007-run-transition-table                                                | F03, operator autonomy priority           |
 | [F035-observer-watchdog-thread](feats/foreman-watchdog/F035-observer-watchdog-thread.md) | Routine watchdog checks run in a cheap observer thread    | F014-lifecycle-stages                                                    | F03, operator autonomy priority           |
+| [F037-two-worker-lanes](feats/worker-lanes/F037-two-worker-lanes.md)                     | Two lanes run two tickets at once                         | F011-step-actor-labels                                                   | R1, R10, operator throughput priority     |
 | [v1-ticket4](feats/v1/v1-ticket4.md)                                                     | Durable private evidence records                          | v1-ticket2                                                               | F02, F07, R6-R7                           |
 | [v1-ticket11](feats/v1/v1-ticket11.md)                                                   | Required and advisory verification tools                  | v1-ticket2                                                               | F12, AC28, AC35-AC36                      |
 | [v1-ticket12](feats/v1/v1-ticket12.md)                                                   | Permission-bound native hooks                             | v1-ticket11                                                              | F12, AC27, AC29                           |
@@ -181,9 +182,10 @@ proof at a real provider limit happens.
 F009 landed at attempt two: the first cold review found that a parked run could not resume once an
 independent ticket landed. F010 landed at attempt two: the first review found that an empty
 dependency insight left no real exit, that reload released refusals for any caller, and that any
-Markdown path counted as the ticket file. The operator set the order after them: F011 and F014,
-then F035, then F012 and F017 as their dependencies allow, then F023, then F022, F025, F029, F026,
-F027 and F028 last. All are placed. The factory runs one ticket at a time from merged main.
+Markdown path counted as the ticket file. The operator set the order after them: F011, then F037
+(two worker lanes), then F014, then F035, then F012 and F017 as their dependencies allow, then F023,
+then F022, F025, F029, F026, F027 and F028 last. All except F037 are placed. The factory runs one
+ticket at a time from merged main.
 
 v1-ticket10 keeps the recovery of outages that still happen, and v1-ticket8 keeps exclusive
 ownership across orbs. Keep preserved backup owners until required evidence preservation is
