@@ -128,14 +128,14 @@ review feedback, or an answer to a question. Find its current stage and continue
    Confirm the feed's merge record and that the ticket's stage reads `merged` before moving on.
    Backfill tickets merged before this action existed once from the pull request list.
    Recording works while the factory is paused.
-   If the operator instead approved and merged a blocked candidate outside the native path, use
-   `record-landing` with `ticket`, its exact current `incident` ID, the full worker `revision`,
-   integer `pr`, full merge `commit`, and a nonempty `decision` recording that approval. Fetch the
-   configured upstream and integrate the merge into the root checkout before recording. Fetching
-   alone is insufficient. A `target-changed` block without a checkpoint also qualifies once its
-   candidate lands. Its identity comes from the saved incident's base, attempt, ticket and owner,
-   the run's thread, and the registered worker worktree, never from request overrides. Missing
-   identity is refused. Recovery remains `inspect`, not `resume`.
+   If the operator instead approved and merged a blocked or parked candidate outside the native
+   path, use `record-landing` with `ticket`, its exact current `incident` ID, the full worker
+   `revision`, integer `pr`, full merge `commit`, and a nonempty `decision` recording that approval.
+   Fetch the configured upstream and integrate the merge into the root checkout before recording.
+   Fetching alone is insufficient. A `target-changed` block without a checkpoint also qualifies once
+   its candidate lands. Its identity comes from the saved incident's base, attempt, ticket and
+   owner, the run's thread, and the registered worker worktree, never from request overrides.
+   Missing identity is refused. Recovery remains `inspect`, not `resume`.
    Git must prove the revision descends from the saved base, is reachable
    from the worker worktree's HEAD, and has its exact patch on that upstream. The merge commit must
    be reachable from both the upstream and root HEAD. A later blocked report does not disqualify

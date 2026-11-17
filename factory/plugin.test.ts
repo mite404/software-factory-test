@@ -155,6 +155,7 @@ test("status exposes a compact static lifecycle with real control actions and no
     expect(Object.keys(status.lifecycle)).toHaveLength(8);
     expect(status.lifecycle.parked.stops.repair.exits).toEqual([
       { action: "resume", when: expect.any(String), actor: "operator" },
+      { action: "record-landing", when: expect.any(String), actor: "foreman" },
     ]);
     expect(status.lifecycle.creating.stops.unknown.exits).toContainEqual({
       action: "retry-create",
@@ -777,7 +778,7 @@ async function recordedMergeFixture(action: string) {
     );
     enabled.close();
     expect(execute({ ...request, ticket: "queued" }, owner)).rejects.toThrow(
-      /done ticket|blocked ticket/,
+      /done ticket|blocked or parked ticket/,
     );
     await execute(
       { ...request, action: "record-merge", ticket: "legacy" },
