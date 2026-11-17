@@ -19,13 +19,13 @@ Merged, but at least one box, usually a live proof, is still open.
 | [F003-provider-limit-resume](feats/durability/F003-provider-limit-resume.md) | Same threads resume after a provider limit | 5/6 |
 | [F011-step-actor-labels](feats/lifecycle-view/F011-step-actor-labels.md) | Each step and exit names who performs it | 5/6 |
 
-## Not started (36)
+## Not started (35)
 
 In dispatch order.
 
 | Ticket | Outcome | Done when |
 | --- | --- | --- |
-| [F012-lifecycle-graph-view](feats/lifecycle-view/F012-lifecycle-graph-view.md) | Lifecycle drawn with tickets on their states | 0/6 |
+| [F035-observer-watchdog-thread](feats/foreman-watchdog/F035-observer-watchdog-thread.md) | Routine watchdog checks run in a cheap observer thread | 0/5 |
 | [F017-remove-public-status](feats/lifecycle-view/F017-remove-public-status.md) | Feed carries the stage only | 0/3 |
 | [F025-config-directory](feats/config-layout/F025-config-directory.md) | Factory settings live in one file per concern | 0/7 |
 | [F029-gate-check-files](feats/config-layout/F029-gate-check-files.md) | The gate reports every check on its own | 0/6 |
@@ -35,7 +35,6 @@ In dispatch order.
 | [F022-ticket-file-sync](feats/planned-intake/F022-ticket-file-sync.md) | Saved tickets appear as planned on their own | 0/6 |
 | [F023-public-stop-reasons](feats/lifecycle-view/F023-public-stop-reasons.md) | A blocked or rejected ticket says why | 0/6 |
 | [F034-reviewer-retry-create](feats/durability/F034-reviewer-retry-create.md) | An interrupted reviewer creation can be retried | 0/5 |
-| [F035-observer-watchdog-thread](feats/foreman-watchdog/F035-observer-watchdog-thread.md) | Routine watchdog checks run in a cheap observer thread | 0/5 |
 | [v1-ticket4](feats/v1/v1-ticket4.md) | Durable private evidence records | 0/3 |
 | [v1-ticket11](feats/v1/v1-ticket11.md) | Required and advisory verification tools | 0/3 |
 | [v1-ticket12](feats/v1/v1-ticket12.md) | Permission-bound native hooks | 0/3 |
@@ -70,7 +69,7 @@ Written up but set aside; not dispatched until the operator asks for it.
 | --- | --- | --- |
 | [F036-context-window-reminders](feats/worker-budgets/F036-context-window-reminders.md) | Context-window reminders with an operator-chosen handoff | 0/5 |
 
-## Done (31)
+## Done (32)
 
 | Ticket | Outcome | Done when |
 | --- | --- | --- |
@@ -95,6 +94,7 @@ Written up but set aside; not dispatched until the operator asks for it.
 | [F037-two-worker-lanes](feats/done/F037-two-worker-lanes.md) | Two lanes run two tickets at once | 5/5 |
 | [F014-lifecycle-stages](feats/done/F014-lifecycle-stages.md) | One named stage and actor for every run | 6/6 |
 | [F010-brief-fact-check](feats/done/F010-brief-fact-check.md) | No worker starts on an incomplete brief | 4/4 |
+| [F012-lifecycle-graph-view](feats/done/F012-lifecycle-graph-view.md) | Lifecycle drawn with tickets on their states | 6/6 |
 | [F024-serial-test-runs](feats/done/F024-serial-test-runs.md) | Test runs on one machine take turns | 5/5 |
 | [F031-landing-without-checkpoint](feats/done/F031-landing-without-checkpoint.md) | A blocked run without a checkpoint can record its landing | 5/5 |
 | [F032-landing-per-commit-proof](feats/done/F032-landing-per-commit-proof.md) | A multi-commit candidate can record its landing | 4/4 |

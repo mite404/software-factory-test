@@ -39,7 +39,7 @@ prerequisites, not permission to dispatch every draft against today's base.
 | [F009-attempt-cap-parking](feats/done/F009-attempt-cap-parking.md)                       | Twice-escalated ticket parks; queue continues             | F007-run-transition-table                                                | F03, operator autonomy priority           |
 | [F010-brief-fact-check](feats/done/F010-brief-fact-check.md)                             | No worker starts on an incomplete brief                   | F007-run-transition-table                                                | F02, F03                                  |
 | [F011-step-actor-labels](feats/lifecycle-view/F011-step-actor-labels.md)                 | Each step and exit names who performs it                  | F007, F016-kit-page-default                                              | F07                                       |
-| [F012-lifecycle-graph-view](feats/lifecycle-view/F012-lifecycle-graph-view.md)           | Lifecycle drawn with tickets on their states              | F011, F014-lifecycle-stages                                              | F07                                       |
+| [F012-lifecycle-graph-view](feats/done/F012-lifecycle-graph-view.md)           | Lifecycle drawn with tickets on their states              | F011, F014-lifecycle-stages                                              | F07                                       |
 | [F013-event-log-drawer](feats/done/F013-event-log-drawer.md)                             | Live event log drawer and read-only trace API             | F016-kit-page-default                                                    | F07, operator observability priority      |
 | [F014-lifecycle-stages](feats/done/F014-lifecycle-stages.md)                   | One named stage and actor for every run                   | F007, F009-attempt-cap-parking                                           | F07, operator observability priority      |
 | [F015-weekly-failure-audit](feats/done/F015-weekly-failure-audit.md)                     | Weekly bucketed failures and a Fable audit                | F002-worker-runner-executor                                              | F04, operator quality priority            |
@@ -191,8 +191,10 @@ landed at attempt four: reviews found lane occupancy checked only at dispatch, a
 interrupted rebase, and a setup retry that dropped a run's light lane. F014 landed outside the
 factory with the operator's approval after four attempts: reviews went one level deeper into gate
 crash recovery each time, and the Foreman added the last fix: a reconcile kills a gate still running
-past its deadline after its coordinator died. All are placed. The factory can run a main and a light
-lane at once from merged main.
+past its deadline after its coordinator died. F012 landed at attempt four on the light lane:
+reviews found markers without the run's stage and actor, a stage start shown as a stop time,
+exitless states decided from stop counts, a lit queued node and a banner that ignored stop exits.
+All are placed. The factory can run a main and a light lane at once from merged main.
 
 v1-ticket10 keeps the recovery of outages that still happen, and v1-ticket8 keeps exclusive
 ownership across orbs. Keep preserved backup owners until required evidence preservation is
