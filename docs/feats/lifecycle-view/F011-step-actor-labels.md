@@ -123,12 +123,12 @@ Run the shared preflight in `docs/v1-execution.md`. Baseline gates have not run 
 
 ## Done when
 
-- [ ] Every exit and pipeline step has one actor, and a test fails when one is missing.
-- [ ] Status and the dashboard feed carry the labels.
-- [ ] Each new stop records the thread that caused it and whether it was the worker or reviewer.
-- [ ] The page links the builder step to the worker, the review step to its reviewer, a failed
+- [x] Every exit and pipeline step has one actor, and a test fails when one is missing.
+- [x] Status and the dashboard feed carry the labels.
+- [x] Each new stop records the thread that caused it and whether it was the worker or reviewer.
+- [x] The page links the builder step to the worker, the review step to its reviewer, a failed
       step to the failing thread, and earlier rejections to their reviewers.
-- [ ] The actor is readable on each step of the kit page, and the links are shown, checked in a
+- [x] The actor is readable on each step of the kit page, and the links are shown, checked in a
       rendered screenshot.
 - [ ] Full gates, guard and fresh cold review pass on the exact candidate.
 
