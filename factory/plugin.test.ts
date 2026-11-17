@@ -140,7 +140,12 @@ test("status exposes a compact static lifecycle with real control actions and no
       String(await execute({ action: "status" }, ctx)),
     ) as {
       lifecycle: ReturnType<typeof lifecycleStatus>;
+      stage: Record<string, { stage: string; actor: string | null }>;
     };
+    expect(status.stage.A).toMatchObject({
+      stage: "reviewing",
+      actor: "model",
+    });
     const projection = JSON.stringify(status.lifecycle);
     expect(projection).not.toContain(canary);
     expect(projection).not.toContain(root);

@@ -1,6 +1,7 @@
 import type { DashboardEvent, DashboardSnapshot } from "../factory/dashboard";
 import { pipelineSteps } from "../factory/pipeline";
-import type { StopIncident } from "../factory/persistence";
+import type { Stage, StopIncident } from "../factory/persistence";
+import type { Actor } from "../factory/pipeline";
 
 export type EventRow = DashboardEvent & {
   time: string;
@@ -53,6 +54,12 @@ export type FeedTask = DashboardSnapshot["tasks"][number] & {
   } | null;
   parked?: boolean;
   rejections?: { attempt: number; thread: string }[];
+  stage?: Stage; // the factory's named stage; the page prints it, never infers it
+  actor?: Actor | null; // who must act now; null is nobody
+  clearsAt?: string | null; // when a provider limit clears, if known
+  step?: number | null; // index into pipelineSteps where the run sits; null before one exists
+  rejectedBy?: "gate" | "review" | "merge" | null; // the step that rejected the last attempt
+  summary?: string | null; // curated public one-line outcome, set at acceptance
 };
 
 // One step chip of a COMING row, placed in SVG units.
@@ -91,6 +98,7 @@ export type Ticket = Cell & {
   stop: { role: "worker" | "reviewer" | null; href: string | null } | null;
   parked: boolean;
   rejections: { attempt: number; href: string | null }[];
+  lifecycle: string; // "<stage> · <actor>[ · <limit clear time>]", "" for feeds without stages
 };
 
 // One recorded event, worded for a notification.
@@ -220,13 +228,40 @@ function steps(
 function failedStage(task: FeedTask) {
   if (!task.stop?.thread || !task.stop.role) return null;
   if (task.stop.role === "reviewer") return "review";
-  return task.stop.reason === "verification-rejected" ? "gate" : "builder";
+  return task.stop.reason === "verification-rejected"
+    ? (task.rejectedBy ?? "gate")
+    : "builder";
+}
+
+const STOPPED = new Set(["escalated", "parked", "blocked", "uncertain"]);
+
+// The factory's own step and stage, when the feed carries them; nothing is inferred.
+function namedStages(task: FeedTask, count: number): string[] {
+  const { stage, step } = task;
+  if (stage === "accepted" || stage === "merged")
+    return Array.from({ length: count }, () => "done");
+  const mark =
+    STOPPED.has(stage!) || (task.stop && stage !== "rate-limited")
+      ? "fail"
+      : "now";
+  return Array.from({ length: count }, (_, i) =>
+    step === null || step === undefined
+      ? ""
+      : i < step
+        ? "done"
+        : i === step
+          ? mark
+          : "",
+  );
 }
 
 function stagesOf(
   task: FeedTask,
   stages: NonNullable<Feed["pipelineSteps"]> = pipelineSteps,
 ): string[] {
+  // Feeds from before stages fall back to inferring progress from the public status.
+  if (task.stage && task.step !== undefined)
+    return namedStages(task, stages.length);
   const result = steps(
     task.status,
     task.evidence?.review?.pending === true,
@@ -290,6 +325,12 @@ function ticketLinks(
   };
 }
 
+function lifecycle({ stage, actor, clearsAt }: FeedTask): string {
+  if (!stage) return "";
+  const clears = clearsAt ? ` · ${clearsAt.slice(11, 16)}Z` : "";
+  return `${stage} · ${actor ?? "nobody"}${clears}`;
+}
+
 function ticket(
   task: FeedTask,
   stages: NonNullable<Feed["pipelineSteps"]>,
@@ -302,6 +343,7 @@ function ticket(
     stage: stagesOf(task, stages).filter((step) => step === "done").length,
     ...ticketLinks(task, stages),
     parked: task.parked === true,
+    lifecycle: lifecycle(task),
     plan: task.steps,
     revision: task.revision?.slice(0, 7) ?? "",
     pullRequest: pullRequest(task.merge),

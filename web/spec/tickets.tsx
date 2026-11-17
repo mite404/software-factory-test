@@ -71,6 +71,7 @@ const NONE: Ticket = {
   stop: null,
   parked: false,
   rejections: [],
+  lifecycle: "",
 };
 const COLUMNS: Column<Ticket>[] = [
   { key: "id", label: "Ticket", width: "250px", render: (row) => row.id },
@@ -120,6 +121,10 @@ function Screen({
             <div>
               <dt>Attempt</dt>
               <dd>{ticket.attempt ?? "-"}</dd>
+            </div>
+            <div data-stage>
+              <dt>Stage</dt>
+              <dd>{ticket.lifecycle || "-"}</dd>
             </div>
             <div>
               <dt>Target</dt>

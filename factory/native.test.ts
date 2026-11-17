@@ -35,6 +35,7 @@ import {
   factoryRecords,
   factoryStatus,
   openPersistence,
+  runStage,
   type ThreadID,
 } from "./persistence";
 
@@ -413,7 +414,7 @@ test.each([false, true])(
     if (run?.kind !== "running") throw new Error("Expected complete worker");
     expect(messages.at(-1)).toMatch(/^factory-key: [a-f0-9]{64}\n/);
     expect(messages.at(-1)?.replace(/^factory-key: [a-f0-9]{64}\n/, "")).toBe(
-      `Work only in your worktree ${run.worktree}. Ticket A: Implement prd.md\nAllowed paths: src/. Check: true.\nDefinition: ${run.definition}.\nDependency evidence: none.\nUse a local commit for the change. Do not push, deploy, create tickets, edit factory files, or delegate.\nForeman: T-owner. Send questions and blockers there with send_thread_message, or the factory control action message-foreman with message text. Messaging does not grant factory control.\nAfter finishing, write JSON to ${join(engine.directory, "A.report.json")}: {"attempt":1,"kind":"candidate","revision":"<full git HEAD>","insight":"<short verified finding>"}. If blocked, use {"attempt":1,"kind":"blocked","reason":"<needed decision>"}. Report briefly here too.`,
+      `Work only in your worktree ${run.worktree}. Ticket A: Implement prd.md\nAllowed paths: src/. Check: true.\nDefinition: ${run.definition}.\nDependency evidence: none.\nUse a local commit for the change. Do not push, deploy, create tickets, edit factory files, or delegate.\nForeman: T-owner. Send questions and blockers there with send_thread_message, or the factory control action message-foreman with message text. Messaging does not grant factory control.\nAfter finishing, write JSON to ${join(engine.directory, "A.report.json")}: {"attempt":1,"kind":"candidate","revision":"<full git HEAD>","insight":"<short verified finding>","summary":"<optional public line>"}. If blocked, use {"attempt":1,"kind":"blocked","reason":"<needed decision>"}. Report briefly here too.`,
     );
   },
 );
@@ -1213,6 +1214,11 @@ test.each(
         },
       });
       const after = await readFile(path);
+      expect(runStage(factoryStatus(engine.directory).runs.A)).toMatchObject({
+        stage: "merged",
+        actor: null,
+        status: "accepted",
+      });
       await record();
       expect(await readFile(path)).toEqual(after);
       expect(
@@ -1227,6 +1233,13 @@ test.each(
         "does not contain the accepted change",
       );
       expect(await readFile(path)).toEqual(before);
+      const unchanged: Record<string, string> = {
+        "record-merge": "accepted",
+        "record-landing": "blocked",
+      };
+      expect<string>(
+        runStage(factoryStatus(engine.directory).runs.A).stage,
+      ).toBe(unchanged[action]!);
     }
     expect(f.counts()).toEqual({ creates: 0, sends: 0 });
   },
@@ -2860,6 +2873,13 @@ test("four rejections park the worker, release only independent work and require
     });
     if (attempt < 4) expect(state.runs.C).toBeUndefined();
     if (attempt === 2) {
+      expect(runStage(state.runs.A)).toMatchObject({
+        stage: "escalated",
+        actor: "foreman",
+        step: "gate",
+        status: "blocked",
+      });
+      expect(notices.at(-1)).toContain("Stage: escalated, waiting on foreman.");
       const originalBase = f.git("rev-parse", "HEAD");
       f.git("commit", "--allow-empty", "-qm", "advance blocked repair base");
       expect(
@@ -2880,6 +2900,12 @@ test("four rejections park the worker, release only independent work and require
     }
   }
   const state = factoryStatus(engine.directory);
+  expect(runStage(state.runs.A)).toMatchObject({
+    stage: "parked",
+    actor: "operator",
+    since: 1000,
+  });
+  expect(notices.at(-1)).toContain("Stage: parked, waiting on operator.");
   expect(state.runs.A).toMatchObject({
     kind: "parked",
     repair: { thread: "T-prepared", worktree: f.worktree, attempt: 4 },
@@ -2919,10 +2945,31 @@ test("four rejections park the worker, release only independent work and require
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.tasks).toMatchObject([
-      { id: "A", status: "blocked", thread: "T-prepared" },
-      { id: "B", status: "queued" },
-      { id: "C", status: "unknown", thread: "T-independent" },
+      {
+        id: "A",
+        status: "blocked",
+        thread: "T-prepared",
+        stage: "parked",
+        actor: "operator",
+        stageSince: new Date(1000).toISOString(),
+        step: 4,
+        rejectedBy: "gate",
+        attempt: 4,
+      },
+      { id: "B", status: "queued", stage: "queued", step: null },
+      {
+        id: "C",
+        status: "unknown",
+        thread: "T-independent",
+        stage: "building",
+        actor: "model",
+        step: 2,
+        rejectedBy: null,
+      },
     ]);
+    expect(body.stages.map((stage: { id: string }) => stage.id)).toContain(
+      "rate-limited",
+    );
     expect(JSON.stringify(body)).not.toContain("PRIVATE-BRIEF");
     expect(JSON.stringify(body)).not.toContain(engine.directory);
   } finally {
@@ -2956,6 +3003,7 @@ test("four rejections park the worker, release only independent work and require
   expect(factoryStatus(engine.directory).runs.C).toMatchObject({
     kind: "done",
     revision: advancedBase,
+    attempt: 1,
   });
   expect(f.git("rev-parse", "HEAD")).toBe(advancedBase);
   expect(advancedBase).not.toBe(notice.base);
@@ -3041,6 +3089,7 @@ test("four rejections park the worker, release only independent work and require
     thread: "T-prepared",
     revision,
     acceptedBase: advancedBase,
+    attempt: 5,
   });
   expect(f.git("rev-parse", "HEAD")).toBe(revision);
   expect(await readFile(join(f.root, "src/value"), "utf8")).toBe("5");
@@ -3054,6 +3103,303 @@ test("four rejections park the worker, release only independent work and require
   expect(notices[0]).toContain("a diagnosis decision");
   expect(notices[1]).toContain("Attempt cap reached");
   expect(notices[1]).toContain("operator's decision");
+}, 30_000);
+
+test("a running gate reads as gating and an interrupted gate reruns exactly once, even after a pause", async () => {
+  const f = await preparationFixture(() => "");
+  const marks = join(f.root, ".git");
+  const configPath = join(f.root, ".factory.json");
+  const config = JSON.parse(await readFile(configPath, "utf8"));
+  config.verify = `echo run >> '${marks}/gate-runs'; touch '${marks}/gate-running'; for i in $(seq 500); do test -f '${marks}/release' && break; sleep 0.01; done; test "$(cat '${marks}/release')" = pass`;
+  await writeFile(configPath, JSON.stringify(config));
+  f.git("commit", "-qam", "slow gate");
+  const engine = f.factory(() => 5000);
+  await engine.tick("start", "T-owner");
+  f.host.state = async () => "idle";
+  await mkdir(join(f.worktree, "src"));
+  await writeFile(join(f.worktree, "src/value"), "A");
+  execFileSync("git", ["-C", f.worktree, "add", "src"]);
+  execFileSync("git", ["-C", f.worktree, "commit", "-qm", "candidate"]);
+  const revision = execFileSync(
+    "git",
+    ["-C", f.worktree, "rev-parse", "HEAD"],
+    {
+      encoding: "utf8",
+    },
+  ).trim();
+  await writeFile(
+    join(engine.directory, "A.report.json"),
+    JSON.stringify({ kind: "candidate", attempt: 1, revision }),
+  );
+  const gating = engine.tick("reconcile");
+  await waitForFile(join(marks, "gate-running"));
+  const interrupted = factoryStatus(engine.directory);
+  expect(runStage(interrupted.runs.A)).toMatchObject({
+    stage: "gating",
+    actor: "computer",
+    step: "gate",
+    since: 5000,
+  });
+  // The status action answers from the committed snapshot while the reconcile is still gating.
+  const status = await engine.tick("status");
+  expect(runStage(status.runs.A).stage).toBe("gating");
+  const server = startDashboard({ root: f.root, port: 0 });
+  try {
+    const body = await (
+      await fetch(`http://localhost:${server.port}/api/status`)
+    ).json();
+    expect(body.tasks[0]).toMatchObject({
+      id: "A",
+      stage: "gating",
+      status: "unknown",
+      step: 4,
+    });
+  } finally {
+    await server.stop(true);
+  }
+  // Fail this gate, then restore the state saved mid-gate as a crash would have left it.
+  await writeFile(join(marks, "release"), "fail");
+  await gating;
+  expect(factoryStatus(engine.directory).runs.A).toMatchObject({
+    kind: "running",
+    attempt: 2,
+    rejectedBy: "gate",
+  });
+  expect(factoryStatus(engine.directory).runs.A).not.toHaveProperty("gate");
+  const crash = () => {
+    const storage = openPersistence(engine.directory, [
+      { id: "A", brief: "Work", after: [] },
+    ]);
+    try {
+      storage.commit(interrupted, "A", "fixture-crash", "");
+    } finally {
+      storage.close();
+    }
+  };
+  const runs = async () =>
+    (await readFile(join(marks, "gate-runs"), "utf8")).trim().split("\n")
+      .length;
+  const before = await runs();
+  await writeFile(join(marks, "release"), "pass");
+  // A crash that left the candidate dirty cannot rerun its gate; the marker must not outlive it.
+  crash();
+  await writeFile(join(f.worktree, "src/value"), "dirty");
+  await f.factory(() => 5500).tick("reconcile");
+  expect(await runs()).toBe(before);
+  const repairing = factoryStatus(engine.directory).runs.A;
+  expect(repairing).toMatchObject({
+    kind: "running",
+    attempt: 2,
+    rejectedBy: "gate",
+  });
+  expect(repairing).not.toHaveProperty("gate");
+  expect(runStage(repairing)).toMatchObject({ stage: "building", since: 5500 });
+  execFileSync("git", ["-C", f.worktree, "checkout", "--", "src/value"]);
+  await writeFile(
+    join(engine.directory, "A.report.json"),
+    JSON.stringify({
+      kind: "candidate",
+      attempt: 1,
+      revision,
+      insight: "PRIVATE-INSIGHT from /tmp/private-report",
+      summary: "Every run now names its\nlifecycle stage",
+    }),
+  );
+  crash();
+  // Pausing after the crash retires the marker without running a gate; paused reconciles are inert.
+  const restarted = f.factory(() => 6000);
+  await restarted.tick("pause", "T-owner");
+  const paused = factoryStatus(engine.directory);
+  expect(paused.enabled).toBe(false);
+  expect(paused.runs.A).not.toHaveProperty("gate");
+  expect(runStage(paused.runs.A).stage).toBe("building");
+  const pausedEvents = factoryEvents(engine.directory, 0, 500);
+  await restarted.tick("reconcile");
+  await restarted.tick("reconcile");
+  expect(factoryEvents(engine.directory, 0, 500)).toEqual(pausedEvents);
+  expect(await runs()).toBe(before);
+  await restarted.tick("start", "T-owner");
+  expect(await runs()).toBe(before + 1);
+  const settled = factoryStatus(engine.directory).runs.A;
+  expect(runStage(settled)).toMatchObject({ stage: "accepted", since: 6000 });
+  expect(settled).toMatchObject({
+    kind: "done",
+    revision,
+    attempt: 1,
+    acceptedAt: 6000,
+    summary: "Every run now names its lifecycle stage",
+  });
+  const accepted = startDashboard({ root: f.root, port: 0 });
+  try {
+    const feed = await (
+      await fetch(`http://localhost:${accepted.port}/api/status`)
+    ).json();
+    expect(feed.tasks[0]).toMatchObject({
+      stage: "accepted",
+      attempt: 1,
+      summary: "Every run now names its lifecycle stage",
+      acceptedAt: new Date(6000).toISOString(),
+    });
+    expect(JSON.stringify(feed)).not.toContain("PRIVATE-INSIGHT");
+    expect(JSON.stringify(feed)).not.toContain("private-report");
+  } finally {
+    await accepted.stop(true);
+  }
+  const events = factoryEvents(engine.directory, 0, 500);
+  expect(
+    (events ?? [])
+      .filter((event) => event.action.startsWith("gate-"))
+      .map((event) => event.action),
+  ).toEqual([
+    "gate-started",
+    "gate-started",
+    "gate-returned",
+    "gate-interrupted",
+    "gate-interrupted",
+    "gate-started",
+    "gate-returned",
+  ]);
+  await restarted.tick("reconcile");
+  expect(await runs()).toBe(before + 1);
+  expect(factoryEvents(engine.directory, 0, 500)).toEqual(events);
+});
+
+test("a gate that outlives its killed coordinator stays gating and never overlaps another", async () => {
+  const f = await preparationFixture(() => "");
+  const marks = join(f.root, ".git");
+  const configPath = join(f.root, ".factory.json");
+  const config = JSON.parse(await readFile(configPath, "utf8"));
+  // mkdir is atomic, so a second gate inside the first one records an overlap.
+  config.verify = `mkdir '${marks}/gate-lock' || echo overlap >> '${marks}/overlaps'; echo run >> '${marks}/gate-runs'; touch '${marks}/gate-running'; for i in $(seq 1500); do test -f '${marks}/release' && break; sleep 0.01; done; rmdir '${marks}/gate-lock'; test -f '${marks}/release'`;
+  await writeFile(configPath, JSON.stringify(config));
+  f.git("commit", "-qam", "detached gate");
+  await f.factory(() => 5000).tick("start", "T-owner");
+  f.host.state = async () => "idle";
+  await mkdir(join(f.worktree, "src"));
+  await writeFile(join(f.worktree, "src/value"), "A");
+  execFileSync("git", ["-C", f.worktree, "add", "src"]);
+  execFileSync("git", ["-C", f.worktree, "commit", "-qm", "candidate"]);
+  const revision = execFileSync(
+    "git",
+    ["-C", f.worktree, "rev-parse", "HEAD"],
+    { encoding: "utf8" },
+  ).trim();
+  const directory = join(marks, "factory");
+  await writeFile(
+    join(directory, "A.report.json"),
+    JSON.stringify({ kind: "candidate", attempt: 1, revision }),
+  );
+  const runner = join(marks, "coordinator.ts");
+  await writeFile(
+    runner,
+    `import {createFactory} from ${JSON.stringify(join(import.meta.dir, "native.ts"))};
+import {openStore} from ${JSON.stringify(join(import.meta.dir, "bookkeeping.fixture.ts"))};
+await createFactory(${JSON.stringify(f.root)}, {
+  async create() { throw new Error("Must not create"); },
+  async send() {}, async state() { return "idle"; }, watch() {}
+}, openStore).tick("reconcile", "T-owner");`,
+  );
+  const child = spawn("bun", [runner], { stdio: "ignore" });
+  await waitForFile(join(marks, "gate-running"));
+  const exited = new Promise<void>((resolve) =>
+    child.once("exit", () => resolve()),
+  );
+  child.kill("SIGKILL");
+  await exited;
+  const held = factoryStatus(directory).runs.A;
+  if (held?.kind !== "running" || !held.gate)
+    throw new Error("Expected a saved gate marker");
+  const { pid } = held.gate;
+  const alive = () =>
+    spawnSync("bash", ["-c", `kill -0 -- -${pid}`]).status === 0;
+  expect(alive()).toBe(true);
+  const runs = async () =>
+    (await readFile(join(marks, "gate-runs"), "utf8")).trim().split("\n")
+      .length;
+  // While the detached gate lives, restarted coordinators report gating and change nothing.
+  const restarted = f.factory(() => 6000);
+  const events = factoryEvents(directory, 0, 500);
+  await restarted.tick("reconcile");
+  await restarted.tick("reconcile");
+  expect(factoryEvents(directory, 0, 500)).toEqual(events);
+  expect(factoryStatus(directory).runs.A).toEqual(held);
+  expect(runStage(held).stage).toBe("gating");
+  await restarted.tick("pause", "T-owner");
+  expect(runStage(factoryStatus(directory).runs.A).stage).toBe("gating");
+  expect(await runs()).toBe(1);
+  // Nothing releases the hung gate: past its deadline a paused reconcile kills the orphaned group,
+  // then retires the marker without gating; start gates once.
+  const late = f.factory(() => held.gate!.at + 600_001);
+  await late.tick("reconcile");
+  const stopped = spawnSync("bash", [
+    "-c",
+    `for i in {1..500}; do kill -0 -- -${pid} 2>/dev/null || exit 0; sleep 0.01; done; exit 1`,
+  ]);
+  expect(stopped.status).toBe(0);
+  // The killed gate never reached its own cleanup.
+  await rm(join(marks, "gate-lock"), { recursive: true });
+  await writeFile(join(marks, "release"), "pass");
+  await late.tick("reconcile");
+  expect(runStage(factoryStatus(directory).runs.A).stage).toBe("building");
+  expect(await runs()).toBe(1);
+  await restarted.tick("start", "T-owner");
+  expect(await runs()).toBe(2);
+  expect(factoryStatus(directory).runs.A).toMatchObject({
+    kind: "done",
+    revision,
+    attempt: 1,
+  });
+  expect(await Bun.file(join(marks, "overlaps")).exists()).toBe(false);
+  expect(
+    (factoryEvents(directory, 0, 500) ?? [])
+      .filter((event) => event.action === "gate-killed")
+      .map((event) => event.detail),
+  ).toEqual(["1"]);
+});
+
+test("recovery never kills a group the saved gate start does not identify", async () => {
+  const f = await preparationFixture(() => "");
+  const engine = f.factory(() => 5000);
+  await engine.tick("start", "T-owner");
+  // An unrelated live process group stands in for a PID reused after the gate ended.
+  const other = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+  const pid = other.pid!;
+  const boot = (
+    await readFile("/proc/sys/kernel/random/boot_id", "utf8")
+  ).trim();
+  const save = (start: string) => {
+    const run = factoryStatus(engine.directory).runs.A;
+    if (run?.kind !== "running") throw new Error("Expected a running run");
+    const storage = openPersistence(engine.directory, []);
+    storage.commit(
+      {
+        ...storage.state,
+        runs: { A: { ...run, gate: { at: 1000, pid, start } } },
+      },
+      "A",
+      "fixture",
+      "reused pid",
+    );
+    storage.close();
+  };
+  try {
+    const late = f.factory(() => 1000 + 600_001);
+    save(`${boot}:1`);
+    const events = factoryEvents(engine.directory, 0, 500);
+    await late.tick("reconcile");
+    expect(spawnSync("bash", ["-c", `kill -0 -- -${pid}`]).status).toBe(0);
+    expect(runStage(factoryStatus(engine.directory).runs.A).stage).toBe(
+      "gating",
+    );
+    expect(factoryEvents(engine.directory, 0, 500)).toEqual(events);
+    // A gate saved in another boot cannot be running: retired, and still nothing is killed.
+    save("00000000-0000-0000-0000-000000000000:1");
+    await late.tick("reconcile");
+    expect(spawnSync("bash", ["-c", `kill -0 -- -${pid}`]).status).toBe(0);
+    expect(factoryStatus(engine.directory).runs.A).not.toHaveProperty("gate");
+  } finally {
+    other.kill("SIGKILL");
+  }
 });
 
 test("owner-authorized repairs retain spending alerts at six and ten on the same worker", async () => {

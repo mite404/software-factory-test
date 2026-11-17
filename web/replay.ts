@@ -137,31 +137,63 @@ const TICKETS = [
   },
 ];
 
-// One poll each: the newest ticket in the feed, its status, and its pending review attempt.
+// One poll each: the newest ticket in the feed, its status and stage, and its pending review.
+// Stages were not in the 2026-11 recording; frames 15 to 18 are illustrative stage examples.
 type Frame = {
   ticket: number;
   status: FeedTask["status"];
+  stage: NonNullable<FeedTask["stage"]>;
+  actor: NonNullable<FeedTask["actor"]>;
   pending?: number;
   stopped?: boolean;
   parked?: boolean;
+  escalated?: boolean;
 };
 
+const BUILDING = { stage: "building", actor: "model" } as const;
+const REVIEWING = { stage: "reviewing", actor: "model" } as const;
+
 export const FRAMES: Frame[] = [
-  { ticket: 2, status: "working" },
-  { ticket: 2, status: "blocked", pending: 5 }, // 23:26:14 review dispatch reads "blocked"
-  { ticket: 2, status: "working", pending: 5 },
-  { ticket: 2, status: "working" }, // 23:33:28 review record gone: rejected, same worker repairs
-  { ticket: 2, status: "blocked", pending: 6 }, // 23:45:44
-  { ticket: 2, status: "working", pending: 6 },
-  { ticket: 2, status: "accepted" }, // 23:53:45 landed on attempt 6
-  { ticket: 3, status: "unknown" }, // 00:01:27 next ticket appears
-  { ticket: 3, status: "working" },
-  { ticket: 3, status: "blocked" }, // 00:02:35 blocked before any review, for 1 h 45 min
-  { ticket: 3, status: "idle" }, // 01:47:42 resumed by the foreman
-  { ticket: 3, status: "unknown" },
-  { ticket: 3, status: "working" },
-  { ticket: 3, status: "blocked", pending: 2, stopped: true },
-  { ticket: 3, status: "blocked", stopped: true, parked: true },
+  { ticket: 2, status: "working", ...BUILDING },
+  { ticket: 2, status: "blocked", pending: 5, ...REVIEWING }, // 23:26:14 review dispatch reads "blocked"
+  { ticket: 2, status: "working", pending: 5, ...REVIEWING },
+  { ticket: 2, status: "working", ...BUILDING }, // 23:33:28 review record gone: rejected, same worker repairs
+  { ticket: 2, status: "blocked", pending: 6, ...REVIEWING }, // 23:45:44
+  { ticket: 2, status: "working", pending: 6, ...REVIEWING },
+  { ticket: 2, status: "accepted", stage: "accepted", actor: "foreman" }, // 23:53:45 landed on attempt 6
+  { ticket: 3, status: "unknown", stage: "creating", actor: "computer" }, // 00:01:27 next ticket appears
+  { ticket: 3, status: "working", ...BUILDING },
+  { ticket: 3, status: "blocked", stage: "blocked", actor: "foreman" }, // 00:02:35 blocked before any review, for 1 h 45 min
+  { ticket: 3, status: "idle", ...BUILDING }, // 01:47:42 resumed by the foreman
+  { ticket: 3, status: "unknown", ...BUILDING },
+  { ticket: 3, status: "working", ...BUILDING },
+  {
+    ticket: 3,
+    status: "blocked",
+    pending: 2,
+    stopped: true,
+    stage: "reviewing",
+    actor: "foreman",
+  },
+  {
+    ticket: 3,
+    status: "blocked",
+    stopped: true,
+    parked: true,
+    stage: "parked",
+    actor: "operator",
+  },
+  { ticket: 3, status: "unknown", stage: "gating", actor: "computer" },
+  { ticket: 3, status: "unknown", pending: 5, ...REVIEWING },
+  {
+    ticket: 3,
+    status: "blocked",
+    stopped: true,
+    escalated: true,
+    stage: "escalated",
+    actor: "foreman",
+  },
+  { ticket: 3, status: "unknown", stage: "rate-limited", actor: "computer" },
 ];
 
 const STOPPED_REVIEW = {
@@ -189,6 +221,51 @@ const PARKED_REVIEW = {
     { attempt: 4, thread: "T-replay-review-4" },
   ],
 } satisfies Partial<FeedTask>;
+
+const ESCALATED_REVIEW = {
+  ...PARKED_REVIEW,
+  attempt: 6,
+  stop: { ...PARKED_REVIEW.stop, thread: "T-replay-review-6" },
+} satisfies Partial<FeedTask>;
+
+function stopFrame(frame: Frame): Partial<FeedTask> {
+  if (frame.parked) return PARKED_REVIEW;
+  return frame.escalated ? ESCALATED_REVIEW : STOPPED_REVIEW;
+}
+
+// The pipeline step index each replayed stage sits at; stopped reviews sit at cold review.
+const STEP: Partial<Record<Frame["stage"], number>> = {
+  creating: 2,
+  building: 2,
+  blocked: 2,
+  "rate-limited": 2,
+  gating: 4,
+  reviewing: 5,
+  escalated: 5,
+  parked: 5,
+};
+
+// Landed tickets read merged once a merge is recorded; the active ticket reads its frame.
+function stageFrame(
+  frame: Frame,
+  landed: boolean,
+  merged: boolean,
+): Partial<FeedTask> {
+  if (!landed)
+    return {
+      stage: frame.stage,
+      actor: frame.actor,
+      step: STEP[frame.stage] ?? null,
+      rejectedBy:
+        frame.stopped && frame.stage !== "reviewing" ? "review" : null,
+      clearsAt:
+        frame.stage === "rate-limited" ? "2026-11-14T03:00:00.000Z" : null,
+    };
+  const summary = "Landed after its recorded checks";
+  return merged
+    ? { stage: "merged", actor: null, step: 6, summary }
+    : { stage: "accepted", actor: "foreman", step: 6, summary };
+}
 
 function reviewFrame(
   attempt: number | null | undefined,
@@ -230,7 +307,8 @@ export function feedAt(n: number): Feed {
         ...reviewFrame(attempt, landed, ticket.revision),
         stop: null,
         rejections: [],
-        ...(stopped ? (frame.parked ? PARKED_REVIEW : STOPPED_REVIEW) : {}),
+        ...(stopped ? stopFrame(frame) : {}),
+        ...stageFrame(frame, landed, !!ticket.merge),
         parked: !landed && frame.parked === true,
         merge: landed ? ticket.merge : null,
       };

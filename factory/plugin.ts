@@ -12,6 +12,8 @@ import type { DashboardSnapshot } from "./dashboard";
 import {
   factoryStatus,
   lifecycleStatus,
+  runStage,
+  stages,
   type Run,
   type State,
 } from "./persistence";
@@ -170,19 +172,6 @@ function reportedActivity(
   return threadID === id ? status : "unknown";
 }
 
-const runStatuses = {
-  preparing: "unknown",
-  "preparation-failed": "blocked",
-  creating: "unknown",
-  running: "unknown",
-  blocked: "blocked",
-  parked: "blocked",
-  uncertain: "blocked",
-  done: "accepted",
-} satisfies Record<
-  import("./persistence").Run["kind"],
-  DashboardSnapshot["tasks"][number]["status"]
->;
 const activityStatuses = {
   running: "working",
   idle: "idle",
@@ -400,7 +389,7 @@ export default function registerFactory(
                 revision: null,
               };
               if (!run) return row;
-              row.status = runStatuses[run.kind];
+              row.status = runStage(run).status;
               if (run.kind === "done") row.revision = run.revision;
               if ("thread" in run && run.thread) {
                 row.thread = run.thread;
@@ -558,7 +547,18 @@ export default function registerFactory(
           await publish(liveTools);
         return JSON.stringify(
           action === "status"
-            ? { ...state, lifecycle: lifecycleStatus(), pipelineSteps }
+            ? {
+                ...state,
+                lifecycle: lifecycleStatus(),
+                pipelineSteps,
+                stages,
+                stage: Object.fromEntries(
+                  Object.entries(state.runs).map(([id, run]) => [
+                    id,
+                    runStage(run),
+                  ]),
+                ),
+              }
             : state,
         );
       };

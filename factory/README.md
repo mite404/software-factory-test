@@ -253,6 +253,17 @@ The read-only dashboard retains `thread` and adds separate `workerThread`, `revi
 matching issues verdict in event order. Only attempt numbers and validated thread IDs are public;
 briefs, report paths and findings stay private. Stage badges show actors and link to their own
 threads; earlier rejections link to their reviewers.
+The feed declares `stages` once per response, in order with each default actor. Each task adds
+`stage`, `actor`, `stageSince`, `step` (the index into `pipelineSteps`, or null), `rejectedBy`,
+`clearsAt` for a known provider reset, `acceptedAt` and `summary`, all from `runStage` and saved
+run fields. Accepted and landed runs keep the worker's `attempt`; older done runs show none.
+The status action returns the same `stages` list and a `stage` map by ticket. The page draws its
+stage badges and stages-done count from `step` and `stage` when present, and falls back to the
+public status only for feeds without them. Stop notices name
+the stage and its actor. The worker report's `insight` stays private. A report may add an
+explicitly public `summary`; acceptance curates it like a title with `publicSummary` (one line, at
+most 120 characters, refused if it holds a path, URL or thread ID) and saves only the result on the
+done run. The feed publishes that field or `null`; landings and older runs omit it.
 
 The walking test pins five exitless stops by name: `blocked.withoutWorker`,
 `running.reviewerCreation`, `running.reviewerDeliveryLegacy`, `running.workerDeliveryLegacy` and
@@ -321,6 +332,53 @@ Whether the Foreman's `agent.start` handler runs when its own model call fails o
 remains unproven. If no connected owner observes a limit, only the ordinary watchdog remains.
 Fixtures prove these decisions, not a live limit, sleeping-orb wake, or successful model recovery.
 Those live proofs remain with the Foreman. The default policy performs no model or provider switch.
+
+### Lifecycle stages
+
+`runStage` in `persistence.ts` names every ticket's stage and who must act. Status, the dashboard
+feed and stop notices all read it; nothing else maps run kinds to stages. Run kinds are unchanged.
+
+| Stage | Meaning | Default actor |
+| --- | --- | --- |
+| `queued` | Waiting for dispatch | computer |
+| `planned` | Waiting for Foreman admission | foreman |
+| `preparing` | Setup runs in the worktree | computer |
+| `creating` | The worker thread is being created | computer |
+| `building` | The worker is writing or repairing | model |
+| `gating` | The pinned gate is running | computer |
+| `reviewing` | Cold review is in progress | model |
+| `escalated` | Two rejections; Foreman diagnosis | foreman |
+| `parked` | Attempt cap reached; operator decision | operator |
+| `rate-limited` | Waiting for a provider limit to clear | computer |
+| `blocked` | Any other stop | foreman |
+| `uncertain` | An unknown delivery outcome | foreman |
+| `accepted` | Accepted locally; merge not recorded | foreman |
+| `merged` | `record-merge` or `record-landing` stored a merge | nobody |
+
+A stop on any stage names its actor from the matching stop in the transition table, so an
+interrupted setup stays `preparing` but waits on the Foreman. The five public statuses are derived
+from the stage and keep their earlier meaning until F017 removes them.
+
+Each fact is recorded where it happens. When the gate command spawns, `checkCandidate` saves
+`gate: { at, pid }` with its detached process group and event `gate-started`; the command waits
+until that save succeeds. The marker is removed with `gate-returned` and the outcome as soon as
+the gate returns. Reconciles hold the store lock, so a marker found when a reconcile starts
+belongs to an earlier coordinator. While its process group is alive (or cannot be probed) the run
+stays `gating` and no reconcile settles it or starts another gate. The gate's ten-minute timer dies
+with its coordinator, for example in an Amp CLI restart. The marker also saves `start`, the boot ID
+and the leader's start tick, so a reconcile past `at` plus that deadline kills the group with
+SIGKILL, records `killed` and event `gate-killed`, but only while that same leader is alive. A
+reused PID is never killed; a marker from another boot is retired without killing, and one whose
+leader is gone or that has no `start` stays `gating`. Once the group has stopped, the
+next reconcile removes the marker with `gate-interrupted` before the paused or permission check,
+so a paused factory stops reporting `gating` without running anything. If the idle worker's
+report is still a clean candidate, the normal path
+gates it again once; otherwise the run is rejected or stopped as usual and never reads `gating`.
+A gate has no effect outside its worktree. The `status` action reads the committed snapshot
+without queueing behind a running reconcile, so it reports `gating` while a gate runs.
+Each commit stamps `stageAt` on every run whose stage changed. `reject` records `rejectedBy` as
+`gate`, `review` or `merge` (a rebase conflict), and acceptance records `acceptedAt`. Runs saved
+before these fields open unchanged and read `stageAt` as unknown.
 
 ### Provider limit policy
 
