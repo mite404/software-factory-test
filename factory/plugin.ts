@@ -15,6 +15,7 @@ import {
   type Run,
   type State,
 } from "./persistence";
+import { pipelineSteps } from "./pipeline";
 import {
   assertControlCaller,
   effectiveConfiguration,
@@ -554,7 +555,7 @@ export default function registerFactory(
           await publish(liveTools);
         return JSON.stringify(
           action === "status"
-            ? { ...state, lifecycle: lifecycleStatus() }
+            ? { ...state, lifecycle: lifecycleStatus(), pipelineSteps }
             : state,
         );
       };

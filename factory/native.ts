@@ -40,6 +40,7 @@ import {
   runLifecycle,
   lifecycleStop,
   lifecycleActivity,
+  runCheckpoint,
   admitsRun,
   runBlocks,
   type ThreadID,
@@ -1298,8 +1299,20 @@ function requireIncident(
     throw new Error("Resume requires the exact current stop incident");
 }
 
+function stopCause(run: Run | undefined): StopIncident["cause"] {
+  const source = runCheckpoint(run);
+  if (!source) return undefined;
+  if ("review" in source && source.review)
+    return source.review.thread
+      ? { thread: source.review.thread, role: "reviewer" }
+      : undefined;
+  return "thread" in source && source.thread
+    ? { thread: source.thread, role: "worker" }
+    : undefined;
+}
+
 function stopNotice(ticket: string, run: Run, notice: StopIncident) {
-  return `Factory stop ${notice.id}. Ticket ${ticket}, attempt ${notice.attempt}, base ${notice.base}. Reason: ${notice.reason}. Recovery: ${notice.recovery}. Read current factory status and private evidence before deciding. ${notice.recovery === "wait" ? "Connected owner reconciliation reserves one continuation to the same thread after the provider reset. Do not send a separate continuation or retry an uncertain send. Paused factories stay paused." : notice.recovery === "resume" ? `Only the owning Foreman may resume with ticket ${ticket}, incident ${notice.id}, and ${run.kind === "parked" ? "the operator's decision. Attempt cap reached; do not automatically resume" : "a diagnosis decision"}. A paused factory stays paused.` : "Inspect and resolve this stop; this notice does not authorize resume or grant permission."}`;
+  return `Factory stop ${notice.id}. Ticket ${ticket}, attempt ${notice.attempt}, base ${notice.base}. Reason: ${notice.reason}.${notice.cause ? ` Causing ${notice.cause.role} thread: ${notice.cause.thread}.` : ""} Recovery: ${notice.recovery}. Read current factory status and private evidence before deciding. ${notice.recovery === "wait" ? "Connected owner reconciliation reserves one continuation to the same thread after the provider reset. Do not send a separate continuation or retry an uncertain send. Paused factories stay paused." : notice.recovery === "resume" ? `Only the owning Foreman may resume with ticket ${ticket}, incident ${notice.id}, and ${run.kind === "parked" ? "the operator's decision. Attempt cap reached; do not automatically resume" : "a diagnosis decision"}. A paused factory stays paused.` : "Inspect and resolve this stop; this notice does not authorize resume or grant permission."}`;
 }
 
 /** Create the sequential dispatcher. Unknown remote effects are parked, never retried blindly. */
@@ -1375,8 +1388,19 @@ export function createFactory(
         run: Run,
         reason: StopIncident["reason"],
         recovery: StopIncident["recovery"],
+        cause = stopCause(run),
       ) {
         if (!state.owner || run.incident?.reason === reason) return false;
+        cause = [
+          "worker-blocked",
+          "worker-error",
+          "approval-required",
+          "provider-limit",
+          "verification-rejected",
+          "delivery-unknown",
+        ].includes(reason)
+          ? cause
+          : undefined;
         const source = checkpointIdentity(run) ??
           checkpointIdentity(savedRuns[ticket]) ?? {
             base: persistence!.lastEvent(ticket, "creating") ?? "unknown",
@@ -1389,6 +1413,7 @@ export function createFactory(
           ...source,
           reason,
           recovery,
+          ...(cause ? { cause } : {}),
           delivery: "queued",
         };
         return true;
@@ -1398,11 +1423,12 @@ export function createFactory(
         action: string,
         detail: string,
         reason?: StopIncident["reason"],
+        cause?: StopIncident["cause"],
       ) {
         const run = state.runs[ticket];
         if (run && !run.incident) {
           const stop = lifecycleStop(run, "stopped", reason);
-          if (stop) incident(ticket, run, ...stop);
+          if (stop) incident(ticket, run, ...stop, cause);
         }
         if (run) {
           run.watchdog = watchdogProgress(
@@ -2026,6 +2052,7 @@ export function createFactory(
         evidence: string,
         feedback = evidence,
       ) {
+        const cause = stopCause(run);
         delete run.review;
         const capped = run.attempt >= repairAttemptCap;
         if (!capped && run.attempt % 2 === 1) {
@@ -2046,6 +2073,7 @@ export function createFactory(
             capped ? "parked" : "escalated",
             evidence,
             "verification-rejected",
+            cause,
           );
         }
         if (state.runs[task.id]?.kind === "running") {

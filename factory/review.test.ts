@@ -17,6 +17,7 @@ import {
   type ProviderLimitPolicy,
 } from "./persistence";
 import { reviewPrompt, type Review } from "./review";
+import { startDashboard } from "./dashboard";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
@@ -856,16 +857,95 @@ test("invalid and unavailable evidence cannot approve or replace a reviewer acro
       reason: "approval-required",
       recovery: "inspect",
       attempt: 1,
+      cause: { role: "reviewer", thread: "T-2" },
     });
     expect(f.notices).toEqual([
-      expect.stringContaining("Reason: worker-error. Recovery: inspect"),
-      expect.stringContaining("Reason: approval-required. Recovery: inspect"),
+      expect.stringContaining("Causing reviewer thread: T-2"),
+      expect.stringContaining("Causing reviewer thread: T-2"),
     ]);
     expect(f.settings).toHaveLength(2);
     expect(f.messages).toHaveLength(2);
     f.observe("idle");
     expect((await f.tick()).runs.A?.kind).toBe("done");
   } finally {
+    await f.close();
+  }
+});
+
+test("dashboard keeps worker, failed reviewer and rejection history separate without private evidence", async () => {
+  const f = await fixture();
+  const server = startDashboard({ root: f.root, port: 0 });
+  const url = `http://localhost:${server.port}/api/status`;
+  const read = async () => await (await fetch(url)).json();
+  try {
+    await f.submit(1);
+    await f.tick();
+    f.observe("error");
+    const stopped = (await f.tick()).runs.A!;
+    const feed = await read();
+    expect(
+      feed.pipelineSteps.map((step: { actor: string }) => step.actor),
+    ).toEqual([
+      "computer",
+      "computer",
+      "model",
+      "model",
+      "computer",
+      "model",
+      "computer",
+    ]);
+    expect(feed.tasks[0]).toMatchObject({
+      thread: "T-2",
+      workerThread: "T-1",
+      reviewerThread: "T-2",
+      stop: { reason: "worker-error", role: "reviewer", thread: "T-2" },
+    });
+    expect(f.notices.at(-1)).toContain("Causing reviewer thread: T-2");
+    const directory = join(f.root, ".git/factory");
+    const before = factoryEvents(directory);
+    await f.tick();
+    expect(factoryEvents(directory)).toEqual(before);
+    expect((await f.status()).runs.A!.incident).toEqual(stopped.incident);
+    f.observe("idle");
+    await f.verdict("issues");
+    await f.tick();
+    await f.submit(2);
+    await f.tick();
+    await f.verdict("issues");
+    const blocked = (await f.tick()).runs.A!;
+    expect(blocked.incident?.cause).toEqual({
+      role: "reviewer",
+      thread: "T-3",
+    });
+    expect((await read()).tasks[0].rejections).toEqual([
+      { attempt: 1, thread: "T-2" },
+      { attempt: 2, thread: "T-3" },
+    ]);
+    for (const secret of [
+      "CANARY-WORKER-RATIONALE",
+      finding.evidence,
+      f.root,
+      "/secret/report.json",
+    ])
+      expect(JSON.stringify(await read())).not.toContain(secret);
+    const path = join(directory, "state.sqlite");
+    const db = new Database(path);
+    delete blocked.incident!.cause;
+    db.query("UPDATE runs SET data=? WHERE ticket='A'").run(
+      JSON.stringify(blocked),
+    );
+    db.close();
+    const bytes = await readFile(path);
+    f.reload();
+    expect((await f.status()).runs.A).toEqual(blocked);
+    expect((await read()).tasks[0].stop).toEqual({
+      reason: "verification-rejected",
+      role: null,
+      thread: null,
+    });
+    expect(await readFile(path)).toEqual(bytes);
+  } finally {
+    await server.stop(true);
     await f.close();
   }
 });
@@ -880,6 +960,7 @@ test("reviewer recovery renews notices without repeating unchanged stop transiti
     expect(stopped.incident).toMatchObject({
       reason: "worker-error",
       delivery: "sent",
+      cause: { role: "reviewer", thread: "T-2" },
     });
     f.observe("unknown");
     expect((await f.tick()).runs.A!.incident).toEqual(stopped.incident);
@@ -925,7 +1006,8 @@ test.each(["base", "code", "stage"])(
       await writeFile(join(path, "src/value"), "changed");
       git(path, "add", ".");
       git(path, "commit", "-qm", "identity changed");
-      expect((await f.tick()).runs.A).toMatchObject({
+      const blocked = (await f.tick()).runs.A!;
+      expect(blocked).toMatchObject({
         kind: "blocked",
         incident: {
           reason: "review-identity-changed",
@@ -933,6 +1015,9 @@ test.each(["base", "code", "stage"])(
           attempt: 1,
         },
       });
+      expect(blocked.incident?.cause).toBeUndefined();
+      expect(f.notices.at(-1)).toContain("Reason: review-identity-changed.");
+      expect(f.notices.at(-1)).not.toContain("Causing");
       expect(f.settings).toHaveLength(2);
     } finally {
       await f.close();

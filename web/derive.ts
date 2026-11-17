@@ -1,4 +1,6 @@
 import type { DashboardEvent, DashboardSnapshot } from "../factory/dashboard";
+import { pipelineSteps } from "../factory/pipeline";
+import type { StopIncident } from "../factory/persistence";
 
 export type EventRow = DashboardEvent & {
   time: string;
@@ -38,10 +40,19 @@ export function eventRows(events: DashboardEvent[], ticket = ""): EventRow[] {
 // evidence is added per task by GET /api/status but is not part of the exported snapshot type.
 // evidence.review is the cold review record bound to the task's current revision; null means none
 // is recorded, which on an accepted task is not proof that review was skipped.
-export type Task = DashboardSnapshot["tasks"][number] & {
+export type FeedTask = DashboardSnapshot["tasks"][number] & {
   attempt?: number | null; // the worker's current attempt, null before a worker exists
   evidence?: { review: { pending?: boolean; attempt?: number } | null };
   merge?: { pr: number; url: string | null } | null;
+  workerThread?: string | null;
+  reviewerThread?: string | null;
+  stop?: {
+    reason: StopIncident["reason"];
+    role: "worker" | "reviewer" | null;
+    thread: string | null;
+  } | null;
+  parked?: boolean;
+  rejections?: { attempt: number; thread: string }[];
 };
 
 // One step chip of a COMING row, placed in SVG units.
@@ -54,12 +65,13 @@ export type Feed = {
   observedAt: string | null;
   enabled: boolean;
   fresh: boolean;
-  tasks: Task[];
+  pipelineSteps?: readonly (typeof pipelineSteps)[number][];
+  tasks: FeedTask[];
 };
 
 // One ticket as the page shows it. Missing tickets pad fixed-size rows as "empty".
 type Cell = {
-  status: Task["status"] | "empty";
+  status: FeedTask["status"] | "empty";
   id: string;
   label: string;
   href: string | null;
@@ -75,6 +87,10 @@ export type Ticket = Cell & {
   pullRequest: { number: number; href: string | null } | null;
   review: "pending" | "recorded" | "none"; // the cold review record on its current revision
   attempt: number | null;
+  stageLinks: (string | null)[];
+  stop: { role: "worker" | "reviewer" | null; href: string | null } | null;
+  parked: boolean;
+  rejections: { attempt: number; href: string | null }[];
 };
 
 // One recorded event, worded for a notification.
@@ -94,6 +110,7 @@ export type View = {
   tally: string;
   counts: { landed: number; queued: number; blocked: number }; // the tally, as numbers
   tickets: Ticket[]; // every ticket in feed order, for search, paging and the landed card
+  pipelineSteps: NonNullable<Feed["pipelineSteps"]>;
   news: News[]; // newly received durable events
   head: string;
   next: string;
@@ -133,7 +150,6 @@ const CHIP_X = 311; // where a row's chips start, under the ACTIVE stage pills
 const CHIP_END = 1233;
 const CHIP_GAP = 20; // room for the arrow between two chips
 const QUIET = ["accepted", "queued", "empty"];
-const STEPS = 7; // worktree, setup, builder thread, report.json, gate, cold review, ff-merge
 // ponytail: the feed has one status per ticket, so stages are inferred from it. A builder
 // thread implies worktree and setup; an idle one has reported. Use per-stage evidence when
 // /api/status carries it.
@@ -141,7 +157,7 @@ const REACHED: Partial<Record<Cell["status"], number>> = {
   working: 3,
   idle: 4,
   blocked: 3,
-  accepted: STEPS,
+  accepted: Infinity,
 };
 
 function pad<T>(items: T[], length: number): (T | undefined)[] {
@@ -154,7 +170,7 @@ function cut(text: string, max: number): string {
 
 // Public titles are the ticket id, or the id plus a label such as "- post-graft review (sent)".
 // The id is always printed beside the title, so only the label is worth showing.
-function label(task: Task): string {
+function label(task: FeedTask): string {
   if (task.title === task.id) return "";
   const prefix = `${task.id} - `;
   return task.title.startsWith(prefix)
@@ -162,7 +178,7 @@ function label(task: Task): string {
     : task.title;
 }
 
-function describe(task: Task): string {
+function describe(task: FeedTask): string {
   const revision = task.revision ? ` · ${task.revision.slice(0, 7)}` : "";
   // The tooltip is one unwrapped line, so a brief-length title is cut to fit.
   const title = label(task) && ` · ${cut(label(task), 40)}`;
@@ -172,7 +188,7 @@ function describe(task: Task): string {
   return `${task.id}${title} · ${task.status}${revision}${about}`;
 }
 
-function cell(task: Task | undefined): Cell {
+function cell(task: FeedTask | undefined): Cell {
   if (!task)
     return { status: "empty", id: "", label: "", href: null, stage: 0 };
   return {
@@ -188,20 +204,44 @@ function cell(task: Task | undefined): Cell {
 }
 
 // A pending review record is evidence the gate passed and cold review is running.
-function steps(status: Cell["status"], reviewing = false): string[] {
+function steps(
+  status: Cell["status"],
+  reviewing = false,
+  count: number = pipelineSteps.length,
+): string[] {
   const done = reviewing ? 5 : (REACHED[status] ?? 0);
   const current =
     status === "blocked" && !reviewing ? "fail" : done ? "now" : "";
-  return Array.from({ length: STEPS }, (_, i) =>
+  return Array.from({ length: count }, (_, i) =>
     i < done ? "done" : i === done ? current : "",
   );
 }
 
-function stagesOf(task: Task): string[] {
-  return steps(task.status, task.evidence?.review?.pending === true);
+function failedStage(task: FeedTask) {
+  if (!task.stop?.thread || !task.stop.role) return null;
+  if (task.stop.role === "reviewer") return "review";
+  return task.stop.reason === "verification-rejected" ? "gate" : "builder";
 }
 
-function pullRequest(merge: Task["merge"]): Ticket["pullRequest"] {
+function stagesOf(
+  task: FeedTask,
+  stages: NonNullable<Feed["pipelineSteps"]> = pipelineSteps,
+): string[] {
+  const result = steps(
+    task.status,
+    task.evidence?.review?.pending === true,
+    stages.length,
+  );
+  const failed = stages.findIndex((stage) => stage.id === failedStage(task));
+  if (failed >= 0) {
+    return result.map((value, i) =>
+      i < failed ? "done" : i === failed ? "fail" : "",
+    );
+  }
+  return result;
+}
+
+function pullRequest(merge: FeedTask["merge"]): Ticket["pullRequest"] {
   if (!merge || !Number.isSafeInteger(merge.pr) || merge.pr <= 0) return null;
   const parts =
     /^https:\/\/github\.com\/([\w-]+)\/([\w.-]+)\/pull\/([1-9]\d*)$/.exec(
@@ -217,12 +257,51 @@ function pullRequest(merge: Task["merge"]): Ticket["pullRequest"] {
   return { number: merge.pr, href: href === merge.url ? href : null };
 }
 
-function ticket(task: Task): Ticket {
+function threadHref(thread: string | null | undefined): string | null {
+  return thread && /^T-[\w-]+$/.exec(thread)?.[0] === thread
+    ? `https://ampcode.com/threads/${thread}`
+    : null;
+}
+
+function stageLink(
+  task: FeedTask,
+  stage: NonNullable<Feed["pipelineSteps"]>[number],
+  state: string | undefined,
+) {
+  if (state === "fail") return threadHref(task.stop?.thread);
+  if (stage.id === "review") return threadHref(task.reviewerThread);
+  return stage.actor === "model" ? threadHref(task.workerThread) : null;
+}
+
+function ticketLinks(
+  task: FeedTask,
+  stages: NonNullable<Feed["pipelineSteps"]>,
+) {
+  const states = stagesOf(task, stages);
+  return {
+    stageLinks: stages.map((stage, i) => stageLink(task, stage, states[i])),
+    stop: task.stop
+      ? { role: task.stop.role, href: threadHref(task.stop.thread) }
+      : null,
+    rejections: (task.rejections ?? []).map((row) => ({
+      attempt: row.attempt,
+      href: threadHref(row.thread),
+    })),
+  };
+}
+
+function ticket(
+  task: FeedTask,
+  stages: NonNullable<Feed["pipelineSteps"]>,
+): Ticket {
   const review = task.evidence?.review;
   return {
     ...cell(task),
     title: label(task),
-    steps: stagesOf(task),
+    steps: stagesOf(task, stages),
+    stage: stagesOf(task, stages).filter((step) => step === "done").length,
+    ...ticketLinks(task, stages),
+    parked: task.parked === true,
     plan: task.steps,
     revision: task.revision?.slice(0, 7) ?? "",
     pullRequest: pullRequest(task.merge),
@@ -248,22 +327,23 @@ function chips(labels: string[]): Chip[] {
 
 // Row 0 is the ACTIVE ticket, which keeps the stage pills instead of its own steps.
 function ticketRow(
-  task: Task | undefined,
+  task: FeedTask | undefined,
   row: number,
+  stages: NonNullable<Feed["pipelineSteps"]>,
 ): View["coming"][number] {
   if (!task)
     return {
       id: "",
       title: "",
       status: "empty",
-      steps: steps("empty"),
+      steps: steps("empty", false, stages.length),
       chips: [],
     };
   return {
     id: task.id,
     title: cut(label(task), 32),
     status: task.status,
-    steps: stagesOf(task),
+    steps: stagesOf(task, stages),
     chips: row ? chips(task.steps) : [],
   };
 }
@@ -275,7 +355,7 @@ function observed(feed: Feed, now: number): string {
 }
 
 function counts(feed: Feed): View["counts"] {
-  const count = (status: Task["status"]) =>
+  const count = (status: FeedTask["status"]) =>
     feed.tasks.filter((task) => task.status === status).length;
   return {
     landed: count("accepted"),
@@ -297,17 +377,21 @@ function tally({ landed, queued, blocked }: View["counts"]): string {
 // The feed lists an admitted ticket after the planned ones it was picked from; every admitted
 // ticket runs before any planned one, so planned tickets go last and the rest keep their order.
 function settle(feed: Feed): Feed {
-  const tasks = feed.tasks.map((task): Task =>
-    task.evidence?.review?.pending ? { ...task, status: "working" } : task,
+  const tasks = feed.tasks.map((task): FeedTask =>
+    task.stop
+      ? { ...task, status: "blocked" }
+      : task.evidence?.review?.pending
+        ? { ...task, status: "working" }
+        : task,
   );
-  const planned = (task: Task) => task.status === "planned";
+  const planned = (task: FeedTask) => task.status === "planned";
   return {
     ...feed,
     tasks: [...tasks.filter((t) => !planned(t)), ...tasks.filter(planned)],
   };
 }
 
-function nextLabel(active: Task | undefined, total: number): string {
+function nextLabel(active: FeedTask | undefined, total: number): string {
   // Older feeds carry the attempt only on a pending review record.
   const attempt = active?.attempt ?? active?.evidence?.review?.attempt;
   if (active)
@@ -339,7 +423,7 @@ export function derive(
   const rejected = tasks.find(
     (t) => t.status !== "accepted" && !t.evidence?.review && reviewed.has(t.id),
   )?.id;
-  const became = (status: Task["status"]) =>
+  const became = (status: FeedTask["status"]) =>
     tasks.find((t) => t.status === status && before.get(t.id) !== status)?.id;
   const rows = tasks
     .filter((t) => (before.get(t.id) ?? t.status) !== "accepted")
@@ -368,7 +452,8 @@ export function derive(
       ["queued", "blocked"].includes(before.get(t.id) ?? ""),
   )?.id;
   const blocked = rejected ?? became("blocked");
-  const tickets = tasks.map(ticket);
+  const stages = next.pipelineSteps ?? pipelineSteps;
+  const tickets = tasks.map((task) => ticket(task, stages));
   const count = counts(next);
   return {
     state: !next.fresh ? "stale" : next.enabled ? "live" : "paused",
@@ -378,6 +463,7 @@ export function derive(
     tally: tally(count),
     counts: count,
     tickets,
+    pipelineSteps: stages,
     news: events.map((event) => ({
       at: event.at,
       tone:
@@ -429,7 +515,9 @@ export function derive(
             ? ""
             : c.status,
       })),
-    coming: pad(pending, COMING_ROWS).map(ticketRow),
+    coming: pad(pending, COMING_ROWS).map((task, row) =>
+      ticketRow(task, row, stages),
+    ),
     startRow: rowOf(started),
     landed: !!landing,
     reviewed: !!tasks.find((t) => t.id === landing)?.evidence?.review,

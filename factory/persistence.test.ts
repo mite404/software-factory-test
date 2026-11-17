@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createFactory, tasks, type NativeHost } from "./native";
+import { pipelineSteps } from "./pipeline";
 import {
   factoryEvents,
   factoryRecords,
@@ -73,6 +74,26 @@ test("lifecycle walking names every exitless stop and validates recoveries and p
   const directory = await mkdtemp(join(tmpdir(), "factory-lifecycle-walk-"));
   roots.push(directory);
   const storage = openPersistence(directory, queue);
+  const actors = new Set(["computer", "model", "foreman", "operator"]);
+  [
+    ...entries.map(([, entry]) => entry),
+    ...stops,
+    ...exits,
+    ...pipelineSteps,
+  ].forEach((entry) => {
+    expect(actors.has(entry.actor), JSON.stringify(entry)).toBe(true);
+  });
+  entries.forEach(([, entry]) => {
+    entry.actions.forEach((action) => {
+      expect(
+        [
+          ...entry.exits,
+          ...Object.values(entry.stops).flatMap((stop) => stop.exits),
+        ].some((exit) => "action" in exit && exit.action === action),
+        action,
+      ).toBe(true);
+    });
+  });
   expect(Object.keys(table).sort()).toEqual([
     "blocked",
     "creating",
