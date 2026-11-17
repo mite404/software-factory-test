@@ -115,9 +115,9 @@ Run the shared preflight in `docs/v1-execution.md`. Baseline gates have not run 
 
 ## Done when
 
-- [ ] With two lanes, a main and a light ticket run at the same time on their own models.
-- [ ] A stop in one lane holds only that lane.
-- [ ] A candidate whose target moved, at acceptance or during review, is rebased, gated and
+- [x] With two lanes, a main and a light ticket run at the same time on their own models.
+- [x] A stop in one lane holds only that lane.
+- [x] A candidate whose target moved, at acceptance or during review, is rebased, gated and
       reviewed at its new revision, or returned to its worker on conflict.
-- [ ] Without `lightWorker`, dispatch is exactly as today.
-- [ ] Full gates, guard and fresh cold review pass on the exact candidate.
+- [x] Without `lightWorker`, dispatch is exactly as today.
+- [x] Full gates, guard and fresh cold review pass on the exact candidate.

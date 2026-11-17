@@ -19,7 +19,7 @@ Merged, but at least one box, usually a live proof, is still open.
 | [F003-provider-limit-resume](feats/durability/F003-provider-limit-resume.md)   | Same threads resume after a provider limit    | 5/6       |
 | [F011-step-actor-labels](feats/lifecycle-view/F011-step-actor-labels.md)       | Each step and exit names who performs it      | 5/6       |
 
-## Not started (38)
+## Not started (37)
 
 In dispatch order.
 
@@ -37,7 +37,6 @@ In dispatch order.
 | [F023-public-stop-reasons](feats/lifecycle-view/F023-public-stop-reasons.md)             | A blocked or rejected ticket says why                  | 0/6       |
 | [F034-reviewer-retry-create](feats/durability/F034-reviewer-retry-create.md)             | An interrupted reviewer creation can be retried        | 0/5       |
 | [F035-observer-watchdog-thread](feats/foreman-watchdog/F035-observer-watchdog-thread.md) | Routine watchdog checks run in a cheap observer thread | 0/5       |
-| [F037-two-worker-lanes](feats/worker-lanes/F037-two-worker-lanes.md)                     | Two lanes run two tickets at once                      | 0/5       |
 | [v1-ticket4](feats/v1/v1-ticket4.md)                                                     | Durable private evidence records                       | 0/3       |
 | [v1-ticket11](feats/v1/v1-ticket11.md)                                                   | Required and advisory verification tools               | 0/3       |
 | [v1-ticket12](feats/v1/v1-ticket12.md)                                                   | Permission-bound native hooks                          | 0/3       |
@@ -72,7 +71,7 @@ Written up but set aside; not dispatched until the operator asks for it.
 | -------------------------------------------------------------------------------------- | -------------------------------------------------------- | --------- |
 | [F036-context-window-reminders](feats/worker-budgets/F036-context-window-reminders.md) | Context-window reminders with an operator-chosen handoff | 0/5       |
 
-## Done (29)
+## Done (30)
 
 | Ticket                                                                               | Outcome                                                   | Done when |
 | ------------------------------------------------------------------------------------ | --------------------------------------------------------- | --------- |
@@ -94,6 +93,7 @@ Written up but set aside; not dispatched until the operator asks for it.
 | [F006-limit-fallback-setting](feats/done/F006-limit-fallback-setting.md)             | Wait or fall back on a provider limit                     | 5/5       |
 | [F007-run-transition-table](feats/done/F007-run-transition-table.md)                 | One declared, tested run lifecycle table                  | 5/5       |
 | [F009-attempt-cap-parking](feats/done/F009-attempt-cap-parking.md)                   | Twice-escalated ticket parks; queue continues             | 6/6       |
+| [F037-two-worker-lanes](feats/done/F037-two-worker-lanes.md)                         | Two lanes run two tickets at once                         | 5/5       |
 | [F010-brief-fact-check](feats/done/F010-brief-fact-check.md)                         | No worker starts on an incomplete brief                   | 4/4       |
 | [F024-serial-test-runs](feats/done/F024-serial-test-runs.md)                         | Test runs on one machine take turns                       | 5/5       |
 | [F031-landing-without-checkpoint](feats/done/F031-landing-without-checkpoint.md)     | A blocked run without a checkpoint can record its landing | 5/5       |
