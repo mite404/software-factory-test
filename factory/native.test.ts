@@ -1517,6 +1517,55 @@ test("external landing preserves saved repair identity while paused", async () =
   expect(await snapshot()).toEqual(after);
 });
 
+test("a ticket parked at the attempt cap records its external landing", async () => {
+  const { f, engine, stopped, running, request } =
+    await externalLandingFixture();
+  const blocked = stopped.runs.A;
+  if (
+    blocked?.kind !== "blocked" ||
+    !blocked.checkpoint ||
+    !blocked.thread ||
+    !blocked.incident
+  )
+    throw new Error("Expected worker checkpoint");
+  // The same worker checkpoint, as the cap leaves it after a fourth rejection.
+  const storage = openPersistence(engine.directory, []);
+  storage.commit(
+    {
+      ...stopped,
+      runs: {
+        A: {
+          kind: "parked",
+          definition: blocked.definition,
+          thread: blocked.thread,
+          reason: blocked.reason,
+          repair: { ...blocked.checkpoint, attempt: 4 },
+          executor: blocked.executor,
+          incident: {
+            ...blocked.incident,
+            reason: "verification-rejected",
+            recovery: "resume",
+            attempt: 4,
+          },
+        },
+      },
+    },
+    "A",
+    "fixture",
+    "parked at cap",
+  );
+  storage.close();
+  const counts = f.counts();
+  const landed = await engine.recordLanding(request, "T-owner");
+  expect(landed.runs.A).toMatchObject({
+    kind: "done",
+    thread: running.thread,
+    revision: request.revision,
+    merge: { pr: request.pr, commit: request.commit },
+  });
+  expect(f.counts()).toEqual(counts);
+});
+
 test.each([false, true])(
   "external landing survives reload and releases dependencies only on reconciliation (target changed %s)",
   async (targetChanged) => {

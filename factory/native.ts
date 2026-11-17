@@ -1203,9 +1203,14 @@ function verifiedLanding(
   owner?: ThreadID,
 ): Extract<Run, { kind: "done" }> {
   if (!admitsRun(run, "record-landing"))
-    throw new Error("Landing requires a blocked ticket");
+    throw new Error("Landing requires a blocked or parked ticket");
+  // A ticket parked at the attempt cap keeps its last repair, like a blocked one.
   const checkpoint =
-    run.repair ?? run.checkpoint ?? incidentCheckpoint(root, directory, run);
+    run.kind === "parked"
+      ? run.repair
+      : (run.repair ??
+        run.checkpoint ??
+        incidentCheckpoint(root, directory, run));
   if (
     !checkpoint ||
     !Object.entries({
@@ -1219,7 +1224,7 @@ function verifiedLanding(
     )
   )
     throw new Error(
-      "Landing requires a blocked ticket and its exact current incident with no queued repair",
+      "Landing requires a blocked or parked ticket and its exact current incident with no queued repair",
     );
   git(root, "merge-base", "--is-ancestor", checkpoint.base, evidence.revision);
   git(

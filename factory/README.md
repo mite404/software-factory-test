@@ -194,10 +194,10 @@ integration HEAD: resume validates the original incident, atomically repins the 
 and tells the same worker to rebase onto it before submitting another candidate. Rewound or
 unrelated histories are refused. Old two-attempt review blocks can recover from matching durable
 review events and the candidate report. Missing recovery evidence fails closed. Subsequent
-candidates still require the normal gates. A parked run waits for an operator decision, has only
-owner `resume` as its exit, and requires no other active or uncertain work before resumption. Its
-dashboard status is `blocked`. A later rejection parks it again rather than sending an automatic
-correction.
+candidates still require the normal gates. A parked run waits for an operator decision. Its exits
+are owner `resume`, which requires no other active or uncertain work, and `record-landing` once the
+operator lands the candidate outside the factory. Its dashboard status is `blocked`. A later
+rejection parks it again rather than sending an automatic correction.
 
 Actionable stops persist an `incident` in the run, in the same SQLite transaction as the stop event.
 Its ID identifies the ticket, attempt and base; its owner names the current recovery recipient.
@@ -909,8 +909,9 @@ GitHub.com remotes produce `https://github.com/<owner>/<repo>/pull/<pr>`; other 
 
 ## Record a ticket landed outside the factory
 
-If the operator approved and merged a blocked candidate outside the native gate and review path,
-the owning Foreman can call `record-landing`. Fetch the root checkout's configured upstream first.
+If the operator approved and merged a blocked or parked candidate outside the native gate and review
+path, the owning Foreman can call `record-landing`. Fetch the root checkout's configured upstream
+first.
 Integrate the merge into the root checkout before recording; fetching alone is insufficient.
 Supply `ticket`, its exact current `incident` ID, the full worker `revision`, a positive
 integer `pr`, the full merge `commit`, and a nonempty `decision` describing the external approval.

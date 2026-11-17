@@ -625,7 +625,7 @@ export const runLifecycle = {
   },
   parked: {
     actor: "operator",
-    actions: ["resume"],
+    actions: ["resume", "record-landing"],
     blocks: [],
     exits: [],
     stops: {
@@ -639,6 +639,11 @@ export const runLifecycle = {
             action: "resume",
             when: "the exact incident, operator decision and idle clean original worker validate with no other active work; the clean integration base is unchanged or a descendant, repinned on resume with rebase feedback",
             actor: "operator",
+          },
+          {
+            action: "record-landing",
+            when: "the operator landed the candidate outside the factory and the exact incident and upstream patch and merge proofs validate",
+            actor: "foreman",
           },
         ],
       },
