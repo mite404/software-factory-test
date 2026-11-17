@@ -18,7 +18,7 @@ Merged, but at least one box, usually a live proof, is still open.
 | [foreman-watchdog-ticket3](feats/foreman-watchdog/foreman-watchdog-ticket3.md) | Outside-orb wake-up and alert delivery        | 2/4       |
 | [F003-provider-limit-resume](feats/durability/F003-provider-limit-resume.md)   | Same threads resume after a provider limit    | 5/6       |
 
-## Not started (38)
+## Not started (39)
 
 In dispatch order.
 
@@ -37,6 +37,7 @@ In dispatch order.
 | [F023-public-stop-reasons](feats/lifecycle-view/F023-public-stop-reasons.md)             | A blocked or rejected ticket says why                  | 0/6       |
 | [F034-reviewer-retry-create](feats/durability/F034-reviewer-retry-create.md)             | An interrupted reviewer creation can be retried        | 0/5       |
 | [F035-observer-watchdog-thread](feats/foreman-watchdog/F035-observer-watchdog-thread.md) | Routine watchdog checks run in a cheap observer thread | 0/5       |
+| [F037-two-worker-lanes](feats/worker-lanes/F037-two-worker-lanes.md)                     | Two lanes run two tickets at once                      | 0/5       |
 | [v1-ticket4](feats/v1/v1-ticket4.md)                                                     | Durable private evidence records                       | 0/3       |
 | [v1-ticket11](feats/v1/v1-ticket11.md)                                                   | Required and advisory verification tools               | 0/3       |
 | [v1-ticket12](feats/v1/v1-ticket12.md)                                                   | Permission-bound native hooks                          | 0/3       |
