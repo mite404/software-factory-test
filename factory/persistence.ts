@@ -158,8 +158,10 @@ export type Run = (
       feedback?: string;
       deliveryIntent?: DeliveryIntent;
       /** Saved with its process group when the gate spawns and removed when it returns; a later
-       * reconcile retires it once that group has stopped, and an idle report gates again. */
-      gate?: { at: number; pid: number };
+       * reconcile retires it once that group has stopped, and an idle report gates again.
+       * `start` is the leader's boot ID and start tick, so only this gate is ever killed;
+       * `killed` records that a reconcile killed it past its deadline. */
+      gate?: { at: number; pid: number; start?: string; killed?: true };
       /** The pipeline step that rejected the previous attempt. */
       rejectedBy?: Extract<PipelineStep, "gate" | "review" | "merge">;
       /** The factory rebased the reported revision `from` onto `base` as `revision`, moving the
@@ -1132,13 +1134,29 @@ function validRebase(value: unknown): boolean {
   );
 }
 
-// A running gate marker and the step that rejected the previous attempt.
-function validStageFacts(run: Record<string, unknown>): boolean {
-  const gate = run.gate === undefined ? { at: 0, pid: 1 } : record(run.gate);
+// A gate marker; `killed` needs the `start` that identified the group it killed.
+function validGateMarker(gate: Record<string, unknown>): boolean {
+  const start =
+    gate.start === undefined ||
+    (typeof gate.start === "string" && /^[0-9a-f-]+:\d+$/.test(gate.start));
+  const killed =
+    gate.killed === undefined ||
+    (gate.killed === true && gate.start !== undefined);
   return (
     timestamp(gate.at) &&
     positiveInteger(gate.pid) &&
-    Object.keys(gate).length === 2 &&
+    start &&
+    killed &&
+    Object.keys(gate).every((key) =>
+      ["at", "pid", "start", "killed"].includes(key),
+    )
+  );
+}
+
+// A running gate marker and the step that rejected the previous attempt.
+function validStageFacts(run: Record<string, unknown>): boolean {
+  return (
+    (run.gate === undefined || validGateMarker(record(run.gate))) &&
     [undefined, "gate", "review", "merge"].includes(
       run.rejectedBy as string | undefined,
     )

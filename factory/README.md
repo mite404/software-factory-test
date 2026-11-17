@@ -364,7 +364,12 @@ Each fact is recorded where it happens. When the gate command spawns, `checkCand
 until that save succeeds. The marker is removed with `gate-returned` and the outcome as soon as
 the gate returns. Reconciles hold the store lock, so a marker found when a reconcile starts
 belongs to an earlier coordinator. While its process group is alive (or cannot be probed) the run
-stays `gating` and no reconcile settles it or starts another gate. Once the group has stopped, the
+stays `gating` and no reconcile settles it or starts another gate. The gate's ten-minute timer dies
+with its coordinator, for example in an Amp CLI restart. The marker also saves `start`, the boot ID
+and the leader's start tick, so a reconcile past `at` plus that deadline kills the group with
+SIGKILL, records `killed` and event `gate-killed`, but only while that same leader is alive. A
+reused PID is never killed; a marker from another boot is retired without killing, and one whose
+leader is gone or that has no `start` stays `gating`. Once the group has stopped, the
 next reconcile removes the marker with `gate-interrupted` before the paused or permission check,
 so a paused factory stops reporting `gating` without running anything. If the idle worker's
 report is still a clean candidate, the normal path

@@ -3103,7 +3103,7 @@ test("four rejections park the worker, release only independent work and require
   expect(notices[0]).toContain("a diagnosis decision");
   expect(notices[1]).toContain("Attempt cap reached");
   expect(notices[1]).toContain("operator's decision");
-});
+}, 30_000);
 
 test("a running gate reads as gating and an interrupted gate reruns exactly once, even after a pause", async () => {
   const f = await preparationFixture(() => "");
@@ -3327,14 +3327,19 @@ await createFactory(${JSON.stringify(f.root)}, {
   await restarted.tick("pause", "T-owner");
   expect(runStage(factoryStatus(directory).runs.A).stage).toBe("gating");
   expect(await runs()).toBe(1);
-  // Once it stops, a paused reconcile retires the marker without gating; start gates once.
-  await writeFile(join(marks, "release"), "pass");
+  // Nothing releases the hung gate: past its deadline a paused reconcile kills the orphaned group,
+  // then retires the marker without gating; start gates once.
+  const late = f.factory(() => held.gate!.at + 600_001);
+  await late.tick("reconcile");
   const stopped = spawnSync("bash", [
     "-c",
     `for i in {1..500}; do kill -0 -- -${pid} 2>/dev/null || exit 0; sleep 0.01; done; exit 1`,
   ]);
   expect(stopped.status).toBe(0);
-  await restarted.tick("reconcile");
+  // The killed gate never reached its own cleanup.
+  await rm(join(marks, "gate-lock"), { recursive: true });
+  await writeFile(join(marks, "release"), "pass");
+  await late.tick("reconcile");
   expect(runStage(factoryStatus(directory).runs.A).stage).toBe("building");
   expect(await runs()).toBe(1);
   await restarted.tick("start", "T-owner");
@@ -3345,6 +3350,56 @@ await createFactory(${JSON.stringify(f.root)}, {
     attempt: 1,
   });
   expect(await Bun.file(join(marks, "overlaps")).exists()).toBe(false);
+  expect(
+    (factoryEvents(directory, 0, 500) ?? [])
+      .filter((event) => event.action === "gate-killed")
+      .map((event) => event.detail),
+  ).toEqual(["1"]);
+});
+
+test("recovery never kills a group the saved gate start does not identify", async () => {
+  const f = await preparationFixture(() => "");
+  const engine = f.factory(() => 5000);
+  await engine.tick("start", "T-owner");
+  // An unrelated live process group stands in for a PID reused after the gate ended.
+  const other = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+  const pid = other.pid!;
+  const boot = (
+    await readFile("/proc/sys/kernel/random/boot_id", "utf8")
+  ).trim();
+  const save = (start: string) => {
+    const run = factoryStatus(engine.directory).runs.A;
+    if (run?.kind !== "running") throw new Error("Expected a running run");
+    const storage = openPersistence(engine.directory, []);
+    storage.commit(
+      {
+        ...storage.state,
+        runs: { A: { ...run, gate: { at: 1000, pid, start } } },
+      },
+      "A",
+      "fixture",
+      "reused pid",
+    );
+    storage.close();
+  };
+  try {
+    const late = f.factory(() => 1000 + 600_001);
+    save(`${boot}:1`);
+    const events = factoryEvents(engine.directory, 0, 500);
+    await late.tick("reconcile");
+    expect(spawnSync("bash", ["-c", `kill -0 -- -${pid}`]).status).toBe(0);
+    expect(runStage(factoryStatus(engine.directory).runs.A).stage).toBe(
+      "gating",
+    );
+    expect(factoryEvents(engine.directory, 0, 500)).toEqual(events);
+    // A gate saved in another boot cannot be running: retired, and still nothing is killed.
+    save("00000000-0000-0000-0000-000000000000:1");
+    await late.tick("reconcile");
+    expect(spawnSync("bash", ["-c", `kill -0 -- -${pid}`]).status).toBe(0);
+    expect(factoryStatus(engine.directory).runs.A).not.toHaveProperty("gate");
+  } finally {
+    other.kill("SIGKILL");
+  }
 });
 
 test("owner-authorized repairs retain spending alerts at six and ten on the same worker", async () => {

@@ -1,7 +1,7 @@
 import type { AgentReasoningEffort, PluginTools } from "@ampcode/plugin";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, existsSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import {
   link,
   lstat,
@@ -827,6 +827,37 @@ function processGroupAlive(pid: number) {
   }
 }
 
+// This boot plus the process's start tick, which survives exec and never repeats for a reused PID.
+function processStart(pid: number) {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const tick = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+    return `${readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim()}:${tick}`;
+  } catch {
+    return undefined;
+  }
+}
+
+// A recovered gate's timer died with its coordinator. "stopped" retires the marker; "kill" means
+// the group's live leader is provably this gate and it is past its deadline; "alive" keeps it
+// gating. A gate from another boot cannot be running. A reused PID never matches the saved start,
+// so it is never killed; nor is a group whose leader is gone, or a marker without `start`.
+function gateState(
+  gate: { at: number; pid: number; start?: string },
+  at: number,
+) {
+  const boot = gate.start?.split(":")[0];
+  const current = processStart(process.pid)?.split(":")[0];
+  // An unreadable current boot proves nothing, so only the liveness check below decides.
+  if (boot && current && boot !== current) return "stopped";
+  if (!processGroupAlive(gate.pid)) return "stopped";
+  return gate.start &&
+    at - gate.at > gateTimeoutMs &&
+    processStart(gate.pid) === gate.start
+    ? "kill"
+    : "alive";
+}
+
 function allowedChanges(
   worktree: string,
   base: string,
@@ -877,12 +908,14 @@ function candidate(
   return { revision: failure ? null : revision, failure };
 }
 
+// ponytail: fixed gate budget; the full gate already takes ~95s. Make it a definition
+// setting when a project's gate legitimately needs longer than ten minutes.
+const gateTimeoutMs = 600_000;
+
 function verify(
   worktree: string,
   command: string,
-  // ponytail: fixed gate budget; the full gate already takes ~95s. Make it a definition
-  // setting when a project's gate legitimately needs longer than ten minutes.
-  timeout = 600_000,
+  timeout = gateTimeoutMs,
   onSpawn?: (pid: number) => void,
   log?: string,
 ) {
@@ -1949,18 +1982,37 @@ export function createFactory(
       if (action === "resume") await resumeRepair();
       if (action === "start") commit("factory", "started", state.owner!);
       // Reconciles hold the store lock, so a saved marker belongs to an earlier coordinator. Its
-      // detached gate can outlive that coordinator: the run stays gating until its process group
-      // stops, then the marker is retired even while paused and an idle report gates again once.
+      // detached gate can outlive that coordinator, and its timer with it: the run stays gating
+      // until its process group stops, and a group still alive past the gate deadline is killed
+      // here. Then the marker is retired even while paused and an idle report gates again once.
+      // Recorded once where it happens; a group that has not died yet is killed again silently,
+      // so a reconcile with nothing new still writes nothing.
+      function killGate(
+        ticket: string,
+        run: Extract<Run, { kind: "running" }>,
+        gate: NonNullable<typeof run.gate>,
+      ) {
+        try {
+          process.kill(-gate.pid, "SIGKILL");
+        } catch {
+          // Already gone or not ours: the liveness check below decides.
+        }
+        if (!gate.killed) {
+          gate.killed = true;
+          commit(ticket, "gate-killed", String(run.attempt));
+        }
+        return processGroupAlive(gate.pid) ? "alive" : "stopped";
+      }
       function retireInterruptedGates() {
-        for (const [ticket, run] of Object.entries(state.runs))
-          if (
-            run.kind === "running" &&
-            run.gate &&
-            !processGroupAlive(run.gate.pid)
-          ) {
+        for (const [ticket, run] of Object.entries(state.runs)) {
+          if (run.kind !== "running" || !run.gate) continue;
+          let gate = gateState(run.gate, now());
+          if (gate === "kill") gate = killGate(ticket, run, run.gate);
+          if (gate === "stopped") {
             delete run.gate;
             commit(ticket, "gate-interrupted", String(run.attempt));
           }
+        }
       }
       retireInterruptedGates();
       if (!state.enabled || !config.execute || !state.owner) return state;
@@ -2313,7 +2365,8 @@ export function createFactory(
         const { revision, log, feedback, rerunLog, outcome, result } =
           await candidateEvidence(directory, task, run, report, config, {
             started(pid) {
-              run.gate = { at: now(), pid };
+              const start = processStart(pid);
+              run.gate = start ? { at: now(), pid, start } : { at: now(), pid };
               commit(task.id, "gate-started", String(run.attempt));
             },
             returned(outcome) {
