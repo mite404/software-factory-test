@@ -607,6 +607,7 @@ test("durable records retain ticket identity without importing legacy or writing
   expect(factoryRecords(f.directory)).toEqual({
     state: parked,
     tickets: [{ id: "A", steps: [] }],
+    reviews: [],
   });
   expect(await readFile(join(f.directory, "state.sqlite"))).toEqual(bytes);
   expect(await readdir(f.directory)).toEqual(files);

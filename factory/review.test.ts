@@ -719,11 +719,21 @@ test.each([false, true])(
         }
       }
       f.reload();
-      expect((await f.tick()).runs.A!.incident).toMatchObject({
+      const escalated = (await f.tick()).runs.A!.incident!;
+      expect(escalated).toMatchObject({
         reason: "verification-rejected",
         attempt: 2,
         recovery: "resume",
       });
+      const notice = f.notices.find((item) => item.includes(escalated.id))!;
+      if (legacy) {
+        // Adopted after the fact: no thread is known to have caused it.
+        expect(escalated.cause).toBeUndefined();
+        expect(notice).not.toContain("Causing");
+      } else {
+        expect(escalated.cause?.role).toBe("reviewer");
+        expect(notice).toContain("Causing reviewer thread");
+      }
       f.observe("unknown");
       expect(f.resume()).rejects.toThrow(/idle/);
       f.observe("idle");

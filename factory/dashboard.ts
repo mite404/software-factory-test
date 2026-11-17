@@ -257,31 +257,25 @@ function matchingRejection(
   return { attempt: Number(detail.attempt), thread };
 }
 
-function rejectedReviews(directory: string) {
+function rejectedReviews(
+  events: NonNullable<ReturnType<typeof factoryRecords>>["reviews"],
+) {
   const reviews = new Map<string, Record<string, unknown>>();
   const rejected = new Map<
     string,
     Map<string, { attempt: number; thread: string }>
   >();
-  let after = 0;
-  for (;;) {
-    const events = factoryEvents(directory, after, 500) ?? [];
-    for (const event of events.filter((event) =>
-      ["review-created", "review-verdict"].includes(event.action),
-    )) {
-      const detail = jsonDetail(event.detail);
-      if (event.action === "review-created") {
-        reviews.set(event.ticket, detail);
-        continue;
-      }
-      const rejection = matchingRejection(detail, reviews.get(event.ticket));
-      if (!rejection) continue;
-      const rows = rejected.get(event.ticket) ?? new Map();
-      rows.set(`${rejection.attempt}/${rejection.thread}`, rejection);
-      rejected.set(event.ticket, rows);
+  for (const event of events) {
+    const detail = jsonDetail(event.detail);
+    if (event.action === "review-created") {
+      reviews.set(event.ticket, detail);
+      continue;
     }
-    if (events.length < 500) break;
-    after = events.at(-1)!.id;
+    const rejection = matchingRejection(detail, reviews.get(event.ticket));
+    if (!rejection) continue;
+    const rows = rejected.get(event.ticket) ?? new Map();
+    rows.set(`${rejection.attempt}/${rejection.thread}`, rejection);
+    rejected.set(event.ticket, rows);
   }
   return new Map(
     [...rejected].map(([ticket, rows]) => [ticket, [...rows.values()]]),
@@ -547,14 +541,14 @@ export function startDashboard({ root, port }: { root: string; port: number }) {
         const records = factoryRecords(join(directory, "factory"));
         if (!records)
           return Response.json({ ...empty, durable: "missing" }, { headers });
-        const { state, tickets } = records;
+        const { state, tickets, reviews } = records;
         const steps = new Map(tickets.map((task) => [task.id, task.steps]));
         const observed = new Map(
           snapshot?.tasks.map((task) => [task.id, task]),
         );
         const publicTickets = new Map(tickets.map((task) => [task.id, task]));
         const repository = githubRepository(root);
-        const rejections = rejectedReviews(join(directory, "factory"));
+        const rejections = rejectedReviews(reviews);
         const tasks = [
           ...new Set([...steps.keys(), ...Object.keys(state.runs)]),
         ].map((id) => {

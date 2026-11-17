@@ -1444,7 +1444,7 @@ export function factoryEvents(directory: string, after = 0, limit = 100) {
   }
 }
 
-/** Read curated SQLite tickets and state together; never import legacy files. @throws On invalid storage. */
+/** Read curated SQLite tickets, state and review events in one snapshot; never import legacy files. @throws On invalid storage. */
 export function factoryRecords(directory: string) {
   if (!existsSync(join(directory, "state.sqlite"))) return null;
   const db = database(directory, true);
@@ -1466,7 +1466,12 @@ export function factoryRecords(directory: string) {
             ...ticketIntake(task),
           };
         });
-      return { state, tickets };
+      const reviews = db
+        .query<Pick<Event, "ticket" | "action" | "detail">, []>(
+          "SELECT ticket, action, detail FROM events WHERE action IN ('review-created', 'review-verdict') ORDER BY id",
+        )
+        .all();
+      return { state, tickets, reviews };
     })();
   } finally {
     db.close();

@@ -1388,7 +1388,7 @@ export function createFactory(
         run: Run,
         reason: StopIncident["reason"],
         recovery: StopIncident["recovery"],
-        cause = stopCause(run),
+        cause: StopIncident["cause"],
       ) {
         if (!state.owner || run.incident?.reason === reason) return false;
         cause = [
@@ -1428,7 +1428,7 @@ export function createFactory(
         const run = state.runs[ticket];
         if (run && !run.incident) {
           const stop = lifecycleStop(run, "stopped", reason);
-          if (stop) incident(ticket, run, ...stop, cause);
+          if (stop) incident(ticket, run, ...stop, cause ?? stopCause(run));
         }
         if (run) {
           run.watchdog = watchdogProgress(
@@ -1465,9 +1465,12 @@ export function createFactory(
       function parkedIncidents() {
         for (const [ticket, run] of Object.entries(state.runs)) {
           if (run.incident) continue;
-          const stop =
-            lifecycleStop(run, "interrupted") ?? lifecycleStop(run, "stopped");
-          if (stop && incident(ticket, run, ...stop))
+          // A stop first seen here happened earlier; only an interruption of the saved
+          // thread names its cause.
+          const interrupted = lifecycleStop(run, "interrupted");
+          const stop = interrupted ?? lifecycleStop(run, "stopped");
+          const cause = interrupted ? stopCause(run) : undefined;
+          if (stop && incident(ticket, run, ...stop, cause))
             commit(
               ticket,
               "stop-recorded",
@@ -2262,7 +2265,13 @@ export function createFactory(
         ) {
           delete run.incident;
           const stop = runLifecycle.running.stops.providerLimit;
-          incident(task.id, run, stop.reasons[0], stop.recovery);
+          incident(
+            task.id,
+            run,
+            stop.reasons[0],
+            stop.recovery,
+            stopCause(run),
+          );
           run.incident!.providerLimit = { ...activity.limit, thread };
           commit(
             task.id,
@@ -2309,6 +2318,7 @@ export function createFactory(
             task.id,
             run,
             ...lifecycleActivity(activity),
+            stopCause(run),
           );
           if (created) commit(task.id, "review-stopped", activity);
         } else if (activity !== "unknown" && run.incident) {
