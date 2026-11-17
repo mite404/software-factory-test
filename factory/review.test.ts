@@ -440,7 +440,7 @@ test("cold review skill stays subordinate to the factory verdict contract", () =
     "this factory contract takes precedence",
     "delegate (including cross-model jobs, reviewers, validators and finish leaves)",
     "edit or apply fixes, create directories, or write receipts, reports or any file other than the verdict",
-    "Return only the factory JSON verdict, not the skill's report format.",
+    "Write the verdict only to the verdict file below, not in the skill's report format; your final reply is one line with the kind and finding count.",
     "Loading the skill and its references is the only exception to the read scope below",
     "Use shell to find a versioned ce-code-review entry under ~/.cache/amp/global-skills/ampcode.com/user/ first.",
     "If there is none, look for SKILL.md in a ce-code-review entry under ~/.cache/amp/global-skill-manifests/ampcode.com/user/.",
