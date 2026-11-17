@@ -40,7 +40,6 @@ type Choose = (id: string | null) => void;
 // The kit's orange hue, pulled inside sRGB: its own 0.31 chroma clips to pure red on screen.
 const KEY = { l: 0.67, c: 0.18, h: 48 };
 const CHECKS = ["test", "lint", "typecheck", "format", "fallow", "diff-check"];
-const STAGES = 7;
 const PAGE = 4; // COMING rows per page
 const LOG = 50; // notifications kept for the list
 const RULE_Y = 535; // just above the ACTIVE rule in web/index.html
@@ -68,6 +67,10 @@ const NONE: Ticket = {
   pullRequest: null,
   review: "none",
   attempt: null,
+  stageLinks: [],
+  stop: null,
+  parked: false,
+  rejections: [],
 };
 const COLUMNS: Column<Ticket>[] = [
   { key: "id", label: "Ticket", width: "250px", render: (row) => row.id },
@@ -111,7 +114,7 @@ function Screen({
             <div>
               <dt>Stages done</dt>
               <dd>
-                {ticket.stage} / {STAGES}
+                {ticket.stage} / {view.pipelineSteps.length}
               </dd>
             </div>
             <div>
@@ -127,8 +130,8 @@ function Screen({
         <figure>
           <BarGraph
             label="Stages finished by each ticket in the queue"
-            values={cells.map((cell) => cell.stage / STAGES)}
-            segments={STAGES}
+            values={cells.map((cell) => cell.stage / view.pipelineSteps.length)}
+            segments={view.pipelineSteps.length}
           />
           <figcaption>stages done · one bar per ticket</figcaption>
         </figure>
@@ -143,17 +146,31 @@ function Stages({
   target,
 }: {
   ticket: Ticket;
-  stages: string[];
+  stages: View["pipelineSteps"];
   target: string;
 }) {
   return (
     <ol data-stages>
       {stages.map((stage, i) => (
-        <li key={stage} data-s={ticket.steps[i]}>
+        <li key={stage.id} data-s={ticket.steps[i]}>
           <Badge tone={TONE[ticket.steps[i] as keyof typeof TONE]}>
-            {stage}
+            {stage.label}
+            <small data-actor title={`Performed by ${stage.actor}`}>
+              {stage.actor}
+            </small>
             {NOTE[ticket.steps[i]!]}
           </Badge>
+          {ticket.stageLinks[i] && (
+            <a
+              data-stage-thread
+              href={ticket.stageLinks[i]!}
+              target="_blank"
+              rel="noreferrer"
+              aria-label={`Open ${stage.label} thread ${ticket.stageLinks[i]!.split("/").at(-1)}`}
+            >
+              {ticket.stageLinks[i]!.split("/").at(-1)}
+            </a>
+          )}
         </li>
       ))}
       <li>
@@ -216,6 +233,23 @@ function Sheet({ ticket }: { ticket: Ticket }) {
           </dd>
         </div>
       </dl>
+      {ticket.rejections.length > 0 && (
+        <ul data-rejections aria-label="Earlier rejections">
+          {ticket.rejections.map((row) => (
+            <li key={`${row.attempt}-${row.href}`}>
+              rejected #{row.attempt}
+              {" · "}
+              {row.href ? (
+                <a href={row.href} target="_blank" rel="noreferrer">
+                  {row.href.split("/").at(-1)}
+                </a>
+              ) : (
+                "no thread recorded"
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
       <p>
         <b>pass</b> → cold review · <b>fail</b> → same builder with the log ·
         2nd fail → escalated
@@ -224,7 +258,34 @@ function Sheet({ ticket }: { ticket: Ticket }) {
   );
 }
 
-// A lit banner for the two things that should stop the reader: a feed that is not live, a block.
+function CauseThread({ stop }: { stop: Ticket["stop"] }) {
+  if (!stop?.role) return <> No causing thread recorded.</>;
+  return (
+    <>
+      {" "}
+      Causing {stop.role} thread:{" "}
+      {stop.href && (
+        <a href={stop.href} target="_blank" rel="noreferrer">
+          {stop.href.split("/").at(-1)}
+        </a>
+      )}
+    </>
+  );
+}
+
+function StopWarning({ view, active }: { view: View; active: Ticket }) {
+  return (
+    <Alert
+      tone="danger"
+      title={`${active.id} ${active.parked ? "parked · operator decision" : "blocked"}`}
+    >
+      Stopped with {active.stage} of {view.pipelineSteps.length} stages done.
+      <CauseThread stop={active.stop} />
+    </Alert>
+  );
+}
+
+// A lit banner for a feed that is not live or a blocked ticket.
 function Warning({ view, active }: { view: View; active: Ticket }) {
   if (view.state !== "live")
     return (
@@ -232,13 +293,9 @@ function Warning({ view, active }: { view: View; active: Ticket }) {
         {view.observed}
       </Alert>
     );
-  if (active.status !== "blocked") return null;
-  return (
-    <Alert tone="danger" title={`${active.id} blocked`}>
-      Stopped with {active.stage} of {STAGES} stages done. The feed gives no
-      reason.
-    </Alert>
-  );
+  return active.status === "blocked" ? (
+    <StopWarning view={view} active={active} />
+  ) : null;
 }
 
 function Search({
@@ -357,7 +414,7 @@ function Active({
   live,
 }: {
   view: View;
-  stages: string[];
+  stages: View["pipelineSteps"];
   shown: Ticket;
   live: boolean;
 }) {
@@ -746,7 +803,7 @@ function Tickets({
   eventStatus,
 }: {
   view: View;
-  stages: string[];
+  stages: View["pipelineSteps"];
   log: Note[];
   spots: Spots;
   over: Element;
@@ -791,7 +848,7 @@ function Tickets({
  * Crop the pipeline SVG at its ACTIVE rule and mount the SPEC-01 device under it.
  * @returns The painter main.ts calls with each new view, after it has painted the SVG.
  */
-export function mount(stage: SVGElement, stages: string[]) {
+export function mount(stage: SVGElement) {
   const [x, y, width] = stage.getAttribute("viewBox")!.split(" ").map(Number);
   const height = RULE_Y - LIFT - y!; // SVG units left after the crop
   stage.setAttribute("viewBox", `${x} ${y} ${width} ${height}`);
@@ -841,7 +898,7 @@ export function mount(stage: SVGElement, stages: string[]) {
     root.render(
       <Tickets
         view={view}
-        stages={stages}
+        stages={view.pipelineSteps}
         log={[...log]}
         spots={{ builders: spots(".builder .card"), main: spots(".landed") }}
         over={over}

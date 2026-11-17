@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { validReview, type Review } from "./review";
 import { validExecutor, type Executor } from "./executor";
 import { validDeliveryIntent, type DeliveryIntent } from "./delivery";
+import type { Actor } from "./pipeline";
 
 const modelFamilies = new Map<string, string>([
   ["alibaba", "alibaba"],
@@ -107,6 +108,7 @@ export type StopIncident = {
   id: string;
   ticket: string;
   owner: ThreadID;
+  cause?: { thread: ThreadID; role: "worker" | "reviewer" };
   base: string;
   attempt: number;
   reason:
@@ -192,9 +194,27 @@ type RunAction =
   | "record-merge"
   | "record-insight"
   | "reload";
-type LifecycleExit =
-  { action: RunAction; when: string } | { event: string; when: string };
+
+/** Read the retained worker checkpoint, or the run itself when none is retained. */
+export function runCheckpoint(run: Run | undefined): Run | undefined {
+  if (!run) return undefined;
+  switch (run.kind) {
+    case "blocked":
+      return run.repair ?? run.checkpoint ?? run;
+    case "parked":
+      return run.repair;
+    case "uncertain":
+      return run.checkpoint ?? run;
+    default:
+      return run;
+  }
+}
+
+type LifecycleExit = (
+  { action: RunAction; when: string } | { event: string; when: string }
+) & { actor: Actor };
 type LifecycleStop = {
+  actor: Actor;
   trigger: "stopped" | "interrupted" | "activity" | "provider";
   reasons: readonly [StopIncident["reason"], ...StopIncident["reason"][]];
   recovery: StopIncident["recovery"];
@@ -205,6 +225,7 @@ type LifecycleStop = {
   matches?: (run: Run, reason?: StopIncident["reason"]) => boolean;
 };
 type LifecycleKind = {
+  actor: Actor;
   actions: readonly RunAction[];
   blocks: readonly ("resume" | "retry-setup" | "reconcile" | "dispatch")[];
   repairBlocks?: readonly "dispatch"[];
@@ -216,13 +237,19 @@ type LifecycleKind = {
 /** Declared lifecycle rules. Conditions describe evidence, never grant authority. */
 export const runLifecycle = {
   preparing: {
+    actor: "computer",
     actions: ["retry-setup"],
     blocks: ["resume", "reconcile"],
     exits: [
-      { event: "setup-finished", when: "the owned setup process finishes" },
+      {
+        event: "setup-finished",
+        when: "the owned setup process finishes",
+        actor: "computer",
+      },
     ],
     stops: {
       interrupted: {
+        actor: "foreman",
         trigger: "interrupted",
         reasons: ["preparation-interrupted"],
         recovery: "retry-setup",
@@ -230,17 +257,20 @@ export const runLifecycle = {
           {
             action: "retry-setup",
             when: "the saved setup process has stopped",
+            actor: "foreman",
           },
         ],
       },
     },
   },
   "preparation-failed": {
+    actor: "computer",
     actions: ["retry-setup"],
     blocks: ["resume", "reconcile"],
     exits: [],
     stops: {
       failed: {
+        actor: "foreman",
         trigger: "stopped",
         reasons: ["preparation-failed"],
         recovery: "retry-setup",
@@ -248,22 +278,26 @@ export const runLifecycle = {
           {
             action: "retry-setup",
             when: "the saved setup process has stopped",
+            actor: "foreman",
           },
         ],
       },
     },
   },
   creating: {
+    actor: "computer",
     actions: ["retry-create"],
     blocks: ["resume", "retry-setup", "reconcile"],
     exits: [
       {
         event: "created",
         when: "the original create call returns its thread identity",
+        actor: "computer",
       },
     ],
     stops: {
       unknown: {
+        actor: "foreman",
         trigger: "interrupted",
         reasons: ["creation-unknown"],
         recovery: "inspect",
@@ -271,22 +305,26 @@ export const runLifecycle = {
           {
             action: "retry-create",
             when: "the owner proves no thread exists and supplies the exact incident and decision",
+            actor: "foreman",
           },
         ],
       },
     },
   },
   running: {
+    actor: "model",
     actions: [],
     blocks: ["resume", "dispatch"],
     exits: [
       {
         event: "accepted",
         when: "the candidate passes its pinned gates and any required review",
+        actor: "computer",
       },
     ],
     stops: {
       workerDelivery: {
+        actor: "computer",
         trigger: "interrupted",
         reasons: ["delivery-unknown"],
         recovery: "inspect",
@@ -298,10 +336,12 @@ export const runLifecycle = {
           {
             event: "delivery-recovered",
             when: "a complete keyed transcript lookup proves presence or permits one reserved repeat",
+            actor: "computer",
           },
         ],
       },
       workerDeliveryLegacy: {
+        actor: "foreman",
         trigger: "interrupted",
         reasons: ["delivery-unknown"],
         recovery: "inspect",
@@ -314,6 +354,7 @@ export const runLifecycle = {
           "No saved assignment key; manual delivery inspection cannot authorize a factory retry.",
       },
       reviewerDelivery: {
+        actor: "computer",
         trigger: "interrupted",
         reasons: ["delivery-unknown"],
         recovery: "inspect",
@@ -325,10 +366,12 @@ export const runLifecycle = {
           {
             event: "delivery-recovered",
             when: "a complete keyed transcript lookup proves presence or permits one reserved repeat",
+            actor: "computer",
           },
         ],
       },
       reviewerDeliveryLegacy: {
+        actor: "foreman",
         trigger: "interrupted",
         reasons: ["delivery-unknown"],
         recovery: "inspect",
@@ -340,6 +383,7 @@ export const runLifecycle = {
         foremanOnly: "No saved review assignment key; manual inspection only.",
       },
       reviewerCreation: {
+        actor: "foreman",
         trigger: "interrupted",
         reasons: ["creation-unknown"],
         recovery: "inspect",
@@ -350,6 +394,7 @@ export const runLifecycle = {
           "The host cannot look up an ambiguous reviewer creation; retry-create admits only worker creation.",
       },
       reviewerError: {
+        actor: "foreman",
         trigger: "activity",
         activity: "error",
         reasons: ["worker-error"],
@@ -358,10 +403,12 @@ export const runLifecycle = {
           {
             event: "review-recovered",
             when: "the same reviewer is observed idle or running",
+            actor: "computer",
           },
         ],
       },
       reviewerApproval: {
+        actor: "operator",
         trigger: "activity",
         activity: "awaiting-approval",
         reasons: ["approval-required"],
@@ -370,10 +417,12 @@ export const runLifecycle = {
           {
             event: "review-recovered",
             when: "the same reviewer is observed idle or running",
+            actor: "computer",
           },
         ],
       },
       providerLimit: {
+        actor: "computer",
         trigger: "provider",
         reasons: ["provider-limit"],
         recovery: "wait",
@@ -381,28 +430,34 @@ export const runLifecycle = {
           {
             event: "provider-continuation-sent",
             when: "connected owner reaches the saved reset or 30-minute fallback, or observes idle/running before the first continuation",
+            actor: "computer",
           },
           {
             event: "provider-recovered",
             when: "after any reserved continuation the same thread is observed idle or running",
+            actor: "computer",
           },
           {
             event: "review-fallback-creating",
             when: "a pinned valid reviewer fallback exists and has not been used; workers keep waiting",
+            actor: "computer",
           },
           {
             event: "blocked",
             when: "the worker reports a generic error or approval request instead of a provider limit",
+            actor: "computer",
           },
           {
             event: "review-stopped",
             when: "the reviewer reports a generic error or approval request instead of a provider limit",
+            actor: "computer",
           },
         ],
       },
     },
   },
   blocked: {
+    actor: "foreman",
     actions: ["resume", "record-landing", "reload"],
     blocks: [],
     repairBlocks: ["dispatch"],
@@ -410,6 +465,7 @@ export const runLifecycle = {
     reasonOverride: true,
     stops: {
       briefIncomplete: {
+        actor: "foreman",
         trigger: "stopped",
         reasons: ["brief-incomplete"],
         recovery: "inspect",
@@ -421,26 +477,31 @@ export const runLifecycle = {
           {
             action: "reload",
             when: "the owner fixes the queue or definition, or records a done dependency's missing evidence with record-insight, then reloads; the ticket must remain in the queue and dispatch rechecks the current base",
+            actor: "foreman",
           },
         ],
       },
       repair: {
         trigger: "stopped",
         reasons: ["verification-rejected"],
+        actor: "foreman",
         recovery: "resume",
         matches: (run) => run.kind === "blocked" && !!run.repair,
         exits: [
           {
             action: "resume",
             when: "the exact incident, owner decision and idle clean unchanged original worker checkpoint validate",
+            actor: "foreman",
           },
           {
             action: "record-landing",
             when: "the exact incident and upstream patch and merge proofs validate",
+            actor: "foreman",
           },
         ],
       },
       checkpoint: {
+        actor: "foreman",
         trigger: "stopped",
         reasons: ["worker-blocked", "worker-error", "approval-required"],
         recovery: "resume",
@@ -449,18 +510,22 @@ export const runLifecycle = {
           {
             action: "resume",
             when: "the exact incident, owner decision and idle clean unchanged original worker checkpoint validate",
+            actor: "foreman",
           },
           {
             action: "record-landing",
             when: "the exact incident and upstream patch and merge proofs validate",
+            actor: "foreman",
           },
           {
             event: "stop-recorded",
             when: "a connected owner observes a provider limit for a saved worker-error checkpoint and no other active work exists",
+            actor: "computer",
           },
         ],
       },
       targetChanged: {
+        actor: "foreman",
         trigger: "stopped",
         reasons: ["target-changed"],
         recovery: "inspect",
@@ -470,10 +535,12 @@ export const runLifecycle = {
           {
             action: "record-landing",
             when: "durable incident base and attempt, original thread and registered worktree prove an externally landed candidate, including multi-commit patch proof",
+            actor: "foreman",
           },
         ],
       },
       reviewIdentityChanged: {
+        actor: "foreman",
         trigger: "stopped",
         reasons: ["review-identity-changed"],
         recovery: "inspect",
@@ -485,10 +552,12 @@ export const runLifecycle = {
           {
             action: "record-landing",
             when: "durable incident base and attempt, original thread and registered worktree prove an externally landed candidate, including multi-commit patch proof",
+            actor: "foreman",
           },
         ],
       },
       uncheckpointed: {
+        actor: "foreman",
         trigger: "stopped",
         reasons: ["worker-blocked"],
         recovery: "inspect",
@@ -497,14 +566,17 @@ export const runLifecycle = {
           {
             action: "record-landing",
             when: "durable incident base and attempt, original thread and registered worktree prove an externally landed candidate, including multi-commit patch proof",
+            actor: "foreman",
           },
           {
             event: "stop-recorded",
             when: "matching legacy report and durable events reconstruct the original checkpoint before admission",
+            actor: "computer",
           },
         ],
       },
       withoutWorker: {
+        actor: "foreman",
         trigger: "stopped",
         reasons: ["worker-blocked"],
         recovery: "inspect",
@@ -515,11 +587,13 @@ export const runLifecycle = {
     },
   },
   parked: {
+    actor: "operator",
     actions: ["resume"],
     blocks: [],
     exits: [],
     stops: {
       repair: {
+        actor: "operator",
         trigger: "stopped",
         reasons: ["verification-rejected"],
         recovery: "resume",
@@ -527,17 +601,20 @@ export const runLifecycle = {
           {
             action: "resume",
             when: "the exact incident, operator decision and idle clean original worker validate with no other active work; the clean integration base is unchanged or a descendant, repinned on resume with rebase feedback",
+            actor: "operator",
           },
         ],
       },
     },
   },
   uncertain: {
+    actor: "foreman",
     actions: [],
     blocks: ["resume", "retry-setup", "reconcile"],
     exits: [],
     stops: {
       keyed: {
+        actor: "computer",
         trigger: "stopped",
         reasons: ["delivery-unknown"],
         recovery: "inspect",
@@ -547,10 +624,12 @@ export const runLifecycle = {
           {
             event: "delivery-recovered",
             when: "a complete keyed transcript lookup proves presence or permits one reserved repeat",
+            actor: "computer",
           },
         ],
       },
       legacy: {
+        actor: "foreman",
         trigger: "stopped",
         reasons: ["delivery-unknown"],
         recovery: "inspect",
@@ -561,9 +640,21 @@ export const runLifecycle = {
     },
   },
   done: {
+    actor: "computer",
     actions: ["record-merge", "record-insight"],
     blocks: [],
-    exits: [],
+    exits: [
+      {
+        action: "record-merge",
+        when: "the owner supplies verified upstream merge evidence",
+        actor: "foreman",
+      },
+      {
+        action: "record-insight",
+        when: "the owner supplies the missing dependency evidence",
+        actor: "foreman",
+      },
+    ],
     stops: {},
   },
 } as const satisfies Record<Run["kind"], LifecycleKind>;
@@ -641,6 +732,7 @@ export function lifecycleStatus() {
     Object.entries(runLifecycle).map(([kind, entry]) => [
       kind,
       {
+        actor: entry.actor,
         actions: entry.actions,
         blocks: entry.blocks,
         ...("repairBlocks" in entry
@@ -1009,9 +1101,22 @@ function validateProviderIncident(
     throw new Error(`Invalid provider limit ${id}`);
 }
 
+function validateIncidentCause(id: string, value: unknown) {
+  if (value !== undefined) {
+    const cause = record(value);
+    if (
+      typeof cause.thread !== "string" ||
+      /^T-[\w-]+$/.exec(cause.thread)?.[0] !== cause.thread ||
+      !["worker", "reviewer"].includes(String(cause.role))
+    )
+      throw new Error(`Invalid factory incident cause ${id}`);
+  }
+}
+
 function validateIncident(id: string, value: unknown) {
   if (value === undefined) return;
   const incident = record(value);
+  validateIncidentCause(id, incident.cause);
   validateProviderIncident(id, incident);
   const enums = {
     delivery: ["queued", "sent"],
@@ -1339,7 +1444,7 @@ export function factoryEvents(directory: string, after = 0, limit = 100) {
   }
 }
 
-/** Read curated SQLite tickets and state together; never import legacy files. @throws On invalid storage. */
+/** Read curated SQLite tickets, state and review events in one snapshot; never import legacy files. @throws On invalid storage. */
 export function factoryRecords(directory: string) {
   if (!existsSync(join(directory, "state.sqlite"))) return null;
   const db = database(directory, true);
@@ -1361,7 +1466,12 @@ export function factoryRecords(directory: string) {
             ...ticketIntake(task),
           };
         });
-      return { state, tickets };
+      const reviews = db
+        .query<Pick<Event, "ticket" | "action" | "detail">, []>(
+          "SELECT ticket, action, detail FROM events WHERE action IN ('review-created', 'review-verdict') ORDER BY id",
+        )
+        .all();
+      return { state, tickets, reviews };
     })();
   } finally {
     db.close();

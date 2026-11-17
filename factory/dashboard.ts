@@ -7,9 +7,12 @@ import { effectiveDefinition } from "./native";
 import {
   factoryEvents,
   factoryRecords,
+  lifecycleStatus,
+  runCheckpoint,
   taskSteps,
   type Run,
 } from "./persistence";
+import { pipelineSteps } from "./pipeline";
 
 export type DashboardEvent = {
   id: number;
@@ -40,15 +43,18 @@ const THREAD_ACTIONS = new Set([
   "provider-recovered",
 ]);
 
-function eventDetail(action: string, detail: string): Record<string, unknown> {
-  if (action === "accepted") return { revision: detail };
-  if (THREAD_ACTIONS.has(action)) return { thread: detail };
-  if (!DETAIL_ACTIONS.has(action)) return {};
+function jsonDetail(detail: string): Record<string, unknown> {
   try {
     return record(JSON.parse(detail));
   } catch {
     return {};
   }
+}
+
+function eventDetail(action: string, detail: string): Record<string, unknown> {
+  if (action === "accepted") return { revision: detail };
+  if (THREAD_ACTIONS.has(action)) return { thread: detail };
+  return DETAIL_ACTIONS.has(action) ? jsonDetail(detail) : {};
 }
 
 function matchingString(value: unknown, pattern: RegExp): string | undefined {
@@ -164,9 +170,9 @@ function string(value: unknown): string {
 
 function reference(value: unknown, pattern: RegExp): string | null {
   if (value === null) return null;
-  if (typeof value !== "string" || !pattern.test(value))
-    throw new Error("Invalid task");
-  return value;
+  const matched = matchingString(value, pattern);
+  if (!matched) throw new Error("Invalid task");
+  return matched;
 }
 
 function activity(
@@ -230,6 +236,50 @@ function reviewFor(id: string, run: Run | undefined) {
       ? review.revision === run.revision
       : review.attempt === run.attempt && review.base === run.base;
   return matches ? review : null;
+}
+
+function matchingRejection(
+  detail: Record<string, unknown>,
+  review: Record<string, unknown> | undefined,
+) {
+  const thread = matchingString(review?.thread, /^T-[\w-]+$/);
+  if (
+    detail.kind !== "issues" ||
+    !thread ||
+    !review ||
+    !["ticket", "attempt", "revision", "base", "stage"].every(
+      (key) => detail[key] === review[key],
+    ) ||
+    !Number.isSafeInteger(detail.attempt) ||
+    Number(detail.attempt) < 1
+  )
+    return null;
+  return { attempt: Number(detail.attempt), thread };
+}
+
+function rejectedReviews(
+  events: NonNullable<ReturnType<typeof factoryRecords>>["reviews"],
+) {
+  const reviews = new Map<string, Record<string, unknown>>();
+  const rejected = new Map<
+    string,
+    Map<string, { attempt: number; thread: string }>
+  >();
+  for (const event of events) {
+    const detail = jsonDetail(event.detail);
+    if (event.action === "review-created") {
+      reviews.set(event.ticket, detail);
+      continue;
+    }
+    const rejection = matchingRejection(detail, reviews.get(event.ticket));
+    if (!rejection) continue;
+    const rows = rejected.get(event.ticket) ?? new Map();
+    rows.set(`${rejection.attempt}/${rejection.thread}`, rejection);
+    rejected.set(event.ticket, rows);
+  }
+  return new Map(
+    [...rejected].map(([ticket, rows]) => [ticket, [...rows.values()]]),
+  );
 }
 
 function durableTask(id: string, steps: string[], run: Run | undefined) {
@@ -315,6 +365,27 @@ function projectMerge(run: Run | undefined, repository: string | null) {
   };
 }
 
+function projectStop(incident: Run["incident"]) {
+  if (!incident) return null;
+  return {
+    reason: incident.reason,
+    role: incident.cause?.role ?? null,
+    thread: reference(incident.cause?.thread ?? null, /^T-[\w-]+$/),
+  };
+}
+
+function projectRunLinks(id: string, run: Run | undefined) {
+  const checkpoint = runCheckpoint(run);
+  const review = reviewFor(id, checkpoint);
+  return {
+    reviewerThread: reference(review?.thread ?? null, /^T-[\w-]+$/),
+    stop: projectStop(run?.incident),
+    parked: run?.kind === "parked",
+    // The owning worker's attempt; a repair after rejection raises it.
+    attempt: attemptOf(checkpoint),
+  };
+}
+
 function projectTask(
   id: string,
   steps: string[],
@@ -325,6 +396,7 @@ function projectTask(
 ) {
   const row = durableTask(id, steps, run);
   const review = reviewFor(id, run);
+  const workerThread = row.thread;
   const pending = row.status !== "accepted";
   let gate = null;
   let reviewEvidence = null;
@@ -350,9 +422,9 @@ function projectTask(
   applyObservation(row, observed, fresh);
   return {
     ...row,
+    workerThread,
+    ...projectRunLinks(id, run),
     merge: projectMerge(run, repository),
-    // The owning worker's current attempt; a repair after rejection raises it.
-    attempt: attemptOf(run),
     evidence: {
       acceptance: run?.kind === "done" ? { revision: row.revision } : null,
       gate,
@@ -455,6 +527,8 @@ export function startDashboard({ root, port }: { root: string; port: number }) {
         await readObservation(directory);
       const empty = {
         project: basename(root),
+        pipelineSteps,
+        lifecycle: lifecycleStatus(),
         target: "",
         observedAt: snapshot?.observedAt ?? null,
         observations,
@@ -467,13 +541,14 @@ export function startDashboard({ root, port }: { root: string; port: number }) {
         const records = factoryRecords(join(directory, "factory"));
         if (!records)
           return Response.json({ ...empty, durable: "missing" }, { headers });
-        const { state, tickets } = records;
+        const { state, tickets, reviews } = records;
         const steps = new Map(tickets.map((task) => [task.id, task.steps]));
         const observed = new Map(
           snapshot?.tasks.map((task) => [task.id, task]),
         );
         const publicTickets = new Map(tickets.map((task) => [task.id, task]));
         const repository = githubRepository(root);
+        const rejections = rejectedReviews(reviews);
         const tasks = [
           ...new Set([...steps.keys(), ...Object.keys(state.runs)]),
         ].map((id) => {
@@ -488,7 +563,11 @@ export function startDashboard({ root, port }: { root: string; port: number }) {
           );
           if (!Object.hasOwn(state.runs, id) && ticket?.intake === "planned")
             row.status = "planned";
-          return { ...row, outcome: ticket?.outcome ?? null };
+          return {
+            ...row,
+            outcome: ticket?.outcome ?? null,
+            rejections: rejections.get(id) ?? [],
+          };
         });
         const counts = {
           planned: tasks.filter((task) => task.status === "planned").length,

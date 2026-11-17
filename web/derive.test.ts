@@ -1,10 +1,17 @@
 import { expect, test } from "bun:test";
-import { derive, eventBatch, eventRows, type Feed, type Task } from "./derive";
+import {
+  derive,
+  eventBatch,
+  eventRows,
+  type Feed,
+  type FeedTask,
+} from "./derive";
 import { eventsAt, feedAt, FRAMES } from "./replay";
+import { pipelineSteps } from "../factory/pipeline";
 
 const NOW = Date.parse("2026-11-13T12:00:10Z");
 
-function feed(statuses: Task["status"][], extra: Partial<Feed> = {}): Feed {
+function feed(statuses: FeedTask["status"][], extra: Partial<Feed> = {}): Feed {
   return {
     project: "p",
     target: "main",
@@ -22,6 +29,66 @@ function feed(statuses: Task["status"][], extra: Partial<Feed> = {}): Feed {
     ...extra,
   };
 }
+
+test("stage actors and links follow the feed and the recorded failed role", () => {
+  const raw = feed(["blocked"], { pipelineSteps });
+  raw.tasks[0] = {
+    ...raw.tasks[0]!,
+    workerThread: "T-builder",
+    reviewerThread: "T-current",
+    stop: { reason: "worker-error", role: "reviewer", thread: "T-failed" },
+    rejections: [{ attempt: 1, thread: "T-earlier" }],
+  };
+  const ticket = derive(null, raw, NOW).tickets[0]!;
+  expect(ticket.steps).toEqual([
+    "done",
+    "done",
+    "done",
+    "done",
+    "done",
+    "fail",
+    "",
+  ]);
+  expect(ticket.stageLinks).toEqual([
+    null,
+    null,
+    "https://ampcode.com/threads/T-builder",
+    "https://ampcode.com/threads/T-builder",
+    null,
+    "https://ampcode.com/threads/T-failed",
+    null,
+  ]);
+  expect(ticket.rejections).toEqual([
+    { attempt: 1, href: "https://ampcode.com/threads/T-earlier" },
+  ]);
+  expect(
+    derive(null, { ...raw, pipelineSteps: pipelineSteps.slice(0, 3) }, NOW)
+      .tickets[0]!.steps,
+  ).toHaveLength(3);
+  for (const reason of ["target-changed", "review-identity-changed"] as const) {
+    const unknown = derive(
+      null,
+      {
+        ...raw,
+        tasks: [
+          { ...raw.tasks[0]!, stop: { reason, role: null, thread: null } },
+        ],
+      },
+      NOW,
+    ).tickets[0]!;
+    expect(unknown.stageLinks[unknown.steps.indexOf("fail")]).toBeNull();
+    expect(unknown.stageLinks[2]).toBe("https://ampcode.com/threads/T-builder");
+  }
+  for (const thread of ["T-escape\n", "https://evil.test", "T-../escape"]) {
+    raw.tasks[0]!.stop!.thread = thread;
+    raw.tasks[0]!.workerThread = thread;
+    raw.tasks[0]!.rejections![0]!.thread = thread;
+    const invalid = derive(null, raw, NOW).tickets[0]!;
+    expect(invalid.stageLinks.filter(Boolean)).toEqual([]);
+    expect(invalid.stop?.href).toBeNull();
+    expect(invalid.rejections[0]!.href).toBeNull();
+  }
+});
 
 test("ticket links are built only from validated thread and merge parts", () => {
   const raw = feed(["accepted"]);
@@ -183,7 +250,7 @@ test("the first poll replays nothing and reports feed health", () => {
 });
 
 test("the queue window follows the active ticket", () => {
-  const statuses: Task["status"][] = Array.from({ length: 14 }, (_, i) =>
+  const statuses: FeedTask["status"][] = Array.from({ length: 14 }, (_, i) =>
     i < 8 ? "accepted" : i === 8 ? "working" : "queued",
   );
   const view = derive(null, feed(statuses), NOW);
@@ -306,14 +373,37 @@ test("a pending review is never drawn blocked, and a vanished review is a reject
   expect(derive(landed, landed, NOW).reviewFinished).toBe(null);
 });
 
-test("the recorded replay draws one reviewed landing, one rejection and one block", () => {
+test("the recorded replay draws a reviewed landing, rejections, a stopped reviewer and parking", () => {
   const views = FRAMES.map((_, n) =>
     derive(n ? feedAt(n - 1) : null, feedAt(n), NOW),
   );
   const polls = (hit: (view: (typeof views)[number]) => unknown) =>
     views.flatMap((view, n) => (hit(view) ? [n] : []));
   expect(polls((view) => view.landed && view.reviewed)).toEqual([6]);
-  expect(polls((view) => view.backRow)).toEqual([3, 9]); // review vanished, then a plain block
+  expect(polls((view) => view.backRow)).toEqual([3, 9, 13, 14]);
+  expect(views[13]!.tickets.at(-1)?.stop?.href).toBe(
+    "https://ampcode.com/threads/T-replay-review-2",
+  );
+  expect(views[14]!.tickets.at(-1)?.parked).toBe(true);
+  expect(feedAt(13).tasks.at(-1)?.rejections).toEqual([
+    { attempt: 1, thread: "T-replay-review-1" },
+  ]);
+  expect(feedAt(14).tasks.at(-1)).toMatchObject({
+    attempt: 4,
+    reviewerThread: null,
+    evidence: { review: null },
+    stop: {
+      reason: "verification-rejected",
+      role: "reviewer",
+      thread: "T-replay-review-4",
+    },
+    rejections: [
+      { attempt: 1, thread: "T-replay-review-1" },
+      { attempt: 2, thread: "T-replay-review-2" },
+      { attempt: 3, thread: "T-replay-review-3" },
+      { attempt: 4, thread: "T-replay-review-4" },
+    ],
+  });
   expect(views[4]!.next).toBe("BACKUP-ADOPTION-TICKET1, WORKING · ATTEMPT 6");
   expect(views[4]!.reviewing).toBe(true);
   expect(views[9]!.tally).toBe("3 landed · 0 queued · 1 blocked");

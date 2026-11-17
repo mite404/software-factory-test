@@ -167,6 +167,7 @@ async function preparationFixture(
   const worktree = join(root, ".git/factory/worktrees/A");
   let creates = 0;
   let sends = 0;
+  const notices: string[] = [];
   const ready = async () =>
     expect(await readFile(join(worktree, "node_modules/ready"), "utf8")).toBe(
       "prepared",
@@ -177,8 +178,11 @@ async function preparationFixture(
       creates++;
       return "T-prepared";
     },
-    async send(id) {
-      if (id === "T-owner") return;
+    async send(id, message) {
+      if (id === "T-owner") {
+        notices.push(message);
+        return;
+      }
       await ready();
       sends++;
     },
@@ -215,6 +219,7 @@ async function preparationFixture(
     factory,
     git,
     notifications,
+    notices,
     counts: () => ({ creates, sends }),
   };
 }
@@ -1284,6 +1289,9 @@ async function externalLandingFixture(targetChanged = false) {
       reason: "target-changed",
       recovery: "inspect",
     });
+    expect(blocked.incident.cause).toBeUndefined();
+    expect(f.notices.at(-1)).toContain("Reason: target-changed.");
+    expect(f.notices.at(-1)).not.toContain("Causing");
   } else {
     expect(blocked.checkpoint).toMatchObject({
       base: running.base,
@@ -1800,7 +1808,10 @@ test.each([
     await engine.tick("reconcile");
     f.host.state = async () => activity;
     const stopped = (await engine.tick("reconcile")).runs.A!;
-    expect(stopped).toMatchObject({ kind: "blocked", incident: { reason } });
+    expect(stopped).toMatchObject({
+      kind: "blocked",
+      incident: { reason, cause: { role: "worker", thread: "T-prepared" } },
+    });
     const db = new Database(join(engine.directory, "state.sqlite"), {
       readonly: true,
     });

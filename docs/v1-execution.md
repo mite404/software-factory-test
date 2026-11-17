@@ -182,10 +182,12 @@ proof at a real provider limit happens.
 F009 landed at attempt two: the first cold review found that a parked run could not resume once an
 independent ticket landed. F010 landed at attempt two: the first review found that an empty
 dependency insight left no real exit, that reload released refusals for any caller, and that any
-Markdown path counted as the ticket file. The operator set the order after them: F011, then F037
-(two worker lanes), then F014, then F035, then F012 and F017 as their dependencies allow, then F023,
-then F022, F025, F029, F026, F027 and F028 last. All except F037 are placed. The factory runs one
-ticket at a time from merged main.
+Markdown path counted as the ticket file. F011 landed outside the factory with the operator's
+approval: a Foreman commit to the clone blocked attempt 2 in review, and the Foreman repaired the
+review's two findings on the integration branch, so its fresh-review box stays open. The operator
+set the order after them: F011, then F037 (two worker lanes), then F014, then F035, then F012 and
+F017 as their dependencies allow, then F023, then F022, F025, F029, F026, F027 and F028 last. All
+except F037 are placed. The factory runs one ticket at a time from merged main.
 
 v1-ticket10 keeps the recovery of outages that still happen, and v1-ticket8 keeps exclusive
 ownership across orbs. Keep preserved backup owners until required evidence preservation is

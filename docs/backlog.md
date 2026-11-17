@@ -8,7 +8,7 @@ status come from the factory database, shown on the dashboard; this file is the 
 User stories are in [stories.md](stories.md), requirements in the [PRD](prd.md), and dependencies
 and admission rules in [v1-execution.md](v1-execution.md).
 
-## Landed with open boxes (3)
+## Landed with open boxes (4)
 
 Merged, but at least one box, usually a live proof, is still open.
 
@@ -17,14 +17,14 @@ Merged, but at least one box, usually a live proof, is still open.
 | [foreman-watchdog-ticket1](feats/foreman-watchdog/foreman-watchdog-ticket1.md) | Durable Foreman wake-up and incident identity | 4/5       |
 | [foreman-watchdog-ticket3](feats/foreman-watchdog/foreman-watchdog-ticket3.md) | Outside-orb wake-up and alert delivery        | 2/4       |
 | [F003-provider-limit-resume](feats/durability/F003-provider-limit-resume.md)   | Same threads resume after a provider limit    | 5/6       |
+| [F011-step-actor-labels](feats/lifecycle-view/F011-step-actor-labels.md)       | Each step and exit names who performs it      | 5/6       |
 
-## Not started (39)
+## Not started (38)
 
 In dispatch order.
 
 | Ticket                                                                                   | Outcome                                                | Done when |
 | ---------------------------------------------------------------------------------------- | ------------------------------------------------------ | --------- |
-| [F011-step-actor-labels](feats/lifecycle-view/F011-step-actor-labels.md)                 | Each step and exit names who performs it               | 0/6       |
 | [F014-lifecycle-stages](feats/lifecycle-view/F014-lifecycle-stages.md)                   | One named stage and actor for every run                | 0/6       |
 | [F012-lifecycle-graph-view](feats/lifecycle-view/F012-lifecycle-graph-view.md)           | Lifecycle drawn with tickets on their states           | 0/6       |
 | [F017-remove-public-status](feats/lifecycle-view/F017-remove-public-status.md)           | Feed carries the stage only                            | 0/3       |

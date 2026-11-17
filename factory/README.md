@@ -226,6 +226,33 @@ Exit conditions describe required evidence; they do not grant permission or bypa
 `record-landing` includes checkpoint-less target changes and multi-commit candidates.
 `record-merge` records an already done ticket without reopening it.
 
+Every kind, stop and exit declares one `actor`: `computer`, `model`, `foreman` or `operator`.
+Actors describe responsibility, not authorization. `parked` and its resume exit require the
+operator's decision; `brief-incomplete` and `record-insight` belong to the Foreman.
+The walking test checks actor coverage, including exitless stops and owner actions.
+Status and the dashboard also publish the ordered `pipelineSteps` from `pipeline.ts`.
+
+| Pipeline step | Actor |
+| --- | --- |
+| worktree | computer |
+| setup | computer |
+| builder thread | model |
+| report.json | model |
+| gate | computer |
+| cold review | model |
+| ff-merge | computer |
+
+New incidents record `cause` with the known causing thread ID and its `worker` or `reviewer` role.
+Stops before thread creation, target changes and review identity changes have no causing thread.
+An identity mismatch alone does not establish which thread caused it.
+Legacy incidents remain unchanged and show no failed-thread link. Notices name the saved role,
+never a role inferred while reading the stop.
+The read-only dashboard retains `thread` and adds separate `workerThread`, `reviewerThread`,
+`stop`, `parked` and `rejections` fields. Rejections pair the recorded review creation with its
+matching issues verdict in event order. Only attempt numbers and validated thread IDs are public;
+briefs, report paths and findings stay private. Stage badges show actors and link to their own
+threads; earlier rejections link to their reviewers.
+
 The walking test pins five exitless stops by name: `blocked.withoutWorker`,
 `running.reviewerCreation`, `running.reviewerDeliveryLegacy`, `running.workerDeliveryLegacy` and
 `uncertain.legacy`. They stay parked for Foreman inspection because the original worker identity,

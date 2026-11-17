@@ -29,15 +29,7 @@ const stage = all("#stage")[0]!;
 const builders = all(".builder");
 const slots = all(".slot");
 const dots = all(".landed");
-const paintKit = mount(stage, [
-  "worktree",
-  "setup",
-  "builder thread",
-  "report.json",
-  "gate · 10 min cap",
-  "cold review",
-  "ff-merge",
-]);
+const paintKit = mount(stage);
 
 const DEMO_STEPS = [
   ["add steps to queue entry", "pass steps through feed", "render step chips"],

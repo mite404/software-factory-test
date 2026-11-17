@@ -3,7 +3,8 @@
 // dogfood factory's feed on 2026-11-13 and 14, then trimmed to the fields the page reads.
 // Run: `amp orb services ensure`, or `PORT=4311 bun web/replay.ts`.
 import type { DashboardEvent } from "../factory/dashboard";
-import type { Feed, Task } from "./derive";
+import type { Feed, FeedTask } from "./derive";
+import { pipelineSteps } from "../factory/pipeline";
 
 // Illustrative event rows alongside the recorded status polls, not a private log export.
 const EVENTS: DashboardEvent[] = [
@@ -137,7 +138,13 @@ const TICKETS = [
 ];
 
 // One poll each: the newest ticket in the feed, its status, and its pending review attempt.
-type Frame = { ticket: number; status: Task["status"]; pending?: number };
+type Frame = {
+  ticket: number;
+  status: FeedTask["status"];
+  pending?: number;
+  stopped?: boolean;
+  parked?: boolean;
+};
 
 export const FRAMES: Frame[] = [
   { ticket: 2, status: "working" },
@@ -153,7 +160,48 @@ export const FRAMES: Frame[] = [
   { ticket: 3, status: "idle" }, // 01:47:42 resumed by the foreman
   { ticket: 3, status: "unknown" },
   { ticket: 3, status: "working" },
+  { ticket: 3, status: "blocked", pending: 2, stopped: true },
+  { ticket: 3, status: "blocked", stopped: true, parked: true },
 ];
+
+const STOPPED_REVIEW = {
+  stop: {
+    reason: "worker-error",
+    role: "reviewer",
+    thread: "T-replay-review-2",
+  },
+  rejections: [{ attempt: 1, thread: "T-replay-review-1" }],
+} satisfies Partial<FeedTask>;
+
+const PARKED_REVIEW = {
+  attempt: 4,
+  reviewerThread: null,
+  evidence: { review: null },
+  stop: {
+    reason: "verification-rejected",
+    role: "reviewer",
+    thread: "T-replay-review-4",
+  },
+  rejections: [
+    { attempt: 1, thread: "T-replay-review-1" },
+    { attempt: 2, thread: "T-replay-review-2" },
+    { attempt: 3, thread: "T-replay-review-3" },
+    { attempt: 4, thread: "T-replay-review-4" },
+  ],
+} satisfies Partial<FeedTask>;
+
+function reviewFrame(
+  attempt: number | null | undefined,
+  landed: boolean,
+  revision: string | null,
+) {
+  return {
+    reviewerThread: attempt ? `T-replay-review-${attempt}` : null,
+    attempt: attempt ?? null,
+    evidence: { review: attempt ? { pending: !landed, attempt } : null },
+    revision: attempt || landed ? revision : null,
+  };
+}
 
 /**
  * The feed as the dashboard would serve it at one recorded poll.
@@ -167,19 +215,24 @@ export function feedAt(n: number): Feed {
     observedAt: new Date().toISOString(),
     enabled: true,
     fresh: true,
+    pipelineSteps,
     tasks: TICKETS.slice(0, frame.ticket + 1).map((ticket, i) => {
       const landed = i < frame.ticket || frame.status === "accepted";
       const attempt = landed ? ticket.attempt : frame.pending;
+      const stopped = !landed && frame.stopped;
       return {
         id: ticket.id,
         title: ticket.id,
         steps: ticket.steps,
         status: landed ? "accepted" : frame.status,
         thread: `T-replay-${i}`,
-        revision: attempt || landed ? ticket.revision : null,
+        workerThread: `T-replay-${i}`,
+        ...reviewFrame(attempt, landed, ticket.revision),
+        stop: null,
+        rejections: [],
+        ...(stopped ? (frame.parked ? PARKED_REVIEW : STOPPED_REVIEW) : {}),
+        parked: !landed && frame.parked === true,
         merge: landed ? ticket.merge : null,
-        attempt: attempt ?? null,
-        evidence: { review: attempt ? { pending: !landed, attempt } : null },
       };
     }),
   };

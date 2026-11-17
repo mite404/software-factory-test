@@ -27,6 +27,7 @@ test("events are cursor ordered, bounded, read-only and expose only validated re
     brief: "PRIVATE-EVENT-CANARY",
     path: "/private/worktree/report.json",
     verdict: "REJECT because private finding",
+    thread: "T-planted-verdict",
   };
   try {
     expect(await (await fetch(url)).json()).toEqual({
@@ -62,7 +63,17 @@ test("events are cursor ordered, bounded, read-only and expose only validated re
     );
     storage.event("A", "accepted", revision);
     storage.event("B", "sent", "T-worker");
-    storage.event("A", "review-verdict", secret.verdict);
+    storage.event(
+      "A",
+      "review-verdict",
+      JSON.stringify({
+        kind: "issues",
+        attempt: 2,
+        revision,
+        thread: secret.thread,
+        findings: [{ evidence: secret.verdict }],
+      }),
+    );
     storage.event("A", "review-sent", "not JSON PRIVATE-EVENT-CANARY");
     storage.close();
     const path = join(directory, "state.sqlite");

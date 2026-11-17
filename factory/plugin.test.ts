@@ -149,11 +149,12 @@ test("status exposes a compact static lifecycle with real control actions and no
     expect(Buffer.byteLength(projection)).toBeLessThan(10_000);
     expect(Object.keys(status.lifecycle)).toHaveLength(8);
     expect(status.lifecycle.parked.stops.repair.exits).toEqual([
-      { action: "resume", when: expect.any(String) },
+      { action: "resume", when: expect.any(String), actor: "operator" },
     ]);
     expect(status.lifecycle.creating.stops.unknown.exits).toContainEqual({
       action: "retry-create",
       when: expect.any(String),
+      actor: "foreman",
     });
     expect(status.lifecycle.blocked.stops.targetChanged.reasons).toContain(
       "target-changed",
@@ -161,6 +162,7 @@ test("status exposes a compact static lifecycle with real control actions and no
     expect(status.lifecycle.blocked.stops.targetChanged.exits).toContainEqual({
       action: "record-landing",
       when: expect.any(String),
+      actor: "foreman",
     });
     expect(status.lifecycle.done.actions).toEqual([
       "record-merge",

@@ -17,7 +17,7 @@ To use a dashboard running in this orb instead, start `bun factory/dashboard.ts`
 
 ## The contract with the factory
 
-- `Feed` and `Task` in `web/derive.ts` build on `DashboardSnapshot` from `factory/dashboard.ts`.
+- `Feed` and `FeedTask` in `web/derive.ts` build on `DashboardSnapshot` from `factory/dashboard.ts`.
   A feed change there fails `bun run typecheck` here.
 - `factory/` belongs to the factory thread. Ask for feed changes; do not edit it from here.
 - Draw only what the feed reports. Do not infer state the feed has no field for (for example a
