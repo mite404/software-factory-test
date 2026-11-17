@@ -22,10 +22,12 @@ import {
   assertControlCaller,
   effectiveConfiguration,
   createFactory,
+  statusSummary,
   tasks,
   type Bookkeeping,
   type NativeHost,
 } from "./native";
+import { observerInstructions } from "./watchdog";
 
 const controlActions = [
   "status",
@@ -72,8 +74,8 @@ function record(value: unknown): Record<string, unknown> | undefined {
 }
 
 function connectedTools(action: string, saved: State, ctx: PluginToolContext) {
+  assertControlCaller(saved, ctx.thread.id, action);
   if (action === "status") return undefined;
-  assertControlCaller(saved, ctx.thread.id);
   if (action === "start" && !ctx.tools)
     throw new Error(
       "Connected owner tools are required to install the watchdog",
@@ -84,6 +86,15 @@ function connectedTools(action: string, saved: State, ctx: PluginToolContext) {
   return action === "pause" && saved.monitor?.pendingThread === ctx.thread.id
     ? ctx.tools
     : undefined;
+}
+
+// The observer's reconcile replies carry only the summary, never full private state.
+function controlReply(state: State, caller: string) {
+  return JSON.stringify(
+    state.foreman?.observer?.thread === caller
+      ? statusSummary(state, Date.now())
+      : state,
+  );
 }
 
 function repairRequest(input: Record<string, unknown>) {
@@ -244,15 +255,20 @@ export default function registerFactory(
         instructions:
           role === "reviewer"
             ? "Independently review the named post-graft code artifact. Read only code, requirements, coordinator gate evidence, and the ce-code-review skill's SKILL.md and referenced files in the synced user skill caches. Do not implement or delegate. Write only the requested verdict report."
-            : "Implement the assigned factory ticket in its named local repository. Keep tool output concise.",
-        tools: [
-          "shell_command",
-          "shell_command_status",
-          "apply_patch",
-          "Read",
-          "send_thread_message",
-          "plugin__*",
-        ],
+            : role === "observer"
+              ? observerInstructions
+              : "Implement the assigned factory ticket in its named local repository. Keep tool output concise.",
+        tools:
+          role === "observer"
+            ? ["send_thread_message", "plugin__*"]
+            : [
+                "shell_command",
+                "shell_command_status",
+                "apply_patch",
+                "Read",
+                "send_thread_message",
+                "plugin__*",
+              ],
         features: [],
       });
       const thread = await agent.createThread({
@@ -430,14 +446,32 @@ export default function registerFactory(
   const suffix = createHash("sha256").update(root).digest("hex").slice(0, 8);
   const recordings = new Map<
     unknown,
-    (input: Record<string, unknown>, ctx: PluginToolContext) => Promise<State>
+    (input: Record<string, unknown>, ctx: PluginToolContext) => Promise<unknown>
   >([
+    [
+      "status-summary",
+      async (_input, ctx) => {
+        const state = factoryStatus(factory.directory);
+        assertControlCaller(state, ctx.thread.id, "status-summary");
+        return statusSummary(state, Date.now());
+      },
+    ],
     ["record-merge", (input, ctx) => factory.recordMerge(input, ctx.thread.id)],
     [
       "record-landing",
       (input, ctx) => factory.recordLanding(input, ctx.thread.id),
     ],
     ["note", (input, ctx) => factory.note(input.message, ctx.thread.id)],
+    [
+      "register-observer",
+      (_input, ctx) =>
+        factory.observer("register-observer", ctx.thread.id, ctx.tools),
+    ],
+    [
+      "remove-observer",
+      (_input, ctx) =>
+        factory.observer("remove-observer", ctx.thread.id, ctx.tools),
+    ],
     [
       "handoff",
       (input, ctx) =>
@@ -448,7 +482,7 @@ export default function registerFactory(
   ]);
   amp.registerTool({
     name: `factory_control_${suffix}`,
-    description: `Control the factory in ${root}. status is read-only and does not deliver notices or register schedules. reload validates the authored definition for future runs without executing commands or changing active pins; a connected owner also recovers its watchdog registration. message-foreman delivers message text from a registered worker or reviewer to the owning Foreman without granting control; delivery errors have unknown outcomes, so do not retry blindly. start requires explicit user authorization, permissions.execute=true and connected owner tools; it confirms its owned watchdog before dispatch and refuses unrelated schedules or second roots. pause persists a local stop before any remote check, including from non-owner threads that are neither workers, reviewers nor former Foremen; only the owner's connected turn clears its watchdog. reconcile observes persisted work, recovers its watchdog and delivers durable alerts only in the connected owner context, without granting permissions. Unknown alert sends are held, not retried. retry-setup explicitly reruns parked preparation in the same worktree before creating a worker. resume requires the owning Foreman, a blocked or parked ticket, its exact current incident ID from status, and a decision explaining the next repair; it queues the same worker without starting a paused factory or accepting code. Rejection at attempt four or later parks the ticket and alerts the operator while independent work continues. Duplicate or stale notices never authorize another checkpoint. retry-create requires the owning Foreman, a ticket parked in creating, its exact current incident ID and a decision recording that no thread was created; it repeats that one creation in place and never falls back to another executor. Runner and Orb threads are created after the tool call returns, so the returned status can still show creating; call status again. backup publishes private SQLite state and requires explicit user authorization and permissions.backup=true.`,
+    description: `Control the factory in ${root}. status is read-only and does not deliver notices or register schedules. status-summary is a small read-only per-run summary (kind, lane, attempt, stage, last progress, incident, review delivery, pending alerts) with no briefs, paths or thread content. status-summary also lists owner work due now with stable IDs. register-observer lets the connected owner create one observer thread (Claude Haiku at high effort) that receives watchdog wakes and suspicion nudges; the observer may call only reconcile and status-summary, and every other action refuses it. remove-observer clears its schedule and moves wakes back to the owner. reload validates the authored definition for future runs without executing commands or changing active pins; a connected owner also recovers its watchdog registration. message-foreman delivers message text from a registered worker or reviewer to the owning Foreman without granting control; delivery errors have unknown outcomes, so do not retry blindly. start requires explicit user authorization, permissions.execute=true and connected owner tools; it confirms its owned watchdog before dispatch and refuses unrelated schedules or second roots. pause persists a local stop before any remote check, including from non-owner threads that are neither workers, reviewers nor former Foremen; only the owner's connected turn clears its watchdog. reconcile observes persisted work, recovers its watchdog and delivers durable alerts only in the connected owner context, without granting permissions. Unknown alert sends are held, not retried. retry-setup explicitly reruns parked preparation in the same worktree before creating a worker. resume requires the owning Foreman, a blocked or parked ticket, its exact current incident ID from status, and a decision explaining the next repair; it queues the same worker without starting a paused factory or accepting code. Rejection at attempt four or later parks the ticket and alerts the operator while independent work continues. Duplicate or stale notices never authorize another checkpoint. retry-create requires the owning Foreman, a ticket parked in creating, its exact current incident ID and a decision recording that no thread was created; it repeats that one creation in place and never falls back to another executor. Runner and Orb threads are created after the tool call returns, so the returned status can still show creating; call status again. backup publishes private SQLite state and requires explicit user authorization and permissions.backup=true.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -508,7 +542,11 @@ export default function registerFactory(
       if (requested === "message-foreman")
         return messageForeman(input.message, ctx.thread.id);
       if (requested === "backup") {
-        assertControlCaller(factoryStatus(factory.directory), ctx.thread.id);
+        assertControlCaller(
+          factoryStatus(factory.directory),
+          ctx.thread.id,
+          requested,
+        );
         return JSON.stringify(await backup(root));
       }
       const record = recordings.get(requested);
@@ -545,22 +583,16 @@ export default function registerFactory(
           action !== "record-insight"
         )
           await publish(liveTools);
-        return JSON.stringify(
-          action === "status"
-            ? {
-                ...state,
-                lifecycle: lifecycleStatus(),
-                pipelineSteps,
-                stages,
-                stage: Object.fromEntries(
-                  Object.entries(state.runs).map(([id, run]) => [
-                    id,
-                    runStage(run),
-                  ]),
-                ),
-              }
-            : state,
-        );
+        if (action !== "status") return controlReply(state, ctx.thread.id);
+        return JSON.stringify({
+          ...state,
+          lifecycle: lifecycleStatus(),
+          pipelineSteps,
+          stages,
+          stage: Object.fromEntries(
+            Object.entries(state.runs).map(([id, run]) => [id, runStage(run)]),
+          ),
+        });
       };
       calls++;
       try {
@@ -570,7 +602,7 @@ export default function registerFactory(
         work.catch((error) =>
           amp.logger.log("factory deferred creation failed", String(error)),
         );
-        return JSON.stringify(factoryStatus(factory.directory));
+        return controlReply(factoryStatus(factory.directory), ctx.thread.id);
       } finally {
         connected = false;
         if (!--calls) {

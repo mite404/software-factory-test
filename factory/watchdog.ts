@@ -1,8 +1,12 @@
 import type { PluginTools, ThreadID } from "@ampcode/plugin";
 import { createHash } from "node:crypto";
-import type { State, Task } from "./persistence";
+import { providerResetAt, type State, type Task } from "./persistence";
 
 const recurrence = "RRULE:FREQ=MINUTELY;INTERVAL=30";
+
+/** Standing rules for the observer thread; its schedule prompt repeats them on every wake. */
+export const observerInstructions =
+  "You are the factory observer. Use only the factory control actions reconcile and status-summary, and send_thread_message to the owner thread named in the summary. On every wake or message, call reconcile, then status-summary, and compare it with the last summary in this thread. Send the owner one short message only when a run has a new incident, verdict, kind or stage, when the summary's due list holds an id you have not reported before in this thread, or when you received a Factory suspicion message about stale lifecycle progress. Report each due id exactly once, even if it stays listed on later wakes. Otherwise end your turn without any message. Never call any other factory action, never retry an action that failed, and never claim permission; the owner does every due item and decides every recovery.";
 
 /** Stable identity of this factory at its original root and Git storage paths. */
 export function watchdogFingerprint(root: string, directory: string) {
@@ -16,6 +20,12 @@ function anchor(at: number) {
     .toISOString()
     .replace(/[-:]/g, "")
     .replace(/\.\d{3}Z$/, "Z")}`;
+}
+
+function schedulePrompt(title: string, root: string, observer: boolean) {
+  return observer
+    ? `${title}. Factory root: ${root}. ${observerInstructions}`
+    : `${title}. Factory root: ${root}. Read factory status and match this fingerprint to durable monitor state before acting. Use the supported factory reconcile action in this connected owner thread. Diagnose current incidents against private evidence and worker activity; use only the supported exact-incident recovery action after resolving its cause. For resume supply ticket, current incident ID and diagnosis decision; paused factories stay paused. Running or unknown activity retains the same worker. Never blindly resume, grant permission, replace a worker, accept code or retry an uncertain remote effect. Inspect actual schedule state after ambiguous create or clear; held sending/unknown alert reservations are not retry instructions. Do not separately notify for a reserved intent. Preserve unrelated schedules and second roots. Normal gates and cold review still apply. Report the current incident and next safe action briefly, or give one short no-change update. This wake grants no permission. The factory source's foreman.md Saved watchdog turn section has further operating guidance; it need not exist in the managed repository.`;
 }
 
 /** Registration could not be confirmed; unlike persistence failures, owner control can continue. */
@@ -40,7 +50,7 @@ async function readSchedule(tools: PluginTools, thread?: ThreadID) {
       await tools.call("amp.get_schedule", thread ? { thread } : {}),
     );
     if (thread && schedule && schedule.targetThreadID !== thread)
-      throw new Error("Schedule target does not match the previous owner");
+      throw new Error("Schedule target does not match the inspected thread");
     return schedule;
   } catch (error) {
     throw new WatchdogUnavailable(
@@ -156,8 +166,11 @@ async function changeRegistration(
   tools: PluginTools,
   expected: Record<string, unknown>,
   wanted: boolean,
-  wakeAt?: number,
+  wakeAt: number | undefined,
+  target: ThreadID | undefined,
 ) {
+  // Omitting the thread keeps the owner's own registration call exactly as observed.
+  const thread = target ? { thread: target } : {};
   await tools
     .call(
       wanted ? "amp.set_schedule" : "amp.clear_schedule",
@@ -174,12 +187,13 @@ async function changeRegistration(
                 ? "Every 30 minutes"
                 : "Provider reset, then every 30 minutes",
             run_mode: "existing",
+            ...thread,
           }
-        : {},
+        : thread,
     )
     .catch(() => undefined);
   // A lost acknowledgment is not a failed effect. Inspect before deciding anything else.
-  return registration(await readSchedule(tools), expected, wakeAt);
+  return registration(await readSchedule(tools, target), expected, wakeAt);
 }
 
 async function sendNotification(
@@ -193,11 +207,7 @@ async function sendNotification(
   if (monitor.notifications.some((delivery) => delivery.id === notice.id))
     return;
   const at = now();
-  if (
-    monitor.notifications.filter((delivery) => at - delivery.at < 3_600_000)
-      .length >= 10
-  )
-    return;
+  if (!notificationCapacity(monitor, at)) return;
   const delivery = {
     id: notice.id,
     at,
@@ -231,7 +241,10 @@ function clearReceipt(raw: unknown) {
     throw new Error("Unrecognized schedule clear result");
 }
 
-async function removePreviousSchedule(
+/** Clear this factory's registration on another thread and confirm it by read-back.
+ * @throws WatchdogUnavailable when the clear is unconfirmed.
+ */
+export async function removePreviousSchedule(
   tools: PluginTools,
   thread: ThreadID,
   fingerprint: string,
@@ -329,7 +342,21 @@ function settleMonitor(
   save();
 }
 
-/** Reconcile only this factory's existing-thread schedule under the lifecycle lock.
+// With an observer registered the owner's own registration is stale. Every connected owner
+// reconcile clears it by read-back after the observer's state is confirmed, so a failed or
+// interrupted cleanup is retried and its problem stays until the clear is confirmed.
+async function clearOwnerSchedule(
+  state: State,
+  tools: PluginTools,
+  fingerprint: string,
+) {
+  const observer = state.foreman?.observer?.thread;
+  if (observer && state.owner && state.owner !== observer)
+    await removePreviousSchedule(tools, state.owner, fingerprint);
+}
+
+/** Reconcile only this factory's existing-thread schedule under the lifecycle lock. The schedule
+ * wakes the registered observer thread when there is one, and the connected owner otherwise.
  * @throws On conflict, unavailable inspection, or an unconfirmed remote effect.
  */
 export async function reconcileSchedule(
@@ -346,8 +373,9 @@ export async function reconcileSchedule(
   if (!tools) return;
   const fingerprint = watchdogFingerprint(root, directory);
   const monitor = monitorState(state, fingerprint, thread, save);
+  const observer = state.foreman?.observer?.thread;
   const title = `Factory watchdog ${fingerprint}`;
-  const prompt = `${title}. Factory root: ${root}. Read factory status and match this fingerprint to durable monitor state before acting. Use the supported factory reconcile action in this connected owner thread. Diagnose current incidents against private evidence and worker activity; use only the supported exact-incident recovery action after resolving its cause. For resume supply ticket, current incident ID and diagnosis decision; paused factories stay paused. Running or unknown activity retains the same worker. Never blindly resume, grant permission, replace a worker, accept code or retry an uncertain remote effect. Inspect actual schedule state after ambiguous create or clear; held sending/unknown alert reservations are not retry instructions. Do not separately notify for a reserved intent. Preserve unrelated schedules and second roots. Normal gates and cold review still apply. Report the current incident and next safe action briefly, or give one short no-change update. This wake grants no permission. The factory source's foreman.md Saved watchdog turn section has further operating guidance; it need not exist in the managed repository.`;
+  const prompt = schedulePrompt(title, root, !!observer);
   const wanted =
     state.enabled &&
     queue.some(
@@ -364,17 +392,18 @@ export async function reconcileSchedule(
   const resets = Object.values(state.runs).flatMap((run) => {
     const limit = run.kind !== "done" ? run.incident?.providerLimit : undefined;
     if (!limit || limit.continuation) return [];
-    const due =
-      limit.resetAt === undefined
-        ? limit.observedAt + 1_800_000
-        : limit.resetAt;
+    const due = providerResetAt(limit);
     return due > at ? [due + 60_000] : [];
   });
   const wakeAt = resets.length ? Math.min(...resets) : undefined;
   try {
     await clearPreviousOwners(state, tools, save, at);
     if (state.enabled && !execute) return;
-    const current = registration(await readSchedule(tools), expected, wakeAt);
+    const current = registration(
+      await readSchedule(tools, observer),
+      expected,
+      wakeAt,
+    );
     if (current === "conflict" && wanted) {
       monitor.schedule = "conflict";
       delete monitor.pendingThread;
@@ -387,6 +416,7 @@ export async function reconcileSchedule(
         "Owned watchdog configuration drifted; inspect recurrence, run mode and enabled state",
       );
     if (satisfied(current, wanted, monitor.wakeAt, wakeAt)) {
+      await clearOwnerSchedule(state, tools, fingerprint);
       settleMonitor(monitor, settled, save);
       return;
     }
@@ -396,7 +426,7 @@ export async function reconcileSchedule(
     // SQLite intent is not a remote receipt. Always inspect, even after a successful call.
     if (
       !satisfied(
-        await changeRegistration(tools, expected, wanted, wakeAt),
+        await changeRegistration(tools, expected, wanted, wakeAt, observer),
         wanted,
       )
     )
@@ -404,12 +434,47 @@ export async function reconcileSchedule(
         "Watchdog effect not confirmed; inspect actual schedule before another action",
       );
     monitor.wakeAt = wakeAt;
+    await clearOwnerSchedule(state, tools, fingerprint);
     settleMonitor(monitor, settled, save);
   } catch (error) {
     if (monitor.schedule !== "conflict") monitor.schedule = "unknown";
     save();
     throw error;
   }
+}
+
+// The rolling hourly notification budget; delivery and the due list share it.
+function notificationCapacity(
+  monitor: NonNullable<State["monitor"]>,
+  at: number,
+) {
+  return (
+    monitor.notifications.filter((delivery) => at - delivery.at < 3_600_000)
+      .length < 10
+  );
+}
+
+/** Alert intents the connected owner's reconcile would deliver at `at`. A held sending or unknown
+ * reservation is never due, and nothing is due while the hourly budget is spent. `due` names the
+ * escalation: it includes the latest reservation time, so an alert left over when the budget ran
+ * out gets a fresh id once capacity returns.
+ */
+export function dueAlerts(state: State, at: number) {
+  const monitor = state.monitor;
+  if (!state.enabled || monitor?.schedule !== "installed") return [];
+  if (!notificationCapacity(monitor, at)) return [];
+  const latest = Math.max(0, ...monitor.notifications.map((sent) => sent.at));
+  return Object.entries(state.runs).flatMap(([ticket, run]) =>
+    run.kind === "done"
+      ? []
+      : (run.watchdog?.alerts ?? [])
+          .filter(
+            (alert) =>
+              alert.acknowledgedAt === undefined &&
+              !monitor.notifications.some((sent) => sent.id === alert.id),
+          )
+          .map((alert) => ({ ticket, alert, due: `${alert.id}:${latest}` })),
+  );
 }
 
 /** Deliver durable alert intents only through the connected owner, reserving before sending.
@@ -423,18 +488,10 @@ export async function deliverAlerts(
   save: () => void,
   execute = true,
 ) {
-  const monitor = state.monitor;
   if (!tools || !execute) return;
-  if (!state.enabled || monitor?.schedule !== "installed") return;
-  const pending = Object.entries(state.runs).flatMap(([ticket, run]) =>
-    run.kind === "done"
-      ? []
-      : (run.watchdog?.alerts ?? []).map((alert) => ({ ticket, alert })),
-  );
-  for (const { ticket, alert } of pending) {
-    if (alert.acknowledgedAt !== undefined) continue;
+  for (const { ticket, alert } of dueAlerts(state, now())) {
     await sendNotification(
-      monitor,
+      state.monitor!,
       tools,
       {
         id: alert.id,

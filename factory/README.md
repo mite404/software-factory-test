@@ -233,15 +233,15 @@ operator's decision; `brief-incomplete` and `record-insight` belong to the Forem
 The walking test checks actor coverage, including exitless stops and owner actions.
 Status and the dashboard also publish the ordered `pipelineSteps` from `pipeline.ts`.
 
-| Pipeline step | Actor |
-| --- | --- |
-| worktree | computer |
-| setup | computer |
-| builder thread | model |
-| report.json | model |
-| gate | computer |
-| cold review | model |
-| ff-merge | computer |
+| Pipeline step  | Actor    |
+| -------------- | -------- |
+| worktree       | computer |
+| setup          | computer |
+| builder thread | model    |
+| report.json    | model    |
+| gate           | computer |
+| cold review    | model    |
+| ff-merge       | computer |
 
 New incidents record `cause` with the known causing thread ID and its `worker` or `reviewer` role.
 Stops before thread creation, target changes and review identity changes have no causing thread.
@@ -340,22 +340,22 @@ Those live proofs remain with the Foreman. The default policy performs no model 
 `runStage` in `persistence.ts` names every ticket's stage and who must act. Status, the dashboard
 feed and stop notices all read it; nothing else maps run kinds to stages. Run kinds are unchanged.
 
-| Stage | Meaning | Default actor |
-| --- | --- | --- |
-| `queued` | Waiting for dispatch | computer |
-| `planned` | Waiting for Foreman admission | foreman |
-| `preparing` | Setup runs in the worktree | computer |
-| `creating` | The worker thread is being created | computer |
-| `building` | The worker is writing or repairing | model |
-| `gating` | The pinned gate is running | computer |
-| `reviewing` | Cold review is in progress | model |
-| `escalated` | Two rejections; Foreman diagnosis | foreman |
-| `parked` | Attempt cap reached; operator decision | operator |
-| `rate-limited` | Waiting for a provider limit to clear | computer |
-| `blocked` | Any other stop | foreman |
-| `uncertain` | An unknown delivery outcome | foreman |
-| `accepted` | Accepted locally; merge not recorded | foreman |
-| `merged` | `record-merge` or `record-landing` stored a merge | nobody |
+| Stage          | Meaning                                           | Default actor |
+| -------------- | ------------------------------------------------- | ------------- |
+| `queued`       | Waiting for dispatch                              | computer      |
+| `planned`      | Waiting for Foreman admission                     | foreman       |
+| `preparing`    | Setup runs in the worktree                        | computer      |
+| `creating`     | The worker thread is being created                | computer      |
+| `building`     | The worker is writing or repairing                | model         |
+| `gating`       | The pinned gate is running                        | computer      |
+| `reviewing`    | Cold review is in progress                        | model         |
+| `escalated`    | Two rejections; Foreman diagnosis                 | foreman       |
+| `parked`       | Attempt cap reached; operator decision            | operator      |
+| `rate-limited` | Waiting for a provider limit to clear             | computer      |
+| `blocked`      | Any other stop                                    | foreman       |
+| `uncertain`    | An unknown delivery outcome                       | foreman       |
+| `accepted`     | Accepted locally; merge not recorded              | foreman       |
+| `merged`       | `record-merge` or `record-landing` stored a merge | nobody        |
 
 A stop on any stage names its actor from the matching stop in the transition table, so an
 interrupted setup stays `preparing` but waits on the Foreman. The five public statuses are derived
@@ -454,6 +454,37 @@ Attempts six, ten, fourteen and so on independently record non-blocking spending
 parking safe work or resetting the progress clock. Repairs beyond the cap require owner resumption.
 Parking reserves its alert at rejection, not from the spending count or suspicion clock.
 Parked runs do not generate timed suspicion nudges or further alert intents until resumed.
+
+#### Observer thread
+
+The connected owner can call `register-observer` once. It creates one observer thread with model
+`anthropic/claude-haiku-5-5` at high effort through the same thread-creation path workers use,
+and records the thread, model, effort and time in the Foreman records. The watchdog schedule then
+targets the observer with a short prompt, and suspicion nudges go to it instead of the owner. The
+owner's own schedule is cleared only after the observer's registration is confirmed. Every
+connected owner reconcile repeats that cleanup by read-back, so a failed or interrupted clear is
+retried and `monitor.problem` stays until the clear is confirmed. Pause clears both.
+
+The observer may call only `reconcile` and `status-summary`; the one caller check refuses every
+other action from it before any state change. Its reconcile has no connected tools, so it never
+changes schedules or sends user alerts; the owner's connected turns still do. `status-summary`
+returns per-run ticket, kind, lane, attempt, stage, last progress time from the lifecycle stage,
+incident ID and reason, and review delivery. Its `due` list names the owner-only work a connected
+owner reconcile would do now, each with a stable ID: a provider continuation past its reset
+(`<incident>:continuation-due`) and each alert intent not yet reserved. A held sending or unknown
+alert reservation is not due, and no alert is due while the rolling hourly notification budget is
+spent. An alert's due ID includes the latest reservation time, so an alert left over when the
+budget ran out is escalated again once capacity returns. It has no briefs, report paths,
+worktrees or thread content, and the observer's `reconcile` replies with the same summary instead
+of full state. The observer messages the owner only for a new incident, verdict,
+kind or stage, a suspicion nudge, or a due ID it has not reported before, so each due ID is
+reported once; otherwise it ends its turn silently.
+
+`remove-observer` clears the observer's schedule, confirms the clear by read-back, and moves wakes
+and nudges back to the owner. The removed thread is recorded as retired, and the caller check
+refuses it every action, even after a replacement observer registers. Saved state without an
+observer opens unchanged and keeps waking
+the owner as before.
 
 Alert IDs, kind, episode, attempt, intent time and optional `acknowledgedAt` survive reload and
 repair. Connected owner reconciliation delivers these intents through `amp.notify_user`. It

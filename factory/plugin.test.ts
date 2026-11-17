@@ -189,6 +189,141 @@ test("status exposes a compact static lifecycle with real control actions and no
   }
 });
 
+test("an observer's reconcile reply is the bounded summary, never private state", async () => {
+  const root = await mkdtemp(join(tmpdir(), "factory-plugin-observer-"));
+  const directory = join(root, ".git/factory");
+  const canary = "PRIVATE-BRIEF-REPORT-PATH-THREAD-CONTENT";
+  let dispose = () => {};
+  let execute!: (
+    input: { action: string },
+    ctx: PluginToolContext,
+  ) => Promise<unknown>;
+  try {
+    git(root, "init", "-q");
+    const tickets = Array.from({ length: 40 }, (_, index) => ({
+      id: `T${String(index).padStart(2, "0")}`,
+      brief: canary,
+      after: [],
+    }));
+    await writeFile(join(root, "prd.md"), canary);
+    await writeFile(join(root, "tickets.json"), JSON.stringify(tickets));
+    await writeFile(
+      join(root, ".factory.json"),
+      JSON.stringify({
+        version: 1,
+        capacity: 1,
+        workerModel: "openai/gpt-6.1-sol",
+        prd: "prd.md",
+        tickets: "tickets.json",
+        scope: ["src/"],
+        verify: "true",
+        permissions: { execute: false, publish: false, externalTickets: false },
+      }),
+    );
+    const storage = openPersistence(directory, tickets);
+    storage.commit(
+      {
+        enabled: false,
+        owner: "T-owner",
+        foreman: {
+          notes: [{ at: 1, thread: "T-owner", text: canary }],
+          handoffs: [],
+          observer: {
+            thread: "T-observer",
+            model: "anthropic/claude-haiku-5-5",
+            effort: "high",
+            at: 1,
+          },
+        },
+        runs: Object.fromEntries(
+          tickets.map(({ id }) => [
+            id,
+            {
+              kind: "done",
+              revision: "a".repeat(40),
+              thread: "T-worker",
+              insight: canary,
+              review: {
+                ticket: id,
+                attempt: 1,
+                revision: "a".repeat(40),
+                base: "base",
+                stage: "post-graft",
+                worktree: `/${canary}`,
+                model: "anthropic/reviewer",
+                report: `/${canary}/report.json`,
+                log: canary,
+                command: canary,
+                delivery: "sent",
+                thread: "T-review",
+              },
+            } satisfies Run,
+          ]),
+        ),
+      },
+      "factory",
+      "fixture",
+      "",
+    );
+    storage.close();
+    const before = await readFile(join(directory, "state.sqlite"));
+    registerFactory(
+      {
+        createAgent() {
+          throw new Error("Reconcile cannot create threads here");
+        },
+        threads: {
+          get() {
+            return {
+              state: {
+                async get() {
+                  return "idle";
+                },
+              },
+            };
+          },
+        },
+        logger: { log() {} },
+        on() {},
+        registerTool(tool: { execute: typeof execute }) {
+          execute = tool.execute;
+        },
+        onDispose(fn: () => void) {
+          dispose = fn;
+        },
+      } as unknown as PluginAPI,
+      root,
+      () => ({
+        async init() {},
+        async close() {},
+        ledger: { async record() {} },
+      }),
+    );
+    const observer = {
+      thread: { id: "T-observer" },
+    } as unknown as PluginToolContext;
+    const reply = String(await execute({ action: "reconcile" }, observer));
+    expect(reply).not.toContain(canary);
+    expect(reply).not.toContain("T-worker");
+    expect(reply).not.toContain("T-review");
+    expect(Buffer.byteLength(reply)).toBeLessThan(16_384);
+    expect(JSON.parse(reply).runs).toHaveLength(40);
+    expect(JSON.parse(reply).runs[0]).toMatchObject({
+      ticket: "T00",
+      kind: "done",
+      stage: "accepted",
+    });
+    expect(await readFile(join(directory, "state.sqlite"))).toEqual(before);
+    const owner = { thread: { id: "T-owner" } } as unknown as PluginToolContext;
+    expect(String(await execute({ action: "reconcile" }, owner))).toContain(
+      canary,
+    );
+  } finally {
+    dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("connected handoff observes the exact old owner and returns private durable notes", async () => {
   const root = await mkdtemp(join(tmpdir(), "factory-plugin-handoff-"));
   const directory = join(root, ".git/factory");
