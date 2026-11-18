@@ -23,7 +23,11 @@ type Data = Record<string, unknown>;
 const schemas: Record<string, { properties: object; required?: string[] }> =
   configSchema.$defs;
 const runnerTemplate = "runners/<name>.yaml";
-const frontMatter = /^---\n(?:([\s\S]*?)\n)?---(?:\n|$)([\s\S]*)$/;
+// Any first non-blank line starting with `---` claims front matter; only the strict form parses
+// (either line ending, optional BOM, trailing spaces), so a near miss is refused, not read as bare.
+const opensFrontMatter = /^\uFEFF?\s*---/;
+const frontMatter =
+  /^\uFEFF?---[ \t]*\r?\n(?:([\s\S]*?)\r?\n)?---[ \t]*(?:\r?\n|$)([\s\S]*)$/;
 const runnerName = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const runnerFile = /^runners\/([A-Za-z0-9][A-Za-z0-9._-]*)\.yaml$/;
 const foreman = "agents/foreman/agent.md";
@@ -84,15 +88,25 @@ function parseYaml(path: string, source: string): Data {
   return value as Data;
 }
 
+// The one classification of a Markdown file: bare (no settings) or front matter plus body.
+// A file that claims front matter but does not parse is refused, never read as a bare body.
+function splitMarkdown(path: string, raw: string) {
+  if (!opensFrontMatter.test(raw)) return { bare: true, yaml: "", body: raw };
+  const match = frontMatter.exec(raw);
+  if (!match)
+    fail(
+      path,
+      "has malformed front matter; open and close it with a --- line at the top",
+    );
+  return { bare: false, yaml: match[1] ?? "", body: match[2]! };
+}
+
 // Markdown carries its settings in front matter; any other file is all settings.
 function parseFile(path: string, bytes: Buffer) {
   const raw = bytes.toString("utf8");
   if (!path.endsWith(".md")) return { data: parseYaml(path, raw), body: "" };
-  const match = frontMatter.exec(raw);
-  return {
-    data: parseYaml(path, match?.[1] ?? ""),
-    body: match ? match[2]! : raw,
-  };
+  const { yaml, body } = splitMarkdown(path, raw);
+  return { data: parseYaml(path, yaml), body };
 }
 
 /** Whether a repository-relative path is the config directory or inside it, which workers may not edit. */
@@ -133,7 +147,7 @@ export function configRootExists(root: string, forWrite = false) {
 export async function refuseUnfinishedConfig(root: string) {
   if (!configRootExists(root)) return;
   for (const [path, bytes] of await readConfigFiles(root))
-    if (path !== foreman || frontMatter.test(bytes.toString("utf8")))
+    if (path !== foreman || !splitMarkdown(path, bytes.toString("utf8")).bare)
       fail(
         path,
         "is not allowed beside a flat definition without factory.yaml; finish explicit --migrate or remove it",
@@ -310,9 +324,7 @@ function readIfPresent(path: string) {
 function plannedFiles(raw: Data, current: string | undefined) {
   const planned = splitDefinition(
     raw,
-    current === undefined
-      ? undefined
-      : (frontMatter.exec(current)?.[2] ?? current),
+    current === undefined ? undefined : splitMarkdown(foreman, current).body,
   );
   const composed = composeDefinition(
     new Map([...planned].map(([path, text]) => [path, Buffer.from(text)])),
@@ -345,7 +357,7 @@ async function pendingFiles(root: string, planned: Map<string, string>) {
     if (existing === text) continue;
     if (
       existing !== undefined &&
-      !(path === foreman && !frontMatter.test(existing))
+      !(path === foreman && splitMarkdown(path, existing).bare)
     )
       fail(path, "exists and differs; migration refuses to overwrite it");
     pending.push([target, text, existing !== undefined]);

@@ -223,6 +223,16 @@ test.each([
     "agents/foreman/agent.md",
   ],
   [
+    "a Foreman prompt with an unknown key after a trailing-space delimiter",
+    { "agents/foreman/agent.md": "--- \nbogus: true\n---\t\n# Foreman\n" },
+    "agents/foreman/agent.md",
+  ],
+  [
+    "a Foreman prompt with CRLF front matter",
+    { "agents/foreman/agent.md": "---\r\nbogus: true\r\n---\r\n# Foreman\r\n" },
+    "agents/foreman/agent.md",
+  ],
+  [
     "a Foreman prompt with valid model front matter",
     {
       "agents/foreman/agent.md":
@@ -245,6 +255,22 @@ test.each([
       new RegExp(
         `factory/config/${path}: is not allowed beside a flat definition`,
       ),
+    );
+  },
+);
+
+test.each([
+  ["never closes", "---\nbogus: true\n# Foreman\n"],
+  ["starts after a blank line", "\n---\nbogus: true\n---\n# Foreman\n"],
+  ["opens with ----", "----\nbogus: true\n---\n# Foreman\n"],
+])(
+  "refuses a Foreman prompt whose front matter %s beside a flat definition",
+  async (_name, text) => {
+    const f = await repository();
+    await putFlat(f.root, ".factory.json");
+    await put(f.root, { "agents/foreman/agent.md": text });
+    expect(await refused(configuration(f.root))).toMatch(
+      /factory\/config\/agents\/foreman\/agent\.md: has malformed front matter/,
     );
   },
 );
@@ -305,6 +331,19 @@ const refusals: [string, (files: Record<string, string>) => void, RegExp][] = [
     "an agent file without front matter",
     (files) => (files["agents/implementer/agent.md"] = "no front matter\n"),
     /agents\/implementer\/agent\.md: model is required/,
+  ],
+  [
+    "an agent file with CRLF front matter and an unknown key",
+    (files) =>
+      (files["agents/implementer/agent.md"] =
+        `---\r\nmodel: ${model}\r\nbogus: 1\r\n---\r\n`),
+    /agents\/implementer\/agent\.md: unsupported setting bogus/,
+  ],
+  [
+    "an agent file whose front matter never closes",
+    (files) =>
+      (files["agents/implementer/agent.md"] = `---\nmodel: ${model}\n`),
+    /agents\/implementer\/agent\.md: has malformed front matter/,
   ],
   [
     "an agent naming a runner with no file",
