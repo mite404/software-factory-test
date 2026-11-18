@@ -19,13 +19,12 @@ Merged, but at least one box, usually a live proof, is still open.
 | [F003-provider-limit-resume](feats/durability/F003-provider-limit-resume.md) | Same threads resume after a provider limit | 5/6 |
 | [F011-step-actor-labels](feats/lifecycle-view/F011-step-actor-labels.md) | Each step and exit names who performs it | 5/6 |
 
-## Not started (34)
+## Not started (33)
 
 In dispatch order.
 
 | Ticket | Outcome | Done when |
 | --- | --- | --- |
-| [F017-remove-public-status](feats/lifecycle-view/F017-remove-public-status.md) | Feed carries the stage only | 0/3 |
 | [F025-config-directory](feats/config-layout/F025-config-directory.md) | Factory settings live in one file per concern | 0/7 |
 | [F029-gate-check-files](feats/config-layout/F029-gate-check-files.md) | The gate reports every check on its own | 0/6 |
 | [F026-factory-automations](feats/config-layout/F026-factory-automations.md) | Automations switch on, off and run on demand | 0/5 |
@@ -68,7 +67,7 @@ Written up but set aside; not dispatched until the operator asks for it.
 | --- | --- | --- |
 | [F036-context-window-reminders](feats/worker-budgets/F036-context-window-reminders.md) | Context-window reminders with an operator-chosen handoff | 0/5 |
 
-## Done (33)
+## Done (34)
 
 | Ticket | Outcome | Done when |
 | --- | --- | --- |
@@ -95,6 +94,7 @@ Written up but set aside; not dispatched until the operator asks for it.
 | [F035-observer-watchdog-thread](feats/done/F035-observer-watchdog-thread.md) | Routine watchdog checks run in a cheap observer thread | 5/5 |
 | [F010-brief-fact-check](feats/done/F010-brief-fact-check.md) | No worker starts on an incomplete brief | 4/4 |
 | [F012-lifecycle-graph-view](feats/done/F012-lifecycle-graph-view.md) | Lifecycle drawn with tickets on their states | 6/6 |
+| [F017-remove-public-status](feats/done/F017-remove-public-status.md) | Feed carries the stage only | 3/3 |
 | [F024-serial-test-runs](feats/done/F024-serial-test-runs.md) | Test runs on one machine take turns | 5/5 |
 | [F031-landing-without-checkpoint](feats/done/F031-landing-without-checkpoint.md) | A blocked run without a checkpoint can record its landing | 5/5 |
 | [F032-landing-per-commit-proof](feats/done/F032-landing-per-commit-proof.md) | A multi-commit candidate can record its landing | 4/4 |
