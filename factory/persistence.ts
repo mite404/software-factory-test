@@ -815,7 +815,7 @@ export function publicSummary(value: unknown): { summary?: string } {
   };
 }
 
-/** Every named stage in pipeline order, with who acts by default and its public status until F017. */
+/** Every named stage in pipeline order, with who acts by default and the status word the page says for it. */
 export const stages = [
   { id: "queued", actor: "computer", status: "queued" },
   { id: "planned", actor: "foreman", status: "planned" },

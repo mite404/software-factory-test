@@ -183,15 +183,15 @@ function reportedActivity(
   return threadID === id ? status : "unknown";
 }
 
-const activityStatuses = {
+const activities = {
   running: "working",
   idle: "idle",
-  unknown: "unknown",
+  unknown: null,
   "awaiting-approval": "blocked",
   error: "blocked",
 } satisfies Record<
   Exclude<Awaited<ReturnType<NativeHost["state"]>>, object>,
-  DashboardSnapshot["tasks"][number]["status"]
+  DashboardSnapshot["tasks"][number]["activity"]
 >;
 
 /** Register the repository-local native dispatch adapter. Setup supplies the unchanged store. */
@@ -371,10 +371,10 @@ export default function registerFactory(
     const observed = review.thread
       ? await observe(review.thread, tools)
       : "unknown";
-    row.status =
+    row.activity =
       review.delivery === "creating" || review.delivery === "sending"
         ? "blocked"
-        : activityStatuses[typeof observed === "object" ? "error" : observed];
+        : activities[typeof observed === "object" ? "error" : observed];
     return row;
   }
 
@@ -400,19 +400,18 @@ export default function registerFactory(
                 id: task.id,
                 title: task.id,
                 steps: task.steps ?? [],
-                status: "queued",
+                activity: null,
                 thread: null,
                 revision: null,
               };
               if (!run) return row;
-              row.status = runStage(run).status;
               if (run.kind === "done") row.revision = run.revision;
               if ("thread" in run && run.thread) {
                 row.thread = run.thread;
                 if (run.kind === "running") {
                   const activity = await observe(run.thread, tools);
-                  row.status =
-                    activityStatuses[
+                  row.activity =
+                    activities[
                       typeof activity === "object" ? "error" : activity
                     ];
                 }

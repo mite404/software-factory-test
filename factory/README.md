@@ -160,7 +160,7 @@ when releasing a `brief-incomplete` refusal, retaining admission and recording t
 per-lane loop dispatches admitted work afterward. Existing accepted evidence and definition
 migration rules remain unchanged.
 
-The read-only `/api/status` feed exposes `status: "planned"` before admission and `"queued"` after
+The read-only `/api/status` feed exposes `stage: "planned"` before admission and `"queued"` after
 admission until execution begins. Each task includes `outcome`, or `null` when no public outcome was
 authored. It never falls back to the private brief. Top-level `counts` contains separate `planned`,
 `queued`, and `accepted` totals. Reads do not import or refresh records. Importing the full planned
@@ -196,7 +196,7 @@ unrelated histories are refused. Old two-attempt review blocks can recover from 
 review events and the candidate report. Missing recovery evidence fails closed. Subsequent
 candidates still require the normal gates. A parked run waits for an operator decision. Its exits
 are owner `resume`, which requires no other active or uncertain work, and `record-landing` once the
-operator lands the candidate outside the factory. Its dashboard status is `blocked`. A later
+operator lands the candidate outside the factory. Its stage is `parked`. A later
 rejection parks it again rather than sending an automatic correction.
 
 Actionable stops persist an `incident` in the run, in the same SQLite transaction as the stop event.
@@ -260,12 +260,15 @@ run fields. `kind` is the run's saved kind and `stopName` the declared stop that
 when none does); both are keys of the declared lifecycle table, null before a run exists.
 Accepted and landed runs keep the worker's `attempt`; older done runs show none.
 The status action returns the same `stages` list and a `stage` map by ticket. The page draws its
-stage badges and stages-done count from `step` and `stage` when present, and falls back to the
-public status only for feeds without them. Stop notices name
-the stage and its actor. The worker report's `insight` stays private. A report may add an
-explicitly public `summary`; acceptance curates it like a title with `publicSummary` (one line, at
-most 120 characters, refused if it holds a path, URL or thread ID) and saves only the result on the
-done run. The feed publishes that field or `null`; landings and older runs omit it.
+stage badges and stages-done count from `step` and `stage`. The feed has no five-value public
+status. `activity` (`working`, `idle`, `blocked` or `null`) is the live observation of a run still
+in flight, and the page says that word, or else the status the `stages` list declares for the
+run's `stage`. A dashboard observation saved before `activity` existed has none, so it reads as
+unobserved. Stop notices name the stage and its actor. The worker report's `insight` stays private.
+A report may add an explicitly public `summary`; acceptance curates it like a title with
+`publicSummary` (one line, at most 120 characters, refused if it holds a path, URL or thread ID)
+and saves only the result on the done run. The feed publishes that field or `null`; landings and
+older runs omit it.
 
 The walking test pins five exitless stops by name: `blocked.withoutWorker`,
 `running.reviewerCreation`, `running.reviewerDeliveryLegacy`, `running.workerDeliveryLegacy` and
@@ -358,8 +361,7 @@ feed and stop notices all read it; nothing else maps run kinds to stages. Run ki
 | `merged`       | `record-merge` or `record-landing` stored a merge | nobody        |
 
 A stop on any stage names its actor from the matching stop in the transition table, so an
-interrupted setup stays `preparing` but waits on the Foreman. The five public statuses are derived
-from the stage and keep their earlier meaning until F017 removes them.
+interrupted setup stays `preparing` but waits on the Foreman.
 
 Each fact is recorded where it happens. When the gate command spawns, `checkCandidate` saves
 `gate: { at, pid }` with its detached process group and event `gate-started`; the command waits
@@ -1053,7 +1055,7 @@ the run kinds and are not in the table.
 - Each ticket is a marker on the state its feed `kind` and `stopName` select, linked to its
   thread, and prints the ticket's own curated `stage` and `actor` (nobody when null), so a gating
   run on `running` or an accepted and a merged run on `done` read differently. The state's own
-  actor is labelled "declared". The page never maps a status or stage to a state.
+  actor is labelled "declared". The page never maps a stage to a state.
 - Groups and stops sort by who must act, most urgent first: the operator, the Foreman, a clock
   wait (dim, with a countdown to `clearsAt`), then work in progress, then quiet states. The
   actors are the ones `runLifecycle` declares. Ties keep table order.
@@ -1065,7 +1067,7 @@ the run kinds and are not in the table.
   unlit when empty or queued; a clock wait stays dim); `uncertain` states say "outcome unknown".
   The feed has no public reason label yet, so the banner prints the code.
 
-The five public statuses stay until F017. The section is read-only; `web/replay.ts` frames 19 to
+The section is read-only; `web/replay.ts` frames 19 to
 22 show an empty factory, one running ticket, one stopped ticket and four tickets on one state.
 
 ### Event trace
@@ -1116,7 +1118,7 @@ on it and three puffs of mist (small, medium, large, placed at random each time)
 while the sweep runs behind them.
 
 Below the pipeline, ACTIVE shows the current ticket's stage pills (green = done, amber = now),
-inferred from its single feed status, and a box that expands the gate pill into the integrator's
+read from its feed `step` and `stage`, and a box that expands the gate pill into the integrator's
 checks. The wire from the pill to the box turns amber while the ticket is idle, which is when the
 gate runs. COMING lists the next two tickets, and its dots show every ticket's status in order.
 

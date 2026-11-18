@@ -1987,7 +1987,7 @@ test("planned intake survives refresh and restart without dispatch until owner a
     expect(body.counts).toEqual({ planned: 2, queued: 0, accepted: 1 });
     expect(
       body.tasks.find((task: { id: string }) => task.id === "A"),
-    ).toMatchObject({ id: "A", status: "planned", outcome: "Safe outcome" });
+    ).toMatchObject({ id: "A", stage: "planned", outcome: "Safe outcome" });
     expect(
       body.tasks.find((task: { id: string }) => task.id === "B").outcome,
     ).toBe(null);
@@ -2097,7 +2097,7 @@ test("planned intake survives refresh and restart without dispatch until owner a
     expect(final.counts).toEqual({ planned: 1, queued: 0, accepted: 2 });
     expect(
       final.tasks.find((task: { id: string }) => task.id === "A"),
-    ).toMatchObject({ status: "accepted", outcome: "Safe outcome", revision });
+    ).toMatchObject({ stage: "accepted", outcome: "Safe outcome", revision });
     expect(f.counts()).toEqual({ creates: 1, sends: 1 });
   } finally {
     await server.stop();
@@ -3443,7 +3443,6 @@ test("four rejections park the worker, release only independent work and require
     expect(body.tasks).toMatchObject([
       {
         id: "A",
-        status: "blocked",
         thread: "T-prepared",
         stage: "parked",
         actor: "operator",
@@ -3452,10 +3451,9 @@ test("four rejections park the worker, release only independent work and require
         rejectedBy: "gate",
         attempt: 4,
       },
-      { id: "B", status: "queued", stage: "queued", step: null },
+      { id: "B", stage: "queued", step: null },
       {
         id: "C",
-        status: "unknown",
         thread: "T-independent",
         stage: "building",
         actor: "model",
@@ -3647,7 +3645,6 @@ test("a running gate reads as gating and an interrupted gate reruns exactly once
     expect(body.tasks[0]).toMatchObject({
       id: "A",
       stage: "gating",
-      status: "unknown",
       step: 4,
     });
   } finally {

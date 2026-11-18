@@ -85,6 +85,6 @@ Run the shared preflight in `docs/v1-execution.md`. Baseline gates have not run 
 
 ## Done when
 
-- [ ] The feed has no `status` field and nothing reads one.
-- [ ] The page shows the same thing for every stage, checked in screenshots.
-- [ ] Full gates, guard and fresh cold review pass on the exact candidate.
+- [x] The feed has no `status` field and nothing reads one.
+- [x] The page shows the same thing for every stage, checked in screenshots.
+- [x] Full gates, guard and fresh cold review pass on the exact candidate.

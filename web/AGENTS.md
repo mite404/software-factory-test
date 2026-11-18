@@ -20,6 +20,8 @@ To use a dashboard running in this orb instead, start `bun factory/dashboard.ts`
 - `Feed` and `FeedTask` in `web/derive.ts` build on `DashboardSnapshot` from `factory/dashboard.ts`.
   A feed change there fails `bun run typecheck` here.
 - `factory/` belongs to the factory thread. Ask for feed changes; do not edit it from here.
+- The feed has no public status. The page names a ticket by its `stage` through the feed's
+  `stages` list, or by its live `activity` while a run is in flight.
 - Draw only what the feed reports. Do not infer state the feed has no field for (for example a
   Foreman checkpoint from attempt numbers).
 - When the feed gains a field, add a frame that uses it to `web/replay.ts`.

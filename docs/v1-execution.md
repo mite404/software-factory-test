@@ -44,7 +44,7 @@ prerequisites, not permission to dispatch every draft against today's base.
 | [F014-lifecycle-stages](feats/done/F014-lifecycle-stages.md)                   | One named stage and actor for every run                   | F007, F009-attempt-cap-parking                                           | F07, operator observability priority      |
 | [F015-weekly-failure-audit](feats/done/F015-weekly-failure-audit.md)                     | Weekly bucketed failures and a Fable audit                | F002-worker-runner-executor                                              | F04, operator quality priority            |
 | [F016-kit-page-default](feats/done/F016-kit-page-default.md)                             | The kit page is the only dashboard                        | None                                                                     | F07, operator observability priority      |
-| [F017-remove-public-status](feats/lifecycle-view/F017-remove-public-status.md)           | Feed carries the stage only                               | F012, F014-lifecycle-stages                                              | F07                                       |
+| [F017-remove-public-status](feats/done/F017-remove-public-status.md)           | Feed carries the stage only                               | F012, F014-lifecycle-stages                                              | F07                                       |
 | [F018-landed-card-links](feats/done/F018-landed-card-links.md)                           | Landed card opens its thread and pull request             | F016-kit-page-default                                                    | F07, operator observability priority      |
 | [F019-gate-rerun-before-rejection](feats/done/F019-gate-rerun-before-rejection.md)       | A load flake in the gate does not reject                  | F008-gate-failure-feedback                                               | F03, operator autonomy priority           |
 | [F020-reviewer-uses-ce-code-review](feats/done/F020-reviewer-uses-ce-code-review.md)     | Cold review uses the review skill                         | None                                                                     | F03, operator quality priority            |
@@ -197,7 +197,8 @@ exitless states decided from stop counts, a lit queued node and a banner that ig
 F035 landed outside the factory with the operator's approval after four attempts: reviews found
 the observer's private replies, lost wakes for owner-only work, rights kept after removal, alerts
 held by the hourly budget, and finally a prompt that woke the owner on routine progress, which the
-Foreman fixed. All are placed. The factory can run a main and a light lane at once from merged main.
+Foreman fixed. F017 landed at attempt one: the feed carries the stage only. All are placed. The
+factory can run a main and a light lane at once from merged main.
 
 v1-ticket10 keeps the recovery of outages that still happen, and v1-ticket8 keeps exclusive
 ownership across orbs. Keep preserved backup owners until required evidence preservation is
