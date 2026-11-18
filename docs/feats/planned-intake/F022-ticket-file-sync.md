@@ -73,7 +73,7 @@ the reconcile.
 5. **Add outcome lines**. Add the Outcome line to the skill, its example and every open
    `F<NNN>-` ticket file, and set `ticketFiles` in this repository's definition.
 6. **Document the sync**. Describe the setting, the precedence rule and the skip list in the
-   README and `foreman.md`.
+   README and the Foreman prompt.
 
 ## Test plan
 
@@ -108,7 +108,7 @@ the reconcile.
 | `factory/definition.schema.json`             | Definition schema | The `ticketFiles` setting        | Edit         |
 | `factory/persistence.test.ts`                | Storage proof     | Merge and frozen-row cases       | Edit         |
 | `factory/native.test.ts`                     | Lifecycle proof   | Sync on reload and reconcile     | Edit         |
-| `factory/README.md`, `factory/foreman.md`    | Operator contract | Setting, precedence, skip list   | Edit         |
+| `factory/README.md`, `factory/config/agents/foreman/agent.md`    | Operator contract | Setting, precedence, skip list   | Edit         |
 | `.agents/skills/creating-factory-tickets/`   | Ticket format     | Outcome line in text and example | Edit         |
 | `docs/feats/**/F*.md`                        | Tickets           | One Outcome line each            | Edit         |
 | `factory/definition.yaml` or `.factory.json` | This repo's setup | `ticketFiles: docs/feats`        | Coordinator  |

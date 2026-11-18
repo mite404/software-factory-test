@@ -52,7 +52,8 @@ only part of one. Evidence and trial limitations remain in [workflow-trials.md](
 Automated discovery, scheduled full gates, and the complete backup, restore, and retirement loop
 remain outstanding. Implementation workers currently use Sol 6.1 at medium effort, one at a time.
 Luna remains available for inexpensive workflow fixtures. The reusable Foreman prompt is documented
-in [factory/foreman.md](../factory/foreman.md), not installed automatically as an agent mode.
+in [factory/config/agents/foreman/agent.md](../factory/config/agents/foreman/agent.md), not
+installed automatically as an agent mode.
 
 ## Operator needs
 

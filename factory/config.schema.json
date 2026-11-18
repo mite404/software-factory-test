@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Factory config directory v1",
+  "description": "Per-file settings under factory/config/. The loader composes them into the flat object that definition.schema.json describes. Each file's setting names must be listed here.",
+  "$defs": {
+    "factory.yaml": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "capacity",
+        "prd",
+        "tickets",
+        "scope",
+        "verify",
+        "permissions"
+      ],
+      "properties": {
+        "version": {
+          "$ref": "definition.schema.json#/properties/version"
+        },
+        "capacity": {
+          "$ref": "definition.schema.json#/properties/capacity"
+        },
+        "mode": {
+          "$ref": "definition.schema.json#/properties/mode"
+        },
+        "prd": {
+          "$ref": "definition.schema.json#/properties/prd"
+        },
+        "tickets": {
+          "$ref": "definition.schema.json#/properties/tickets"
+        },
+        "scope": {
+          "$ref": "definition.schema.json#/properties/scope"
+        },
+        "verify": {
+          "$ref": "definition.schema.json#/properties/verify"
+        },
+        "permissions": {
+          "$ref": "definition.schema.json#/properties/permissions"
+        },
+        "backup": {
+          "$ref": "definition.schema.json#/properties/backup"
+        },
+        "bookkeepingSHA256": {
+          "$ref": "definition.schema.json#/properties/bookkeepingSHA256"
+        },
+        "watchdog": {
+          "$ref": "definition.schema.json#/properties/watchdog"
+        },
+        "providerLimit": {
+          "$ref": "definition.schema.json#/properties/providerLimit"
+        }
+      }
+    },
+    "agents/foreman/agent.md": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "$ref": "definition.schema.json#/properties/orchestratorModel"
+        }
+      }
+    },
+    "agents/implementer/agent.md": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model"],
+      "properties": {
+        "model": {
+          "$ref": "definition.schema.json#/properties/workerModel"
+        },
+        "effort": {
+          "$ref": "definition.schema.json#/properties/workerEffort"
+        },
+        "runner": {
+          "$ref": "definition.schema.json#/properties/workerRunner"
+        }
+      }
+    },
+    "agents/light-implementer/agent.md": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "effort"],
+      "properties": {
+        "model": {
+          "$ref": "definition.schema.json#/properties/lightWorker/properties/model"
+        },
+        "effort": {
+          "$ref": "definition.schema.json#/properties/lightWorker/properties/effort"
+        }
+      }
+    },
+    "agents/reviewer/agent.md": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "runners/<name>.yaml": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "setup": {
+          "$ref": "definition.schema.json#/properties/setup"
+        },
+        "setupTimeoutMs": {
+          "$ref": "definition.schema.json#/properties/setupTimeoutMs"
+        }
+      }
+    },
+    "agents/observer/agent.md": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "effort"],
+      "properties": {
+        "model": {
+          "$ref": "definition.schema.json#/properties/observer/properties/model"
+        },
+        "effort": {
+          "$ref": "definition.schema.json#/properties/observer/properties/effort"
+        }
+      }
+    }
+  }
+}

@@ -285,7 +285,7 @@ test.each([
     };
     expect(installed.prompt).toContain("Never blindly resume");
     expect(installed.prompt).not.toContain(
-      "/TEST/arbitrary-project/factory/foreman.md",
+      "/TEST/arbitrary-project/factory/config/agents/foreman/agent.md",
     );
     drift = true;
     if (healthy) {

@@ -108,6 +108,8 @@ export type DefinitionPin = {
   workerRunner?: string;
   /** Present exactly when the authored capacity is 2; omission is today's single lane. */
   lightWorker?: LightWorker;
+  /** What register-observer creates; absent in older pins, which keep the built-in observer. */
+  observer?: LightWorker;
   instructions: string;
   tickets: string;
   watchdog?: WatchdogPolicy;
@@ -1542,8 +1544,14 @@ function workerSettings(pin: Record<string, unknown>): boolean {
     (pin.workerEffort === undefined || efforts.has(pin.workerEffort)) &&
     (pin.lightWorker === undefined ||
       (validLightWorker(pin.lightWorker) &&
-        validProviderLimitPolicy(pin.providerLimit, pin.lightWorker.model)))
+        validProviderLimitPolicy(pin.providerLimit, pin.lightWorker.model))) &&
+    optionalAgent(pin.observer)
   );
+}
+
+// An agent setting that older pins lack.
+function optionalAgent(value: unknown) {
+  return value === undefined || validLightWorker(value);
 }
 
 function definitionFields(value: unknown) {

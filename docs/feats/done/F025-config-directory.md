@@ -158,17 +158,17 @@ A baseline failure goes back to the Foreman; it does not widen the worker's scop
 
 ## Done when
 
-- [ ] A project with only `factory/config/` loads, and its effective settings equal the same
+- [x] A project with only `factory/config/` loads, and its effective settings equal the same
       project's flat-file settings.
-- [ ] Unknown keys, unknown files, a dangling runner reference and a directory beside a flat
+- [x] Unknown keys, unknown files, a dangling runner reference and a directory beside a flat
       file are each refused with the file named.
-- [ ] Changing any config file changes the digest, and an active run keeps its pinned settings
+- [x] Changing any config file changes the digest, and an active run keeps its pinned settings
       until an explicit reload.
-- [ ] A worker candidate that edits any file under `factory/config/` is rejected.
-- [ ] `--migrate` produces the directory from a flat file and is safe to repeat.
-- [ ] The Foreman prompt lives at `factory/config/agents/foreman/agent.md` and no reference to
+- [x] A worker candidate that edits any file under `factory/config/` is rejected.
+- [x] `--migrate` produces the directory from a flat file and is safe to repeat.
+- [x] The Foreman prompt lives at `factory/config/agents/foreman/agent.md` and no reference to
       the old path remains outside `docs/feats/done/`.
-- [ ] Full gates, guard and a fresh cold review pass on the accepted revision.
+- [x] Full gates, guard and a fresh cold review pass on the accepted revision.
 
 ## Notes
 

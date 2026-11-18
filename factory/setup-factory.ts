@@ -25,6 +25,7 @@ import {
   parseSetup,
   parseWorkerEffort,
 } from "./native";
+import { hasConfigDefinition } from "./config";
 import { reviewerModel } from "./persistence";
 
 function discoverStore() {
@@ -58,14 +59,17 @@ async function requireDashboard(root: string, check: boolean) {
     );
 }
 
-async function checkOrReuse(root: string, pluginPath: string, check: boolean) {
-  if (
-    !check &&
-    ![".factory.json", "factory/definition.yaml"].some((path) =>
+function hasDefinition(root: string) {
+  return (
+    hasConfigDefinition(root) ||
+    [".factory.json", "factory/definition.yaml"].some((path) =>
       existsSync(join(root, path)),
     )
-  )
-    return false;
+  );
+}
+
+async function checkOrReuse(root: string, pluginPath: string, check: boolean) {
+  if (!check && !hasDefinition(root)) return false;
   await configuration(root);
   await access(pluginPath);
   await requireDashboard(root, check);
@@ -346,9 +350,7 @@ async function definitionOperation(
     );
   if (values.migrate) {
     await migrateDefinition(root);
-    process.stdout.write(
-      "MIGRATION OK; definition is factory/definition.yaml\n",
-    );
+    process.stdout.write("MIGRATION OK; definition is factory/config/\n");
     return true;
   }
   if (values.effective) {

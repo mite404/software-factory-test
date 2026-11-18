@@ -69,7 +69,7 @@ while exact checkpoint binding prevents an old decision from acting on a newer f
 | `factory/persistence.ts`, `factory/persistence.test.ts` | State     | Stop and notice validation                      | Edit         |
 | `factory/native.ts`, `factory/native.test.ts`           | Lifecycle | Stop transitions and recovery guards            | Edit         |
 | `factory/plugin.ts`, `factory/plugin.test.ts`           | Adapter   | Owner messaging and caller context              | Edit         |
-| `factory/foreman.md`, `factory/README.md`               | Contract  | Trusted diagnosis procedure and delivery limits | Edit         |
+| `factory/config/agents/foreman/agent.md`, `factory/README.md`               | Contract  | Trusted diagnosis procedure and delivery limits | Edit         |
 | `node_modules/@ampcode/plugin/index.d.ts`               | API       | Installed messaging contract                    | Read         |
 
 Build durable identity and public behavior tests before adapter delivery. Reuse current modules.

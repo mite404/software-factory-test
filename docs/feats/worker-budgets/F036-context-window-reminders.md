@@ -64,7 +64,7 @@ changes them through the Foreman, and a pinned run keeps the values it started w
 4. **Hand off on operator choice**. On the operator's answer, have the worker write a `ce-handoff`
    document and deliver it to the pasted or newly created thread, recorded on the attempt.
 5. **Document the reminders**. Describe the thresholds, how to change them and the handoff path
-   in the README and foreman.md.
+   in the README and the Foreman prompt.
 
 ## Test plan
 
@@ -88,7 +88,7 @@ without `contextReminders` and a state file written before this change open and 
 | `factory/persistence.ts`, `factory/persistence.test.ts` | Records    | Definition, run crossings, handoff     | Edit         |
 | `factory/native.ts`, `factory/native.test.ts`           | Control    | Usage read, reminders, handoff         | Edit         |
 | `factory/setup-factory.ts`                              | Definition | `contextReminders` default and check   | Edit         |
-| `factory/README.md`, `factory/foreman.md`               | Operations | Thresholds, changing them, the handoff | Edit         |
+| `factory/README.md`, `factory/config/agents/foreman/agent.md`               | Operations | Thresholds, changing them, the handoff | Edit         |
 
 Build order: definition and records, usage read, reminders, handoff, documents.
 

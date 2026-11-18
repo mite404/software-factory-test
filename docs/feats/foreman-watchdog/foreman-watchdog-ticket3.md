@@ -83,7 +83,7 @@ stealing another automation, while honest failure coverage prevents another sile
 | `factory/plugin.ts`, `factory/plugin.test.ts`           | External boundary | Connected schedule/alert tools       | Edit           |
 | `factory/native.ts`, `factory/native.test.ts`           | Lifecycle         | Authorized lifecycle and recovery    | Edit           |
 | `factory/persistence.ts`, `factory/persistence.test.ts` | State             | Ambiguous effects and ownership      | Edit if needed |
-| `factory/foreman.md`, `factory/README.md`               | Contract          | Saved prompt, limits and operations  | Edit           |
+| `factory/config/agents/foreman/agent.md`, `factory/README.md`               | Contract          | Saved prompt, limits and operations  | Edit           |
 | `node_modules/@ampcode/plugin/index.d.ts`               | API               | Connected tool and message semantics | Read           |
 
 Reuse accepted incident/alert records. Agent-facing text requires writing-prompts. Load
