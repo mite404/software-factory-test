@@ -96,11 +96,11 @@ Run the shared preflight in `docs/v1-execution.md`. Baseline gates have not run 
 
 ## Done when
 
-- [ ] `running.reviewerCreation` has a `retry-create` exit and is no longer exitless.
-- [ ] Owner `retry-create` with the exact incident creates one reviewer for the saved revision.
-- [ ] Wrong incident, missing decision, non-owner or non-creating review is refused.
-- [ ] Worker `retry-create` and saved state behave as before.
-- [ ] Full gates, guard and fresh cold review pass on the exact candidate.
+- [x] `running.reviewerCreation` has a `retry-create` exit and is no longer exitless.
+- [x] Owner `retry-create` with the exact incident creates one reviewer for the saved revision.
+- [x] Wrong incident, missing decision, non-owner or non-creating review is refused.
+- [x] Worker `retry-create` and saved state behave as before.
+- [x] Full gates, guard and fresh cold review pass on the exact candidate.
 
 ## Notes
 

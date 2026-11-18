@@ -104,7 +104,9 @@ review feedback, or an answer to a question. Find its current stage and continue
    Use `resume` only for incidents whose recovery action is `resume`. Use `retry-setup` for parked
    preparation after resolving its cause. Inspect uncertain creation or delivery without repeating
    the remote action. Only when the evidence shows that a parked creation produced no thread, use
-   `retry-create` with the ticket, the current incident ID, and that finding as the decision.
+   `retry-create` with the ticket, the current incident ID, and that finding as the decision. This
+   covers a parked worker creation and a reviewer creation left `creating` on a running run; the
+   reviewer is recreated only over the unchanged staged candidate.
    Reconcile keyed assignment deliveries before manual recovery. The factory confirms one exact
    user message or reserves one repeat after a complete transcript read proves absence. Failed,
    ambiguous, or capped reads retain the incident. A held repeat is never repeated again.

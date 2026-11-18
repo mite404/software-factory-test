@@ -278,10 +278,11 @@ publishes `repair: { reason, attempt }`. It is `null` otherwise, so delivery and
 it, and a later resume, whose attempt has moved past `rejectedAttempt`, never reuses it. The page
 words every reason code in one fixed sentence.
 
-The walking test pins five exitless stops by name: `blocked.withoutWorker`,
-`running.reviewerCreation`, `running.reviewerDeliveryLegacy`, `running.workerDeliveryLegacy` and
-`uncertain.legacy`. They stay parked for Foreman inspection because the original worker identity,
-creation lookup or saved delivery key is absent. No new recovery is implied. Reviewer error and
+The walking test pins four exitless stops by name: `blocked.withoutWorker`,
+`running.reviewerDeliveryLegacy`, `running.workerDeliveryLegacy` and `uncertain.legacy`. They stay
+parked for Foreman inspection because the original worker identity or saved delivery key is absent.
+No new recovery is implied. `running.reviewerCreation` exits through `retry-create`, described
+below. Reviewer error and
 approval incidents remain on `running`; only observed recovery of that reviewer clears them, not
 `resume`. Provider waits retain their reset, continuation and pinned reviewer-fallback rules.
 Serialized reconciliation sends queued notices to the owning Foreman through `host.send`, including
@@ -757,6 +758,15 @@ A parked `creating` run never retries by itself. After confirming that no thread
 owning Foreman can call `retry-create` with `ticket`, the current `incident` ID and a nonempty
 `decision`. This repeats that one creation in place, on the executor pinned for the run. A stale
 incident ID, a missing decision, or a run in any other state is refused.
+
+The same action recovers a reviewer creation interrupted on a `running` run, whose review delivery
+is still `creating` with a creation-unknown incident. The lifecycle table declares this exit on
+`running.reviewerCreation`, and only a running run held by that stop is admitted. After confirming
+that no reviewer thread exists, the owning Foreman calls `retry-create` with the same fields. The
+factory first checks that the staged worktree still holds exactly the saved revision, clean; a
+changed or missing worktree is refused with no state change. It then records `create-retried` and
+creates one reviewer for the saved review, which proceeds to delivery and a verdict as usual. The
+run keeps its lane, attempt and worker. A running run whose review is sending or sent is refused.
 
 The installed plugin API exposes only `threads.get(id)`, not thread listing or search.
 `CreateAgentThreadOptions` accepts a parent but no title, label, or initial message. Agent display

@@ -179,6 +179,9 @@ async function fixture(
     reload() {
       factory = createFactory(root, host, openStore);
     },
+    get factory() {
+      return factory;
+    },
     loadDefinition() {
       return factory.tick("reload", "T-owner");
     },
@@ -1125,6 +1128,105 @@ test.each(["create", "send"])(
     }
   },
 );
+
+test("retry-create recreates one interrupted reviewer for the unchanged staged candidate", async () => {
+  const f = await fixture();
+  try {
+    const create = f.host.create.bind(f.host);
+    let interrupted = true;
+    f.host.create = async (...args) => {
+      if (args[3] === "reviewer" && interrupted) {
+        f.settings.push(args);
+        throw new Error("Creation unknown");
+      }
+      return create(...args);
+    };
+    await f.submit(1);
+    expect(f.tick()).rejects.toThrow("Creation unknown");
+    f.reload();
+    const parked = (await f.tick()).runs.A!;
+    if (parked.kind !== "running" || !parked.review)
+      throw new Error("Expected a parked review");
+    expect(parked.review.delivery).toBe("creating");
+    expect(parked.incident).toMatchObject({ reason: "creation-unknown" });
+    const reviewers = () =>
+      f.settings.filter((args) => args[3] === "reviewer").length;
+    expect(reviewers()).toBe(1);
+    const request = {
+      ticket: "A",
+      incident: parked.incident!.id,
+      decision: "The reviewer creation returned an error; no reviewer exists",
+    };
+    const retry = (owner: `T-${string}`, value: typeof request) =>
+      f.factory.tick("retry-create", owner, undefined, value);
+    for (const [owner, value] of [
+      ["T-owner", { ...request, incident: "stale" }],
+      ["T-owner", { ...request, decision: " " }],
+      ["T-other", request],
+    ] as const)
+      expect(retry(owner, value)).rejects.toThrow("exact current incident");
+    await writeFile(join(parked.review.worktree, "src/value"), "tampered");
+    expect(retry("T-owner", request)).rejects.toThrow(
+      "staged worktree changed",
+    );
+    expect((await f.status()).runs.A).toEqual(parked);
+    expect(reviewers()).toBe(1);
+    git(parked.review.worktree, "checkout", "--", "src/value");
+
+    interrupted = false;
+    const retried = (await retry("T-owner", request)).runs.A!;
+    if (retried.kind !== "running" || !retried.review)
+      throw new Error("Expected a review");
+    expect(retried.incident).toBeUndefined();
+    expect(retried.review).toMatchObject({
+      thread: "T-3",
+      delivery: "sent",
+      revision: parked.review.revision,
+      worktree: parked.review.worktree,
+    });
+    expect({ ...retried, review: undefined, watchdog: undefined }).toEqual({
+      ...parked,
+      incident: undefined,
+      review: undefined,
+      watchdog: undefined,
+    });
+    expect(reviewers()).toBe(2);
+    expect(f.messages.at(-1)?.thread).toBe("T-3");
+    expect(retry("T-owner", request)).rejects.toThrow("exact current incident");
+    await f.verdict("pass");
+    expect((await f.tick()).runs.A?.kind).toBe("done");
+    expect(await readFile(join(f.root, "src/value"), "utf8")).toBe("value 1");
+    expect(reviewers()).toBe(2);
+  } finally {
+    await f.close();
+  }
+});
+
+test("retry-create refuses a reviewer whose delivery, not creation, is unknown", async () => {
+  const f = await fixture({}, undefined, "send");
+  try {
+    await f.submit(1);
+    expect(f.tick()).rejects.toThrow(/unknown/);
+    f.reload();
+    const parked = (await f.tick()).runs.A!;
+    expect(parked).toMatchObject({
+      kind: "running",
+      review: { delivery: "sending" },
+      incident: { reason: "delivery-unknown" },
+    });
+    expect(
+      f.factory.tick("retry-create", "T-owner", undefined, {
+        ticket: "A",
+        incident: parked.incident!.id,
+        decision: "No reviewer exists",
+      }),
+    ).rejects.toThrow("exact current incident");
+    expect((await f.status()).runs.A).toEqual(parked);
+    expect(f.settings).toHaveLength(2);
+  } finally {
+    await f.close();
+  }
+});
 
 test("ticket sizing and blast radius are validated independently", () => {
   const base = {
