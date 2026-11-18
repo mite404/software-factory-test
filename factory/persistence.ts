@@ -112,6 +112,10 @@ export type ProviderLimit = {
   observedAt: number;
   resetAt?: number;
 };
+/** When a provider limit is treated as reset: its parsed reset, else 30 minutes after it was seen. */
+export function providerResetAt(limit: ProviderLimit) {
+  return limit.resetAt ?? limit.observedAt + 1_800_000;
+}
 type PipelineStep = (typeof pipelineSteps)[number]["id"];
 export type StopIncident = {
   id: string;
@@ -940,6 +944,15 @@ export type State = {
       clear: "pending" | "cleared" | "unreachable";
       problem?: string;
     }[];
+    /** The one observer thread, recorded with the model and effort it was created with. */
+    observer?: {
+      thread: ThreadID;
+      model: `${string}/${string}`;
+      effort: AgentReasoningEffort;
+      at: number;
+    };
+    /** Removed observer threads; they keep no control right of any kind. */
+    retiredObservers?: ThreadID[];
   };
   /** Last inspected registration and reserved notification effects; not a platform health guarantee. */
   monitor?: {
@@ -1509,10 +1522,30 @@ function validateForeman(value: unknown) {
           optionalText(handoff.problem) &&
           ["pending", "cleared", "unreachable"].includes(String(handoff.clear))
         );
-      })
+      }) ||
+      !validObservers(foreman)
     )
       throw new Error("Invalid Foreman records");
   }
+}
+
+function validObserver(value: unknown) {
+  if (value === undefined) return true;
+  const observer = record(value);
+  return (
+    thread(observer.thread) &&
+    text(observer.model) &&
+    text(observer.effort) &&
+    timestamp(observer.at)
+  );
+}
+
+function validObservers(foreman: Record<string, unknown>) {
+  const retired = foreman.retiredObservers;
+  return (
+    validObserver(foreman.observer) &&
+    (retired === undefined || (Array.isArray(retired) && retired.every(thread)))
+  );
 }
 
 function stateRecord(value: unknown): State {

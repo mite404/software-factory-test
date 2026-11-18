@@ -19,13 +19,12 @@ Merged, but at least one box, usually a live proof, is still open.
 | [F003-provider-limit-resume](feats/durability/F003-provider-limit-resume.md) | Same threads resume after a provider limit | 5/6 |
 | [F011-step-actor-labels](feats/lifecycle-view/F011-step-actor-labels.md) | Each step and exit names who performs it | 5/6 |
 
-## Not started (35)
+## Not started (34)
 
 In dispatch order.
 
 | Ticket | Outcome | Done when |
 | --- | --- | --- |
-| [F035-observer-watchdog-thread](feats/foreman-watchdog/F035-observer-watchdog-thread.md) | Routine watchdog checks run in a cheap observer thread | 0/5 |
 | [F017-remove-public-status](feats/lifecycle-view/F017-remove-public-status.md) | Feed carries the stage only | 0/3 |
 | [F025-config-directory](feats/config-layout/F025-config-directory.md) | Factory settings live in one file per concern | 0/7 |
 | [F029-gate-check-files](feats/config-layout/F029-gate-check-files.md) | The gate reports every check on its own | 0/6 |
@@ -69,7 +68,7 @@ Written up but set aside; not dispatched until the operator asks for it.
 | --- | --- | --- |
 | [F036-context-window-reminders](feats/worker-budgets/F036-context-window-reminders.md) | Context-window reminders with an operator-chosen handoff | 0/5 |
 
-## Done (32)
+## Done (33)
 
 | Ticket | Outcome | Done when |
 | --- | --- | --- |
@@ -93,6 +92,7 @@ Written up but set aside; not dispatched until the operator asks for it.
 | [F009-attempt-cap-parking](feats/done/F009-attempt-cap-parking.md) | Twice-escalated ticket parks; queue continues | 6/6 |
 | [F037-two-worker-lanes](feats/done/F037-two-worker-lanes.md) | Two lanes run two tickets at once | 5/5 |
 | [F014-lifecycle-stages](feats/done/F014-lifecycle-stages.md) | One named stage and actor for every run | 6/6 |
+| [F035-observer-watchdog-thread](feats/done/F035-observer-watchdog-thread.md) | Routine watchdog checks run in a cheap observer thread | 5/5 |
 | [F010-brief-fact-check](feats/done/F010-brief-fact-check.md) | No worker starts on an incomplete brief | 4/4 |
 | [F012-lifecycle-graph-view](feats/done/F012-lifecycle-graph-view.md) | Lifecycle drawn with tickets on their states | 6/6 |
 | [F024-serial-test-runs](feats/done/F024-serial-test-runs.md) | Test runs on one machine take turns | 5/5 |

@@ -156,7 +156,11 @@ review feedback, or an answer to a question. Find its current stage and continue
 
 ## Saved watchdog turn
 
-The factory watchdog runs on this owning Foreman thread, not on a fresh child thread. On a wake,
+The factory watchdog runs on this owning Foreman thread unless an observer is registered. With
+`register-observer`, a small Haiku observer thread takes routine wakes and suspicion nudges. It may
+only reconcile and read `status-summary`, and it messages this thread only when the summary shows a
+change that needs judgment. Treat such a message like a wake: read full status and diagnose here.
+The observer never recovers anything. `remove-observer` returns wakes to this thread. On a wake,
 read `get_schedule` and its saved prompt. Match its factory/root fingerprint and root to durable
 factory status before acting. A schedule conflict or unknown registration is not monitored
 execution. The saved prompt carries this safety contract inline; the managed repository need not

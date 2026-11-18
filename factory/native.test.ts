@@ -18,7 +18,9 @@ import {
   effectiveConfiguration,
   createFactory,
   migrateDefinition,
+  assertControlCaller,
   missingBriefFacts,
+  statusSummary,
   tasks,
   type NativeHost,
 } from "./native";
@@ -28,6 +30,7 @@ import {
   watchdogFixture,
 } from "./bookkeeping.fixture";
 import { startDashboard } from "./dashboard";
+import { deliverAlerts } from "./watchdog";
 import { audit } from "./audit";
 import {
   factoryDefinition,
@@ -36,6 +39,7 @@ import {
   factoryStatus,
   openPersistence,
   runStage,
+  type State,
   type ThreadID,
 } from "./persistence";
 
@@ -2410,6 +2414,449 @@ test("reload retains monitoring for unfinished persisted tickets removed from th
     });
   }
   expect(effects).toEqual(["amp.set_schedule"]);
+});
+
+test("an observer takes wakes and nudges but may only reconcile and read the summary", async () => {
+  const f = await preparationFixture(() => "");
+  let at = 1000;
+  const engine = createFactory(f.root, f.host, openStore, () => at);
+  const { tools, schedules, notifications } = watchdogFixture();
+  await engine.tick("start", "T-owner", f.host.state, undefined, tools);
+  expect([...schedules.keys()]).toEqual(["T-owner"]);
+  const created: unknown[] = [];
+  f.host.create = async (...args) => {
+    created.push(args);
+    return "T-observer";
+  };
+  await engine.observer("register-observer", "T-owner", tools);
+  await engine.observer("register-observer", "T-owner", tools);
+  expect(created).toEqual([
+    ["T-owner", "anthropic/claude-haiku-5-5", "high", "observer"],
+  ]);
+  expect((await engine.tick("status")).foreman?.observer).toEqual({
+    thread: "T-observer",
+    model: "anthropic/claude-haiku-5-5",
+    effort: "high",
+    at: 1000,
+  });
+  expect([...schedules.keys()]).toEqual(["T-observer"]);
+  expect(schedules.get("T-observer")).toMatchObject({
+    targetThreadID: "T-observer",
+    runMode: "existing",
+    enabled: true,
+  });
+  const prompt = String(schedules.get("T-observer")!.prompt);
+  expect(prompt).toContain("status-summary");
+  // Healthy progress such as building to reviewing must not wake the owner.
+  expect(prompt).not.toContain("verdict, kind or stage");
+  expect(prompt).toContain("building to reviewing, is routine progress");
+  const saved = await engine.tick("status");
+  const events = factoryEvents(engine.directory, 0, 500)!.length;
+  for (const action of [
+    "start",
+    "pause",
+    "resume",
+    "retry-create",
+    "retry-setup",
+    "admit",
+    "reload",
+    "record-insight",
+  ] as const)
+    expect(await engine.tick(action, "T-observer").catch(String)).toMatch(
+      /observer may only/,
+    );
+  for (const refused of [
+    () => engine.recordMerge({}, "T-observer"),
+    () => engine.recordLanding({}, "T-observer"),
+    () => engine.note("Not mine", "T-observer"),
+    () =>
+      engine.handoff({ owner: "T-owner", decision: "x" }, "T-observer", tools),
+    () => engine.observer("remove-observer", "T-observer", tools),
+  ])
+    expect(await refused().catch(String)).toMatch(/observer may only/);
+  await engine.tick("reconcile", "T-observer");
+  expect(await engine.tick("status")).toEqual(saved);
+  expect(factoryEvents(engine.directory, 0, 500)).toHaveLength(events);
+  const sent: [string, string][] = [];
+  f.host.send = async (thread, message) => {
+    sent.push([thread, message]);
+  };
+  at += 1_800_000;
+  await engine.tick("reconcile", "T-observer");
+  expect(sent).toEqual([
+    ["T-observer", expect.stringContaining("Factory suspicion")],
+  ]);
+  expect(notifications).toEqual([]);
+  await engine.observer("remove-observer", "T-owner", tools);
+  expect([...schedules.keys()]).toEqual(["T-owner"]);
+  expect((await engine.tick("status")).foreman?.observer).toBeUndefined();
+  at += 1_800_000;
+  await engine.tick("reconcile", "T-owner", f.host.state, undefined, tools);
+  expect(sent.slice(1)).toEqual([
+    ["T-owner", expect.stringContaining("Factory suspicion")],
+  ]);
+});
+
+test("ordinary owner reconciles finish a failed or interrupted move to the observer", async () => {
+  const f = await preparationFixture(() => "");
+  const engine = createFactory(f.root, f.host, openStore, () => 1000);
+  const fixture = watchdogFixture();
+  let failOwnerClear = true;
+  const tools = {
+    async call(name: string, input: Record<string, unknown>) {
+      if (
+        name === "amp.clear_schedule" &&
+        input.thread === "T-owner" &&
+        failOwnerClear
+      )
+        throw new Error("Lost owner clear");
+      return fixture.tools.call(name, input);
+    },
+  };
+  const reconcile = () =>
+    engine.tick("reconcile", "T-owner", f.host.state, undefined, tools);
+  await engine.tick("start", "T-owner", f.host.state, undefined, tools);
+  f.host.create = async () => "T-observer";
+  await engine.observer("register-observer", "T-owner", tools);
+  expect([...fixture.schedules.keys()].sort()).toEqual([
+    "T-observer",
+    "T-owner",
+  ]);
+  expect((await engine.tick("status")).monitor?.problem).toMatch(
+    /Lost owner clear/,
+  );
+  expect((await reconcile()).monitor?.problem).toMatch(/Lost owner clear/);
+  expect(fixture.schedules.has("T-owner")).toBe(true);
+  failOwnerClear = false;
+  const healed = await reconcile();
+  expect([...fixture.schedules.keys()]).toEqual(["T-observer"]);
+  expect(healed.monitor).toMatchObject({ schedule: "installed" });
+  expect(healed.monitor?.problem).toBeUndefined();
+
+  await engine.observer("remove-observer", "T-owner", tools);
+  expect([...fixture.schedules.keys()]).toEqual(["T-owner"]);
+  const storage = openPersistence(engine.directory, []);
+  storage.state.foreman!.observer = {
+    thread: "T-observer",
+    model: "anthropic/claude-haiku-5-5",
+    effort: "high",
+    at: 1000,
+  };
+  storage.commit(storage.state, "factory", "observer-registered", "fixture");
+  storage.close();
+  await reconcile();
+  expect([...fixture.schedules.keys()]).toEqual(["T-observer"]);
+  await engine.tick("pause", "T-owner", f.host.state, undefined, tools);
+  expect(fixture.schedules.size).toBe(0);
+});
+
+test("the status summary carries no private content and stays small for forty runs", () => {
+  const canary = "PRIVATE-BRIEF-REPORT-PATH-THREAD-CONTENT";
+  const running = (attempt: number) => ({
+    kind: "running" as const,
+    base: canary,
+    worktree: `/${canary}`,
+    thread: "T-worker" as const,
+    attempt,
+    delivery: "sent" as const,
+    requirements: canary,
+    feedback: canary,
+    lane: "light" as const,
+    stageAt: 5000,
+    watchdog: {
+      episode: canary,
+      progressAt: 1,
+      attempt,
+      alerts: [
+        {
+          id: `alert-${String(attempt).padStart(30, "0")}`,
+          kind: "unresolved" as const,
+          episode: canary,
+          attempt,
+          intendedAt: 1,
+        },
+      ],
+    },
+    review: {
+      ticket: canary,
+      attempt,
+      revision: "a".repeat(40),
+      base: canary,
+      stage: "post-graft" as const,
+      worktree: canary,
+      model: "anthropic/reviewer" as const,
+      report: `/${canary}/report.json`,
+      log: canary,
+      command: canary,
+      delivery: "sent" as const,
+      thread: "T-review" as const,
+      evidence: canary,
+    },
+  });
+  const runs = Object.fromEntries(
+    Array.from({ length: 40 }, (_, index) => [
+      `${"X".repeat(70)}-${String(index).padStart(3, "0")}`,
+      running(index + 1),
+    ]),
+  );
+  const summary = statusSummary(
+    {
+      enabled: true,
+      owner: "T-owner",
+      runs,
+      monitor: { fingerprint: "f", schedule: "installed", notifications: [] },
+    },
+    1000,
+  );
+  const json = JSON.stringify(summary);
+  expect(json).not.toContain(canary);
+  expect(json).not.toContain("T-worker");
+  expect(json).not.toContain("T-review");
+  expect(Buffer.byteLength(json)).toBeLessThan(16_384);
+  expect(summary.due).toHaveLength(40);
+  expect(summary.due[2]).toEqual({
+    ticket: `${"X".repeat(70)}-002`,
+    kind: "alert",
+    id: `alert-${"3".padStart(30, "0")}:0`,
+  });
+  expect(summary.runs[2]).toEqual({
+    ticket: `${"X".repeat(70)}-002`,
+    kind: "running",
+    lane: "light",
+    attempt: 3,
+    stage: "reviewing",
+    progressAt: 5000,
+    incident: null,
+    review: "sent",
+  });
+});
+
+test("a due continuation is listed from reset until the owner sends it", async () => {
+  const f = await preparationFixture(() => "");
+  let at = 1000;
+  const engine = createFactory(f.root, f.host, openStore, () => at);
+  const { tools } = watchdogFixture();
+  await engine.tick("start", "T-owner", f.host.state, undefined, tools);
+  f.host.create = async () => "T-observer";
+  await engine.observer("register-observer", "T-owner", tools);
+  const limited = {
+    kind: "provider-limit" as const,
+    limit: { message: "limit", observedAt: 1000, resetAt: 3_601_000 },
+  };
+  f.host.state = async () => limited;
+  await engine.tick("reconcile", "T-owner", f.host.state, undefined, tools);
+  const incident = (await engine.tick("status")).runs.A!.incident!;
+  expect(incident.reason).toBe("provider-limit");
+  const summary = async () =>
+    statusSummary(await engine.tick("status"), at).due;
+  await engine.tick("reconcile", "T-observer");
+  expect(await summary()).toEqual([]);
+  at = 3_601_000;
+  const events = factoryEvents(engine.directory, 0, 500)!.length;
+  const continueDue = [
+    {
+      ticket: "A",
+      kind: "continuation",
+      id: `${incident.id}:continuation-due`,
+    },
+  ];
+  for (let wake = 0; wake < 2; wake++) {
+    await engine.tick("reconcile", "T-observer");
+    expect(await summary()).toEqual(continueDue);
+  }
+  expect(factoryEvents(engine.directory, 0, 500)).toHaveLength(events);
+  const sent: string[] = [];
+  f.host.send = async (thread, message) => {
+    if (thread === "T-prepared") sent.push(message);
+  };
+  await engine.tick("reconcile", "T-owner", f.host.state, undefined, tools);
+  expect(sent).toEqual([expect.stringContaining("Continue the same")]);
+  for (let wake = 0; wake < 2; wake++) {
+    await engine.tick("reconcile", "T-observer");
+    expect(await summary()).toEqual([]);
+  }
+  expect(sent).toHaveLength(1);
+});
+
+test("a held alert reservation is not due again; only a new intent is", async () => {
+  const alert = (id: string) => ({
+    id,
+    kind: "unresolved" as const,
+    episode: "episode",
+    attempt: 1,
+    intendedAt: 1,
+  });
+  const state: State = {
+    enabled: true,
+    owner: "T-owner",
+    monitor: { fingerprint: "f", schedule: "installed", notifications: [] },
+    runs: {
+      A: {
+        kind: "running",
+        base: "base",
+        worktree: "/worktree",
+        thread: "T-worker",
+        attempt: 1,
+        delivery: "sent",
+        watchdog: {
+          episode: "episode",
+          progressAt: 1,
+          attempt: 1,
+          alerts: [alert("first")],
+        },
+      },
+    },
+  };
+  const due = () => statusSummary(state, 1000).due.map((item) => item.id);
+  expect(due()).toEqual(["first:0"]);
+  let notifies = 0;
+  let lose = true;
+  const tools = {
+    async call() {
+      notifies++;
+      if (lose) throw new Error("Lost notification acknowledgement");
+      return {};
+    },
+  };
+  await deliverAlerts(
+    state,
+    tools,
+    () => 1000,
+    () => {},
+  );
+  expect(state.monitor!.notifications).toMatchObject([
+    { id: "first", outcome: "unknown" },
+  ]);
+  for (let wake = 0; wake < 2; wake++) {
+    expect(due()).toEqual([]);
+    await deliverAlerts(
+      state,
+      tools,
+      () => 1000,
+      () => {},
+    );
+  }
+  expect(notifies).toBe(1);
+  const run = state.runs.A!;
+  run.watchdog!.alerts.push(alert("second"));
+  expect(due()).toEqual(["second:1000"]);
+  lose = false;
+  await deliverAlerts(
+    state,
+    tools,
+    () => 1000,
+    () => {},
+  );
+  expect(notifies).toBe(2);
+  expect(due()).toEqual([]);
+});
+
+test("an alert held by the hourly budget is escalated again once capacity returns", async () => {
+  const repair = {
+    kind: "running" as const,
+    base: "base",
+    worktree: "/worktree",
+    thread: "T-worker" as const,
+    attempt: 4,
+    delivery: "sent" as const,
+  };
+  const alert = (id: string) => ({
+    id,
+    kind: "parked" as const,
+    episode: "episode",
+    attempt: 4,
+    intendedAt: 1,
+  });
+  const state: State = {
+    enabled: true,
+    owner: "T-owner",
+    monitor: {
+      fingerprint: "f",
+      schedule: "installed",
+      notifications: Array.from({ length: 9 }, (_, index) => ({
+        id: `earlier-${index}`,
+        at: 1000,
+        outcome: "sent" as const,
+      })),
+    },
+    runs: {
+      A: {
+        kind: "parked",
+        reason: "Attempt cap",
+        thread: "T-worker",
+        repair,
+        watchdog: {
+          episode: "episode",
+          progressAt: 1,
+          attempt: 4,
+          alerts: [alert("a"), alert("b")],
+        },
+      },
+    },
+  };
+  const sent: unknown[] = [];
+  const tools = {
+    async call(_name: string, input: Record<string, unknown>) {
+      sent.push(input.title);
+      return {};
+    },
+  };
+  const due = (at: number) =>
+    statusSummary(state, at).due.map((item) => item.id);
+  const deliver = (at: number) =>
+    deliverAlerts(
+      state,
+      tools,
+      () => at,
+      () => {},
+    );
+  expect(due(2000)).toEqual(["a:1000", "b:1000"]);
+  await deliver(2000);
+  expect(sent).toHaveLength(1);
+  for (const at of [2000, 1_800_000, 3_600_999]) {
+    expect(due(at)).toEqual([]);
+    await deliver(at);
+  }
+  expect(sent).toHaveLength(1);
+  expect(due(3_601_000)).toEqual(["b:2000"]);
+  await deliver(3_601_000);
+  expect(sent).toHaveLength(2);
+  expect(due(3_601_000)).toEqual([]);
+});
+
+test("a removed observer keeps no control right, even after a replacement registers", async () => {
+  const f = await preparationFixture(() => "");
+  const engine = createFactory(f.root, f.host, openStore, () => 1000);
+  const { tools } = watchdogFixture();
+  await engine.tick("start", "T-owner", f.host.state, undefined, tools);
+  let next: ThreadID = "T-observer";
+  f.host.create = async () => next;
+  await engine.observer("register-observer", "T-owner", tools);
+  await engine.observer("remove-observer", "T-owner", tools);
+  next = "T-replacement";
+  await engine.observer("register-observer", "T-owner", tools);
+  f.host.state = async () => "idle";
+  const saved = await engine.tick("status");
+  const events = factoryEvents(engine.directory, 0, 500)!.length;
+  for (const action of ["pause", "reload", "reconcile"] as const)
+    expect(
+      await engine
+        .tick(action, "T-observer", f.host.state, undefined, tools)
+        .catch(String),
+    ).toMatch(/removed factory observer/);
+  expect(
+    await engine
+      .handoff({ owner: "T-owner", decision: "Take over" }, "T-observer", tools)
+      .catch(String),
+  ).toMatch(/removed factory observer/);
+  for (const action of ["backup", "status-summary"])
+    expect(() => assertControlCaller(saved, "T-observer", action)).toThrow(
+      /removed factory observer/,
+    );
+  expect(await engine.tick("status")).toEqual(saved);
+  expect(saved).toMatchObject({ enabled: true, owner: "T-owner" });
+  expect(factoryEvents(engine.directory, 0, 500)).toHaveLength(events);
+  await engine.tick("reconcile", "T-replacement");
 });
 
 test("watchdog persistence failures still abort before remote effects or dispatch", async () => {

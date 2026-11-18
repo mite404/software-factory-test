@@ -105,8 +105,8 @@ Run the shared preflight in `docs/v1-execution.md`. Baseline gates have not run 
 
 ## Done when
 
-- [ ] An observer thread can reconcile and read the summary, and every other action is refused.
-- [ ] Watchdog wakes and suspicion nudges land in the observer when one is registered.
-- [ ] The observer messages the owner only when the summary shows a change needing judgment.
-- [ ] Without an observer, wakes and nudges reach the owner exactly as today.
-- [ ] Full gates, guard and fresh cold review pass on the exact candidate.
+- [x] An observer thread can reconcile and read the summary, and every other action is refused.
+- [x] Watchdog wakes and suspicion nudges land in the observer when one is registered.
+- [x] The observer messages the owner only when the summary shows a change needing judgment.
+- [x] Without an observer, wakes and nudges reach the owner exactly as today.
+- [x] Full gates, guard and fresh cold review pass on the exact candidate.

@@ -16,7 +16,9 @@ import type { Executor } from "./executor";
 import type { DeliveryIntent } from "./delivery";
 import {
   deliverAlerts,
+  dueAlerts,
   reconcileSchedule,
+  removePreviousSchedule,
   watchdogFingerprint,
   WatchdogUnavailable,
 } from "./watchdog";
@@ -45,6 +47,7 @@ import {
   runBlocks,
   runStage,
   publicSummary,
+  providerResetAt,
   laneHeld,
   runLane,
   validLightWorker,
@@ -153,7 +156,7 @@ export type NativeHost = {
     parent: ThreadID,
     model: `${string}/${string}`,
     effort?: AgentReasoningEffort,
-    role?: "reviewer",
+    role?: "reviewer" | "observer",
     executor?: Executor,
   ): Promise<ThreadID>;
   /** Inspect exact user-message delivery; incomplete or ambiguous reads are inconclusive. */
@@ -189,8 +192,7 @@ function providerRecovery(
   if (activity === "error" || activity === "awaiting-approval") return "error";
   const recovered = activity === "idle" || activity === "running";
   if (limit.continuation) return recovered ? "recovered" : "wait";
-  const due =
-    recovered || at >= (limit.resetAt ?? limit.observedAt + 1_800_000);
+  const due = recovered || at >= providerResetAt(limit);
   return due ? "continue" : "wait";
 }
 
@@ -1275,14 +1277,109 @@ function legacyReview(
   return review;
 }
 
-/** Refuse workers, reviewers and former owners outside an operator-decided handoff.
+const observerActions = new Set(["reconcile", "status-summary"]);
+const observerModel = "anthropic/claude-haiku-5-5";
+
+function runAttempt(run: Run) {
+  const checkpoint = runCheckpoint(run)!;
+  return "attempt" in checkpoint ? (checkpoint.attempt ?? null) : null;
+}
+
+function runSummary(ticket: string, run: Run) {
+  const { stage, since } = runStage(run);
+  const incident = run.incident;
+  return {
+    ticket: ticket.slice(0, 80),
+    kind: run.kind,
+    lane: runLane(run),
+    attempt: runAttempt(run),
+    stage,
+    progressAt: since,
+    incident: incident ? { id: incident.id, reason: incident.reason } : null,
+    review: "review" in run && run.review ? run.review.delivery : null,
+  };
+}
+
+// A provider continuation the connected owner's reconcile would send now: the same unsent limit
+// and reset rule providerWait uses.
+function continuationDue(ticket: string, run: Run, at: number) {
+  const limit =
+    run.kind === "running" ? run.incident?.providerLimit : undefined;
+  if (!limit || limit.continuation || at < providerResetAt(limit)) return [];
+  return [
+    {
+      ticket,
+      kind: "continuation",
+      id: `${run.incident!.id}:continuation-due`,
+    },
+  ];
+}
+
+// Owner-only work currently due, each with a stable non-private id the observer reports once.
+// Held sending or unknown alert reservations are not due.
+function dueWork(state: State, at: number) {
+  const continuations = state.enabled
+    ? Object.entries(state.runs).flatMap(([ticket, run]) =>
+        continuationDue(ticket, run, at),
+      )
+    : [];
+  const alerts = dueAlerts(state, at).map(({ ticket, due }) => ({
+    ticket,
+    kind: "alert",
+    id: due,
+  }));
+  // ponytail: forty items keep the summary bounded; the owner's full status lists the rest.
+  return [...continuations, ...alerts]
+    .slice(0, 40)
+    .map((item) => ({ ...item, ticket: item.ticket.slice(0, 80) }));
+}
+
+/** Per-run facts the observer compares between wakes, plus the owner work due at `at`. Stage and
+ * progress come from runStage; no brief, report path, worktree or thread content is included.
+ */
+export function statusSummary(state: State, at: number) {
+  return {
+    enabled: state.enabled,
+    owner: state.owner ?? null,
+    schedule: state.monitor?.schedule ?? null,
+    runs: Object.entries(state.runs).map(([ticket, run]) =>
+      runSummary(ticket, run),
+    ),
+    due: dueWork(state, at),
+  };
+}
+
+// Nudges go to the observer when one is registered. Its reconcile has no connected tools but
+// owns the nudges it receives; otherwise only a connected turn sends one.
+function nudgeTarget(
+  state: State,
+  caller: ThreadID | undefined,
+  tools: ConnectedTools | undefined,
+) {
+  const observer = state.foreman?.observer?.thread;
+  if (tools) return observer ?? state.owner;
+  return observer && caller === observer ? observer : undefined;
+}
+
+/** The one caller check for every control action. The observer may only reconcile and read the
+ * status summary; status reads stay open to others; workers, reviewers and former owners are
+ * refused outside an operator-decided handoff.
  * @throws If the caller is ineligible to control the factory.
  */
 export function assertControlCaller(
   state: State,
-  owner?: ThreadID,
-  handoff = false,
+  owner: ThreadID | undefined,
+  action: string,
 ) {
+  if (owner && state.foreman?.retiredObservers?.includes(owner))
+    throw new Error("A removed factory observer may not control the factory");
+  if (owner && owner === state.foreman?.observer?.thread) {
+    if (observerActions.has(action)) return;
+    throw new Error(
+      "The factory observer may only reconcile and read the status summary",
+    );
+  }
+  if (action === "status" || action === "status-summary") return;
   if (
     owner &&
     Object.values(state.runs).some(
@@ -1293,7 +1390,7 @@ export function assertControlCaller(
   )
     throw new Error("Workers cannot control the factory");
   if (
-    !handoff &&
+    action !== "handoff" &&
     owner !== state.owner &&
     state.foreman?.handoffs.some((entry) => entry.from === owner)
   )
@@ -1385,7 +1482,7 @@ function controlState(
   savePause: () => void,
   owner?: ThreadID,
 ) {
-  assertControlCaller(state, owner);
+  assertControlCaller(state, owner, action);
   if (action === "start") {
     if (!execute)
       throw new Error(
@@ -1546,7 +1643,7 @@ export function createFactory(
       await store.init();
       const config = await effectiveConfiguration(root);
       const twoLanes = !!config.lightWorker;
-      assertControlCaller(factoryStatus(directory), owner);
+      assertControlCaller(factoryStatus(directory), owner, action);
       const queue = tasks(
         JSON.parse(await readFile(config.tickets, "utf8")),
         true,
@@ -1743,13 +1840,14 @@ export function createFactory(
           });
           commit(ticket, "watchdog-alert-intended", timing.episode);
         }
-        if (!tools) return;
+        const target = nudgeTarget(state, owner, tools);
+        if (!target) return;
         // Reserve before sending. An ambiguous delivery must not cause repeated nudges.
         timing.nudgedAt = at;
         commit(ticket, "watchdog-nudge-intended", timing.episode);
         try {
           await host.send(
-            state.owner!,
+            target,
             `Factory suspicion ${timing.episode}. Ticket ${ticket}, attempt ${timing.attempt}. No lifecycle progress for the suspicion interval. Diagnose current status and private evidence. Running or unknown activity retains its worker; this nudge does not authorize a duplicate or replacement worker, resume, or permission changes. User-alert delivery is reconciled from durable intent through the connected owner only.`,
           );
           persistence!.event(ticket, "watchdog-nudge-sent", timing.episode);
@@ -3060,23 +3158,23 @@ export function createFactory(
   }
 
   async function saveRecord(
+    action: string,
     owner: ThreadID | undefined,
     record: (
       persistence: ReturnType<typeof openPersistence>,
     ) => State | Promise<State>,
-    handoff = false,
   ) {
     const initial = factoryStatus(directory);
-    assertControlCaller(initial, owner, handoff);
-    if (!handoff) assertOwner(initial, owner);
+    assertControlCaller(initial, owner, action);
+    if (action !== "handoff") assertOwner(initial, owner);
     const store = openStore(join(directory, "bookkeeping"));
     try {
       await store.init();
       const persistence = openPersistence(directory, [], now);
       try {
         const state = persistence.state;
-        assertControlCaller(state, owner, handoff);
-        if (!handoff) assertOwner(state, owner);
+        assertControlCaller(state, owner, action);
+        if (action !== "handoff") assertOwner(state, owner);
         return await record(persistence);
       } finally {
         persistence.close();
@@ -3091,7 +3189,7 @@ export function createFactory(
     value: unknown,
     owner?: ThreadID,
   ) {
-    return saveRecord(owner, (persistence) => {
+    return saveRecord("record-insight", owner, (persistence) => {
       const ticket = text(ticketValue);
       const insight = text(value);
       const state = persistence.state;
@@ -3121,7 +3219,7 @@ export function createFactory(
     const result = pending
       .catch(() => {})
       .then(() =>
-        saveRecord(owner, (persistence) => {
+        saveRecord("note", owner, (persistence) => {
           const textValue = text(message);
           const state = persistence.state;
           state.foreman ??= { notes: [], handoffs: [] };
@@ -3155,74 +3253,68 @@ export function createFactory(
     const result = pending
       .catch(() => {})
       .then(() =>
-        saveRecord(
-          owner,
-          async (persistence) => {
-            const input = object(request);
-            const from = text(input.owner);
-            const decision = text(input.decision);
-            const state = persistence.state;
-            tools = currentTools(tools);
-            if (!owner || !tools)
-              throw new Error(
-                "Handoff requires a connected taking-over Foreman",
-              );
-            if (repeatedHandoff(state, from, owner, decision)) return state;
-            assertHandoff(
+        saveRecord("handoff", owner, async (persistence) => {
+          const input = object(request);
+          const from = text(input.owner);
+          const decision = text(input.decision);
+          const state = persistence.state;
+          tools = currentTools(tools);
+          if (!owner || !tools)
+            throw new Error("Handoff requires a connected taking-over Foreman");
+          if (repeatedHandoff(state, from, owner, decision)) return state;
+          assertHandoff(
+            state,
+            from,
+            owner,
+            watchdogFingerprint(root, directory),
+          );
+          const activity = await observe(state.owner!);
+          if (activity === "running" || activity === "unknown")
+            throw new Error("Handoff refuses a running or unknown owner");
+          const config = await effectiveConfiguration(root);
+          const queue = tasks(
+            JSON.parse(await readFile(config.tickets, "utf8")),
+            true,
+          );
+          restoreTickets(queue, persistence.tickets, state);
+          transferOwnership(state, state.owner!, owner, decision, now());
+          persistence.commit(
+            state,
+            "factory",
+            "foreman-handoff",
+            JSON.stringify({ from, to: owner, decision }),
+          );
+          try {
+            await reconcileSchedule(
+              root,
+              directory,
               state,
-              from,
+              queue,
+              tools,
+              () =>
+                persistence.commit(
+                  state,
+                  "factory",
+                  "watchdog-handoff",
+                  state.monitor!.schedule,
+                ),
+              config.execute,
               owner,
-              watchdogFingerprint(root, directory),
+              now(),
             );
-            const activity = await observe(state.owner!);
-            if (activity === "running" || activity === "unknown")
-              throw new Error("Handoff refuses a running or unknown owner");
-            const config = await effectiveConfiguration(root);
-            const queue = tasks(
-              JSON.parse(await readFile(config.tickets, "utf8")),
-              true,
-            );
-            restoreTickets(queue, persistence.tickets, state);
-            transferOwnership(state, state.owner!, owner, decision, now());
+          } catch (error) {
+            if (!(error instanceof WatchdogUnavailable)) throw error;
+            state.monitor!.problem = error.message;
             persistence.commit(
               state,
               "factory",
-              "foreman-handoff",
-              JSON.stringify({ from, to: owner, decision }),
+              "watchdog-unconfirmed",
+              error.message,
             );
-            try {
-              await reconcileSchedule(
-                root,
-                directory,
-                state,
-                queue,
-                tools,
-                () =>
-                  persistence.commit(
-                    state,
-                    "factory",
-                    "watchdog-handoff",
-                    state.monitor!.schedule,
-                  ),
-                config.execute,
-                owner,
-                now(),
-              );
-            } catch (error) {
-              if (!(error instanceof WatchdogUnavailable)) throw error;
-              state.monitor!.problem = error.message;
-              persistence.commit(
-                state,
-                "factory",
-                "watchdog-unconfirmed",
-                error.message,
-              );
-            }
-            await reissueIncidents(persistence, owner);
-            return state;
-          },
-          true,
-        ),
+          }
+          await reissueIncidents(persistence, owner);
+          return state;
+        }),
       );
     pending = result;
     return result;
@@ -3256,7 +3348,7 @@ export function createFactory(
     const result = pending
       .catch(() => {})
       .then(() =>
-        saveRecord(owner, (persistence) => {
+        saveRecord("record-merge", owner, (persistence) => {
           const { ticket, pr, commit } = parseMergeRequest(request);
           const state = persistence.state;
           const run = Object.hasOwn(state.runs, ticket)
@@ -3284,7 +3376,7 @@ export function createFactory(
     const result = pending
       .catch(() => {})
       .then(() =>
-        saveRecord(owner, (persistence) => {
+        saveRecord("record-landing", owner, (persistence) => {
           const evidence = parseLandingRequest(request);
           const { ticket } = evidence;
           const detail = JSON.stringify(evidence);
@@ -3312,13 +3404,111 @@ export function createFactory(
     return result;
   }
 
+  /** Register the one observer thread or remove it, then move the watchdog schedule to match.
+   * Repeat-safe: a repeated call only finishes an unconfirmed schedule move.
+   * @throws On an ineligible caller, disconnected tools, an unconfirmed observer clear or failed
+   * persistence.
+   */
+  function observer(
+    change: "register-observer" | "remove-observer",
+    owner?: ThreadID,
+    tools?: ConnectedTools,
+  ): Promise<State> {
+    const result = pending
+      .catch(() => {})
+      .then(() =>
+        saveRecord(change, owner, async (persistence) => {
+          tools = currentTools(tools);
+          if (!tools)
+            throw new Error("Observer changes require connected owner tools");
+          await recordObserver(persistence, change, owner!, tools);
+          await moveWatchdog(persistence, owner!, tools);
+          return persistence.state;
+        }),
+      );
+    pending = result;
+    return result;
+  }
+
+  async function recordObserver(
+    persistence: ReturnType<typeof openPersistence>,
+    change: "register-observer" | "remove-observer",
+    owner: ThreadID,
+    tools: ConnectedTools,
+  ) {
+    const state = persistence.state;
+    const previous = state.foreman?.observer?.thread;
+    if (change === "register-observer" && !previous) {
+      // ponytail: an unknown create outcome records nothing; an orphan holds no rights.
+      const thread = await host.create(
+        owner,
+        observerModel,
+        "high",
+        "observer",
+      );
+      state.foreman ??= { notes: [], handoffs: [] };
+      state.foreman.observer = {
+        thread,
+        model: observerModel,
+        effort: "high",
+        at: now(),
+      };
+      persistence.commit(state, "factory", "observer-registered", thread);
+    }
+    if (change === "remove-observer" && previous) {
+      const fingerprint = watchdogFingerprint(root, directory);
+      await removePreviousSchedule(tools, previous, fingerprint);
+      const foreman = state.foreman!;
+      delete foreman.observer;
+      // The retired identity stays refused even after a replacement registers.
+      foreman.retiredObservers = [
+        ...(foreman.retiredObservers ?? []),
+        previous,
+      ];
+      persistence.commit(state, "factory", "observer-removed", previous);
+    }
+  }
+
+  async function moveWatchdog(
+    persistence: ReturnType<typeof openPersistence>,
+    owner: ThreadID,
+    tools: ConnectedTools,
+  ) {
+    const state = persistence.state;
+    const config = await effectiveConfiguration(root);
+    const queue = tasks(
+      JSON.parse(await readFile(config.tickets, "utf8")),
+      true,
+    );
+    restoreTickets(queue, persistence.tickets, state);
+    const save = (action: string, detail: string) =>
+      persistence.commit(state, "factory", action, detail);
+    try {
+      await reconcileSchedule(
+        root,
+        directory,
+        state,
+        queue,
+        tools,
+        () => save("watchdog-schedule", state.monitor!.schedule),
+        config.execute,
+        owner,
+        now(),
+      );
+    } catch (error) {
+      if (!(error instanceof WatchdogUnavailable)) throw error;
+      state.monitor!.problem = error.message;
+      save("watchdog-unconfirmed", error.message);
+    }
+  }
+
   async function loadDefinition(
     action: "reload" | "admit",
     owner: ThreadID | undefined,
     tools: ConnectedTools | undefined,
     selectedTicket: string | undefined,
   ) {
-    assertControlCaller(factoryStatus(directory), owner);
+    assertControlCaller(factoryStatus(directory), owner, action);
     await configuration(root);
     const store = openStore(join(directory, "bookkeeping"));
     try {
@@ -3327,7 +3517,7 @@ export function createFactory(
         action === "admit"
           ? await effectiveConfiguration(root)
           : await configuration(root);
-      assertControlCaller(factoryStatus(directory), owner);
+      assertControlCaller(factoryStatus(directory), owner, action);
       const queue = tasks(
         JSON.parse(await readFile(next.tickets, "utf8")),
         true,
@@ -3419,7 +3609,7 @@ export function createFactory(
       .then(async () => {
         tools = currentTools(tools);
         const initial = factoryStatus(directory);
-        assertControlCaller(initial, owner);
+        assertControlCaller(initial, owner, action);
         assertWatchdogCaller(initial, action, owner, tools);
         if (action === "record-insight")
           return recordInsight(selectedTicket, acceptedInsight, owner);
@@ -3434,5 +3624,13 @@ export function createFactory(
     pending = result;
     return result;
   }
-  return { tick, recordMerge, recordLanding, note, handoff, directory };
+  return {
+    tick,
+    recordMerge,
+    recordLanding,
+    note,
+    handoff,
+    observer,
+    directory,
+  };
 }

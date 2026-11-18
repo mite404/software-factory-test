@@ -62,7 +62,7 @@ prerequisites, not permission to dispatch every draft against today's base.
 | [F032-landing-per-commit-proof](feats/done/F032-landing-per-commit-proof.md)             | A multi-commit candidate can record its landing           | F031-landing-without-checkpoint                                          | F03, operator autonomy priority           |
 | [F033-provider-error-shape](feats/done/F033-provider-error-shape.md)                     | A real provider limit waits instead of stopping           | F006-limit-fallback-setting                                              | F03, operator autonomy priority           |
 | [F034-reviewer-retry-create](feats/durability/F034-reviewer-retry-create.md)             | An interrupted reviewer creation can be retried           | F007-run-transition-table                                                | F03, operator autonomy priority           |
-| [F035-observer-watchdog-thread](feats/foreman-watchdog/F035-observer-watchdog-thread.md) | Routine watchdog checks run in a cheap observer thread    | F014-lifecycle-stages                                                    | F03, operator autonomy priority           |
+| [F035-observer-watchdog-thread](feats/done/F035-observer-watchdog-thread.md) | Routine watchdog checks run in a cheap observer thread    | F014-lifecycle-stages                                                    | F03, operator autonomy priority           |
 | [F037-two-worker-lanes](feats/done/F037-two-worker-lanes.md)                             | Two lanes run two tickets at once                         | F011-step-actor-labels                                                   | R1, R10, operator throughput priority     |
 | [v1-ticket4](feats/v1/v1-ticket4.md)                                                     | Durable private evidence records                          | v1-ticket2                                                               | F02, F07, R6-R7                           |
 | [v1-ticket11](feats/v1/v1-ticket11.md)                                                   | Required and advisory verification tools                  | v1-ticket2                                                               | F12, AC28, AC35-AC36                      |
@@ -194,7 +194,10 @@ crash recovery each time, and the Foreman added the last fix: a reconcile kills 
 past its deadline after its coordinator died. F012 landed at attempt four on the light lane:
 reviews found markers without the run's stage and actor, a stage start shown as a stop time,
 exitless states decided from stop counts, a lit queued node and a banner that ignored stop exits.
-All are placed. The factory can run a main and a light lane at once from merged main.
+F035 landed outside the factory with the operator's approval after four attempts: reviews found
+the observer's private replies, lost wakes for owner-only work, rights kept after removal, alerts
+held by the hourly budget, and finally a prompt that woke the owner on routine progress, which the
+Foreman fixed. All are placed. The factory can run a main and a light lane at once from merged main.
 
 v1-ticket10 keeps the recovery of outages that still happen, and v1-ticket8 keeps exclusive
 ownership across orbs. Keep preserved backup owners until required evidence preservation is
