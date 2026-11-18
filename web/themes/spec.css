@@ -176,8 +176,6 @@
 :root[data-theme="spec"] .wire {
   stroke: var(--line);
   stroke-width: 1.1;
-  /* The factory floats a little above its sheet. */
-  filter: drop-shadow(0 5px 1.5px rgba(60, 58, 50, 0.6));
 }
 :root[data-theme="spec"] .wire .head {
   stroke: var(--line);
