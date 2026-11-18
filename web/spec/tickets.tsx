@@ -17,6 +17,11 @@ import {
   HoverCardContent,
   HoverCardTrigger,
 } from "@ui-sdk/react/hover-card";
+import {
+  SegmentedControl,
+  SegmentedControlItem,
+} from "@ui-sdk/react/segmented-control";
+import { Switch, SwitchThumb } from "@ui-sdk/react/switch";
 import { Tooltip, TooltipTrigger } from "@ui-sdk/react/tooltip";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -48,6 +53,7 @@ type Choose = (id: string | null) => void;
 const KEY = { l: 0.67, c: 0.18, h: 48 };
 const CHECKS = ["test", "lint", "typecheck", "format", "fallow", "diff-check"];
 const PAGE = 4; // COMING rows per page
+const WORKERS = ["1", "2", "3", "4"]; // positions of the planned worker switch
 const LOG = 50; // notifications kept for the list
 const RULE_Y = 535; // just above the ACTIVE rule in web/index.html
 const LIFT = 64; // how far this skin raises the return wire, in SVG units
@@ -636,7 +642,56 @@ function Everything({ view }: { view: View }) {
           </Lcd>
         ))}
       </div>
-      <small>read-only · one poll every 5 s</small>
+    </section>
+  );
+}
+
+// Operator settings the factory cannot receive yet: its server refuses every non-GET request, runs
+// one worker (F037) and reads no context usage (F036). They hold the reader's intent and send nothing.
+function Controls() {
+  const [workers, setWorkers] = useState("1");
+  const [warnings, setWarnings] = useState(false);
+  return (
+    <section data-section data-area="controls">
+      <h2>Controls · planned</h2>
+      <div data-control>
+        <span id="control-workers">Concurrent agents</span>
+        <SegmentedControl
+          data-kit="slide-switch"
+          data-orientation="horizontal"
+          aria-labelledby="control-workers"
+          style={
+            {
+              "--n": WORKERS.length,
+              "--i": Number(workers) - 1,
+            } as CSSProperties
+          }
+          value={workers}
+          onValueChange={(value) => setWorkers(value ?? workers)}
+        >
+          {WORKERS.map((count) => (
+            <SegmentedControlItem
+              key={count}
+              value={count}
+              data-kit="slide-switch-stop"
+            >
+              {count}
+            </SegmentedControlItem>
+          ))}
+          <span data-kit="slide-switch-lever" />
+        </SegmentedControl>
+      </div>
+      <div data-control>
+        <span id="control-warnings">Context window warnings</span>
+        <Switch
+          data-kit="switch"
+          aria-labelledby="control-warnings"
+          checked={warnings}
+          onCheckedChange={setWarnings}
+        >
+          <SwitchThumb data-kit="switch-thumb" />
+        </Switch>
+      </div>
     </section>
   );
 }
@@ -985,6 +1040,7 @@ function Tickets({
           <Coming pending={pending} shown={shown} choose={setChosen} />
           {view.graph && <Lifecycle graph={view.graph} />}
           <Everything view={view} />
+          <Controls />
         </Device>
         <Toasts />
         <EventLog events={events} status={eventStatus} />

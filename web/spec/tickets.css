@@ -506,17 +506,39 @@
   justify-self: end;
 }
 
-/* ALL TICKETS: the tally on three small LCDs. */
-#kit [data-area="queue"] > small {
-  font: 500 8.5px/1 var(--mono, monospace);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  white-space: nowrap;
-  color: var(--dim);
+/* CONTROLS: under ALL TICKETS in the narrow column; COMING keeps the wide one for both rows. */
+#kit [data-area="coming"] {
+  grid-row: span 2;
 }
 
-#kit [data-area="queue"] > small {
-  justify-self: end;
+#kit [data-area="controls"] {
+  grid-column: -2;
+  align-content: start;
+}
+
+#kit [data-control] {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 40px;
+  font: 500 8.5px/1.4 var(--mono, monospace);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+
+#kit [data-control] [data-kit="slide-switch"] {
+  --col: 30px;
+  flex: none;
+  width: 150px;
+  margin: 0;
+}
+
+/* The kit prints OFF and ON outside the switch; keep ON inside the column. */
+#kit [data-control] [data-kit="switch"] {
+  flex: none;
+  margin-inline-end: 30px;
 }
 
 #kit [data-counts] {
