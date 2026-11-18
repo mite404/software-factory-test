@@ -60,7 +60,7 @@ prerequisites, not permission to dispatch every draft against today's base.
 | [F034-reviewer-retry-create](feats/done/F034-reviewer-retry-create.md)             | An interrupted reviewer creation can be retried           | F007-run-transition-table                                                | F03, operator autonomy priority           |
 | [v1-ticket3](feats/v1/v1-ticket3.md)                                                     | Repeat-safe repository services                           | v1-ticket2                                                               | F01, AC13-AC16, AC20                      |
 | [v1-ticket4](feats/done/v1-ticket4.md)                                                     | Durable private evidence records                          | v1-ticket2                                                               | F02, F07, R6-R7                           |
-| [F025-config-directory](feats/config-layout/F025-config-directory.md)                    | Factory settings live in one file per concern             | None                                                                     | F12, operator configuration priority      |
+| [F025-config-directory](feats/done/F025-config-directory.md)                    | Factory settings live in one file per concern             | None                                                                     | F12, operator configuration priority      |
 | [F029-gate-check-files](feats/config-layout/F029-gate-check-files.md)                    | The gate reports every check on its own                   | F025-config-directory                                                    | F03, F12, AC28                            |
 | [v1-ticket11](feats/v1/v1-ticket11.md)                                                   | Required and advisory verification tools                  | v1-ticket2                                                               | F12, AC28, AC35-AC36                      |
 | [F026-factory-automations](feats/config-layout/F026-factory-automations.md)              | Automations switch on, off and run on demand              | F025-config-directory                                                    | F12, operator autonomy priority           |
@@ -208,7 +208,11 @@ escaping, and a refresh that left the generated dashboard untracked. Its fixture
 repositories; real supervised services and a rendered portal stay open as live boxes. v1-ticket4
 landed at attempt two: the first review found landing checked evidence still held in memory, a
 report left out of the acceptance check, and gate evidence lost on a rebase after the other lane
-landed. Evidence is now saved where each fact happens and read back before any merge.
+landed. Evidence is now saved where each fact happens and read back before any merge. F025 parked
+at attempt four on the light lane and landed outside the factory (operator option B): each review
+found one more config file state that the loader skipped instead of refusing, such as a linked
+`factory`, stray files beside a flat definition, and front matter it failed to recognize. The
+Foreman fixed the last state in one classifier and a fresh cold review's nit in the same place.
 
 On 2026-11-18 the operator reordered the open units for the least blocking scaffolding first; the
 unit table above lists them in that order. After F023 come F034 on the main lane and v1-ticket3 on

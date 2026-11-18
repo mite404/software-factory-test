@@ -21,13 +21,12 @@ Merged, but at least one box, usually a live proof, is still open.
 | [F023-public-stop-reasons](feats/lifecycle-view/F023-public-stop-reasons.md) | A blocked or rejected ticket says why | 5/6 |
 | [v1-ticket3](feats/v1/v1-ticket3.md) | Repeat-safe repository services | 1/3 |
 
-## Not started (29)
+## Not started (28)
 
 In dispatch order.
 
 | Ticket | Outcome | Done when |
 | --- | --- | --- |
-| [F025-config-directory](feats/config-layout/F025-config-directory.md) | Factory settings live in one file per concern | 0/7 |
 | [F029-gate-check-files](feats/config-layout/F029-gate-check-files.md) | The gate reports every check on its own | 0/6 |
 | [v1-ticket11](feats/v1/v1-ticket11.md) | Required and advisory verification tools | 0/3 |
 | [F026-factory-automations](feats/config-layout/F026-factory-automations.md) | Automations switch on, off and run on demand | 0/5 |
@@ -65,7 +64,7 @@ Written up but set aside; not dispatched until the operator asks for it.
 | --- | --- | --- |
 | [F036-context-window-reminders](feats/worker-budgets/F036-context-window-reminders.md) | Context-window reminders with an operator-chosen handoff | 0/5 |
 
-## Done (36)
+## Done (37)
 
 | Ticket | Outcome | Done when |
 | --- | --- | --- |
@@ -105,3 +104,4 @@ Written up but set aside; not dispatched until the operator asks for it.
 | [F037-two-worker-lanes](feats/done/F037-two-worker-lanes.md) | Two lanes run two tickets at once | 5/5 |
 | [F034-reviewer-retry-create](feats/done/F034-reviewer-retry-create.md) | An interrupted reviewer creation can be retried | 5/5 |
 | [v1-ticket4](feats/done/v1-ticket4.md) | Durable private evidence records | 3/3 |
+| [F025-config-directory](feats/done/F025-config-directory.md) | Factory settings live in one file per concern | 7/7 |
