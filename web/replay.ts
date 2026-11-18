@@ -138,7 +138,7 @@ const TICKETS = [
   },
 ];
 
-// One poll each: the newest ticket in the feed, its status and stage, and its pending review.
+// One poll each: the newest ticket in the feed, its stage and activity, and its pending review.
 // Stages were not in the 2026-11 recording; frames 15 to 18 are illustrative stage examples, and
 // frames 19 to 22 are the lifecycle graph's cases: an empty factory, one running ticket, one
 // stopped ticket and several tickets on one state. Every frame names the run's kind, and its
@@ -148,7 +148,7 @@ type Frame = {
   kind: string | null;
   stopName?: string;
   crowd?: true; // every ticket up to `ticket` is in this frame's state, none landed
-  status: FeedTask["status"];
+  activity?: FeedTask["activity"]; // the observed activity of a run in flight
   stage: NonNullable<FeedTask["stage"]>;
   actor: NonNullable<FeedTask["actor"]>;
   pending?: number;
@@ -169,40 +169,37 @@ const REVIEWING = {
 } as const;
 
 export const FRAMES: Frame[] = [
-  { ticket: 2, status: "working", ...BUILDING },
-  { ticket: 2, status: "blocked", pending: 5, ...REVIEWING }, // 23:26:14 review dispatch reads "blocked"
-  { ticket: 2, status: "working", pending: 5, ...REVIEWING },
-  { ticket: 2, status: "working", ...BUILDING }, // 23:33:28 review record gone: rejected, same worker repairs
-  { ticket: 2, status: "blocked", pending: 6, ...REVIEWING }, // 23:45:44
-  { ticket: 2, status: "working", pending: 6, ...REVIEWING },
+  { ticket: 2, activity: "working", ...BUILDING },
+  { ticket: 2, activity: "blocked", pending: 5, ...REVIEWING }, // 23:26:14 review dispatch reads "blocked"
+  { ticket: 2, activity: "working", pending: 5, ...REVIEWING },
+  { ticket: 2, activity: "working", ...BUILDING }, // 23:33:28 review record gone: rejected, same worker repairs
+  { ticket: 2, activity: "blocked", pending: 6, ...REVIEWING }, // 23:45:44
+  { ticket: 2, activity: "working", pending: 6, ...REVIEWING },
   {
     ticket: 2,
-    status: "accepted",
     stage: "accepted",
     actor: "foreman",
     kind: "done",
   }, // 23:53:45 landed on attempt 6
   {
     ticket: 3,
-    status: "unknown",
     stage: "creating",
     actor: "computer",
     kind: "creating",
   }, // 00:01:27 next ticket appears
-  { ticket: 3, status: "working", ...BUILDING },
+  { ticket: 3, activity: "working", ...BUILDING },
   {
     ticket: 3,
-    status: "blocked",
     stage: "blocked",
     actor: "foreman",
     kind: "blocked",
   }, // 00:02:35 blocked before any review, for 1 h 45 min
-  { ticket: 3, status: "idle", ...BUILDING }, // 01:47:42 resumed by the foreman
-  { ticket: 3, status: "unknown", ...BUILDING },
-  { ticket: 3, status: "working", ...BUILDING },
+  { ticket: 3, activity: "idle", ...BUILDING }, // 01:47:42 resumed by the foreman
+  { ticket: 3, ...BUILDING },
+  { ticket: 3, activity: "working", ...BUILDING },
   {
     ticket: 3,
-    status: "blocked",
+    activity: "blocked",
     pending: 2,
     stopped: true,
     stage: "reviewing",
@@ -212,7 +209,6 @@ export const FRAMES: Frame[] = [
   },
   {
     ticket: 3,
-    status: "blocked",
     stopped: true,
     parked: true,
     stage: "parked",
@@ -222,15 +218,13 @@ export const FRAMES: Frame[] = [
   },
   {
     ticket: 3,
-    status: "unknown",
     stage: "gating",
     actor: "computer",
     kind: "running",
   },
-  { ticket: 3, status: "unknown", pending: 5, ...REVIEWING },
+  { ticket: 3, pending: 5, ...REVIEWING },
   {
     ticket: 3,
-    status: "blocked",
     stopped: true,
     escalated: true,
     stage: "escalated",
@@ -240,7 +234,6 @@ export const FRAMES: Frame[] = [
   },
   {
     ticket: 3,
-    status: "unknown",
     stage: "rate-limited",
     actor: "computer",
     kind: "running",
@@ -248,15 +241,13 @@ export const FRAMES: Frame[] = [
   },
   {
     ticket: -1,
-    status: "unknown",
     stage: "queued",
     actor: "computer",
     kind: null,
   },
-  { ticket: 0, status: "working", ...BUILDING },
+  { ticket: 0, activity: "working", ...BUILDING },
   {
     ticket: 0,
-    status: "blocked",
     stopped: true,
     parked: true,
     stage: "parked",
@@ -264,7 +255,7 @@ export const FRAMES: Frame[] = [
     kind: "parked",
     stopName: "repair",
   },
-  { ticket: 3, status: "working", crowd: true, ...BUILDING },
+  { ticket: 3, activity: "working", crowd: true, ...BUILDING },
 ];
 
 const STOPPED_REVIEW = {
@@ -329,7 +320,7 @@ function stageFrame(
   frame: Frame,
   landed: boolean,
   merged: boolean,
-): Partial<FeedTask> {
+): Partial<FeedTask> & Pick<FeedTask, "stage"> {
   if (!landed)
     return {
       stage: frame.stage,
@@ -371,7 +362,7 @@ function reviewFrame(
 }
 
 const landedIn = (frame: Frame, i: number) =>
-  !frame.crowd && (i < frame.ticket || frame.status === "accepted");
+  !frame.crowd && (i < frame.ticket || frame.stage === "accepted");
 
 const stoppedIn = (frame: Frame, landed: boolean) =>
   !landed && (frame.stopped || !!frame.stopName);
@@ -382,7 +373,7 @@ function outcomeFrame(
   landed: boolean,
 ) {
   return {
-    status: landed ? "accepted" : frame.status,
+    activity: landed ? null : (frame.activity ?? null),
     parked: !landed && frame.parked === true,
     merge: landed ? ticket.merge : null,
   } as const;

@@ -1200,7 +1200,7 @@ test("plugin and HTTP keep private briefs and native titles out of public titles
     expect(
       admitted.tasks.find((task: { id: string }) => task.id === "queued"),
     ).toMatchObject({
-      status: "queued",
+      stage: "queued",
       outcome: "Public result",
       thread: null,
     });
@@ -1487,7 +1487,7 @@ test.each([
         (await Bun.file(join(root, ".git/factory/dashboard.json")).json())
           .tasks[0],
       ).toMatchObject({
-        status: "idle",
+        activity: "idle",
         steps: ["Repair the stored value", "Verify the public response"],
       });
       readFails = false;
@@ -1775,7 +1775,7 @@ test.each([
           join(root, ".git/factory/dashboard.json"),
         ).json();
         expect(completed.tasks[0]).toMatchObject({
-          status: "accepted",
+          activity: null,
           thread: "T-reviewer",
           revision,
         });
@@ -1785,7 +1785,7 @@ test.each([
         ).json();
         expect(durable).toMatchObject({ fresh: false, observedAt: null });
         expect(durable.tasks[0]).toMatchObject({
-          status: "accepted",
+          stage: "accepted",
           revision,
           evidence: {
             acceptance: { revision },
@@ -1945,15 +1945,15 @@ test("setup recovery control preserves durable failure and compatible observatio
         ledger: { async record() {} },
       }));
     const observation = join(root, ".git/factory/dashboard.json");
-    async function observed(status: string) {
+    async function observed(activity: string) {
       for (let i = 0; i < 1200; i++) {
         if (existsSync(observation)) {
           const snapshot = JSON.parse(await readFile(observation, "utf8"));
-          if (snapshot.tasks[0].status === status) return snapshot.tasks[0];
+          if (snapshot.tasks[0].activity === activity) return snapshot.tasks[0];
         }
         await Bun.sleep(5);
       }
-      throw new Error(`Observation never reached ${status}`);
+      throw new Error(`Observation never reached ${activity}`);
     }
     const directory = join(root, ".git/factory");
     await mkdir(directory, { recursive: true });
@@ -2011,17 +2011,13 @@ test("setup recovery control preserves durable failure and compatible observatio
     });
     expect((await control("reconcile")).runs.A).toEqual(failed);
     expect(notices).toHaveLength(1);
-    expect(await observed("blocked")).toMatchObject({
-      status: "blocked",
-      thread: null,
-    });
     const server = startDashboard({ root, port: 0 });
     try {
       const status = await (
         await fetch(`http://localhost:${server.port}/api/status`)
       ).json();
       expect(status.tasks[0]).toMatchObject({
-        status: "blocked",
+        stage: "blocked",
         thread: null,
       });
       expect(JSON.stringify(status)).not.toContain(failed.log);
@@ -2039,7 +2035,7 @@ test("setup recovery control preserves durable failure and compatible observatio
     expect(creates).toBe(1);
     expect(sends).toBe(1);
     expect(await observed("working")).toMatchObject({
-      status: "working",
+      activity: "working",
       thread: "T-worker",
     });
     expect((await control("status")).monitor.problem).toContain("unavailable");

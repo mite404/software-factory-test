@@ -252,7 +252,7 @@ test("HTTP retains authored labels across restarts and rejects untrusted labels 
       {
         id: "constructor",
         steps: [],
-        status: "planned",
+        stage: "planned",
         outcome: "Public plan",
       },
       { id: "orphan", steps: [], kind: "blocked", stopName: null },
@@ -280,7 +280,7 @@ test("HTTP retains authored labels across restarts and rejects untrusted labels 
         {
           id: "A",
           title: "Observed title",
-          status: "queued",
+          status: "queued", // written before the feed dropped its public status
           thread: null,
           revision: null,
           steps: ["Untrusted heartbeat replacement"],
@@ -555,7 +555,7 @@ test("HTTP reads durable acceptance without a heartbeat and never discloses priv
       {
         id: "A",
         title: "A",
-        status: "accepted",
+        stage: "accepted",
         thread: "T-worker",
         revision,
         evidence: {
@@ -566,7 +566,7 @@ test("HTTP reads durable acceptance without a heartbeat and never discloses priv
       },
       {
         id: "B",
-        status: "unknown",
+        activity: null,
         thread: "T-review",
         revision,
         attempt: 1,
@@ -581,7 +581,7 @@ test("HTTP reads durable acceptance without a heartbeat and never discloses priv
           gate: { revision, base: review.base, stage: "post-graft" },
         },
       },
-      { id: "C", status: "queued", attempt: null },
+      { id: "C", stage: "queued", attempt: null },
     ]);
     expect(missing).toMatchObject({
       durable: "available",
@@ -598,28 +598,28 @@ test("HTTP reads durable acceptance without a heartbeat and never discloses priv
         {
           id: "A",
           title: "Accepted title",
-          status: "working",
+          activity: "working",
           thread: "T-wrong",
           revision: null,
         },
         {
           id: "B",
           title: `Review title; evidence: ${canary}`,
-          status: "working",
+          activity: "working",
           thread: "T-review",
           revision,
         },
         {
           id: "ghost",
           title: "Not durable",
-          status: "accepted",
+          activity: null,
           thread: null,
           revision,
         },
         {
           id: "C",
           title: canary,
-          status: "queued",
+          activity: null,
           thread: null,
           revision: null,
         },
@@ -630,14 +630,14 @@ test("HTTP reads durable acceptance without a heartbeat and never discloses priv
     const fresh = await (await fetch(url)).json();
     expect(fresh).toMatchObject({ fresh: true, enabled: true });
     expect(fresh.tasks).toMatchObject([
-      { id: "A", status: "accepted" },
-      { id: "B", title: "B - post-graft review (sent)", status: "working" },
-      { id: "C", status: "queued" },
+      { id: "A", stage: "accepted" },
+      { id: "B", title: "B - post-graft review (sent)", activity: "working" },
+      { id: "C", stage: "queued" },
     ]);
     snapshot.tasks[0] = {
       id: "A",
       title: canary,
-      status: "working",
+      activity: "working",
       thread: "T-worker",
       revision,
     };
@@ -654,7 +654,7 @@ test("HTTP reads durable acceptance without a heartbeat and never discloses priv
           {
             id: "A",
             title: "A",
-            status: "accepted",
+            stage: "accepted",
             thread: "T-worker",
             revision,
             evidence: { acceptance: { revision } },
@@ -664,7 +664,7 @@ test("HTTP reads durable acceptance without a heartbeat and never discloses priv
             title: "B - post-graft review (sent)",
             thread: "T-review",
             revision,
-            status: age === 0 ? "working" : "unknown",
+            activity: age === 0 ? "working" : null,
             evidence: {
               review: { pending: true, revision, base: review.base },
             },
@@ -672,7 +672,7 @@ test("HTTP reads durable acceptance without a heartbeat and never discloses priv
           {
             id: "C",
             title: "C",
-            status: "queued",
+            stage: "queued",
             thread: null,
             revision: null,
           },
@@ -683,24 +683,24 @@ test("HTTP reads durable acceptance without a heartbeat and never discloses priv
     snapshot.observedAt = new Date().toISOString();
     snapshot.tasks[1]!.thread = "T-old-review";
     await writeFile(path, JSON.stringify(snapshot));
-    expect((await (await fetch(url)).json()).tasks[1].status).toBe("unknown");
+    expect((await (await fetch(url)).json()).tasks[1].activity).toBeNull();
     snapshot.tasks[1]!.thread = "T-review";
     snapshot.tasks[1]!.revision = "c".repeat(40);
     await writeFile(path, JSON.stringify(snapshot));
-    expect((await (await fetch(url)).json()).tasks[1].status).toBe("unknown");
+    expect((await (await fetch(url)).json()).tasks[1].activity).toBeNull();
     snapshot.tasks[1]!.revision = revision;
     snapshot.observedAt = new Date(Date.now() - 60_000).toISOString();
     await writeFile(path, JSON.stringify(snapshot));
-    expect((await (await fetch(url)).json()).tasks[1].status).toBe("unknown");
+    expect((await (await fetch(url)).json()).tasks[1].activity).toBeNull();
     snapshot.observedAt = new Date(Date.now() + 60_000).toISOString();
     await writeFile(path, JSON.stringify(snapshot));
-    expect((await (await fetch(url)).json()).tasks[1].status).toBe("unknown");
+    expect((await (await fetch(url)).json()).tasks[1].activity).toBeNull();
     await writeFile(path, "not json");
     const invalid = await (await fetch(url)).json();
     expect(invalid).toMatchObject({
       observations: "invalid",
     });
-    expect(invalid.tasks[0].status).toBe("accepted");
+    expect(invalid.tasks[0].stage).toBe("accepted");
     expect(await readFile(join(directory, "state.sqlite"))).toEqual(bytes);
     expect((await readdir(directory)).sort()).toEqual(
       [...files, "dashboard.json"].sort(),
@@ -773,14 +773,14 @@ test("dashboard ignores observed titles, stops stale activity, and never serves 
         {
           id: "A",
           title: "Repair <script>markup</script>",
-          status: "working",
+          activity: "working",
           thread: "T-actual-thread",
           revision: null,
         },
         {
           id: "B",
           title: "Next ticket",
-          status: "queued",
+          activity: null,
           thread: null,
           revision: null,
         },
@@ -794,7 +794,7 @@ test("dashboard ignores observed titles, stops stale activity, and never serves 
     expect(current.fresh).toBe(true);
     expect(current.tasks[0]).toMatchObject({
       title: "A",
-      status: "working",
+      activity: "working",
       thread: "T-actual-thread",
     });
     expect(current.privateToken).toBeUndefined();
@@ -803,7 +803,7 @@ test("dashboard ignores observed titles, stops stale activity, and never serves 
     await writeFile(path, JSON.stringify(snapshot));
     const stale = await (await fetch(`${url}/api/status`)).json();
     expect(stale.fresh).toBe(false);
-    expect(stale.tasks[0].status).toBe("unknown");
+    expect(stale.tasks[0].activity).toBeNull();
     await writeFile(path, '{"tasks": "invalid"}');
     expect(await (await fetch(`${url}/api/status`)).json()).toMatchObject({
       durable: "available",

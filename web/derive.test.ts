@@ -8,24 +8,41 @@ import {
 } from "./derive";
 import { eventsAt, feedAt, FRAMES } from "./replay";
 import { pipelineSteps } from "../factory/pipeline";
-import { lifecycleStatus, runStage, stages } from "../factory/persistence";
+import {
+  lifecycleStatus,
+  runStage,
+  stages,
+  type Stage,
+} from "../factory/persistence";
 
 const NOW = Date.parse("2026-11-13T12:00:10Z");
 
-function feed(statuses: FeedTask["status"][], extra: Partial<Feed> = {}): Feed {
+// One ticket per word: the stage and live activity that make the page say it.
+const WHERE = {
+  working: { stage: "building", step: 3, activity: "working" },
+  idle: { stage: "building", step: 4, activity: "idle" },
+  unknown: { stage: "building", step: null, activity: null },
+  blocked: { stage: "blocked", step: 3, activity: null },
+  planned: { stage: "planned", step: null, activity: null },
+  queued: { stage: "queued", step: null, activity: null },
+  accepted: { stage: "accepted", step: 6, activity: null },
+} as const;
+
+function feed(words: (keyof typeof WHERE)[], extra: Partial<Feed> = {}): Feed {
   return {
     project: "p",
     target: "main",
     observedAt: "2026-11-13T12:00:03Z",
     enabled: true,
     fresh: true,
-    tasks: statuses.map((status, i) => ({
+    stages,
+    tasks: words.map((word, i) => ({
       id: `T${i + 1}`,
       title: `ticket ${i + 1}`,
       steps: [],
-      status,
-      thread: status === "working" ? "T-abc" : null,
-      revision: status === "accepted" ? `${i + 1}`.repeat(40) : null,
+      ...WHERE[word],
+      thread: word === "working" ? "T-abc" : null,
+      revision: word === "accepted" ? `${i + 1}`.repeat(40) : null,
     })),
     ...extra,
   };
@@ -35,6 +52,8 @@ test("stage actors and links follow the feed and the recorded failed role", () =
   const raw = feed(["blocked"], { pipelineSteps });
   raw.tasks[0] = {
     ...raw.tasks[0]!,
+    stage: "reviewing",
+    step: 5,
     workerThread: "T-builder",
     reviewerThread: "T-current",
     stop: { reason: "worker-error", role: "reviewer", thread: "T-failed" },
@@ -251,7 +270,7 @@ test("the first poll replays nothing and reports feed health", () => {
 });
 
 test("the queue window follows the active ticket", () => {
-  const statuses: FeedTask["status"][] = Array.from({ length: 14 }, (_, i) =>
+  const statuses: (keyof typeof WHERE)[] = Array.from({ length: 14 }, (_, i) =>
     i < 8 ? "accepted" : i === 8 ? "working" : "queued",
   );
   const view = derive(null, feed(statuses), NOW);
@@ -279,6 +298,8 @@ test("COMING rows lay out a ticket's own steps and drop what does not fit", () =
   const next = feed(["working", "queued", "queued"]);
   next.tasks[0]!.steps = ["first", "second"];
   next.tasks[0]!.evidence = { review: { pending: true } };
+  next.tasks[0]!.stage = "reviewing";
+  next.tasks[0]!.step = 5;
   next.tasks[1]!.steps = [
     "ab",
     "x".repeat(40),
@@ -548,7 +569,54 @@ test("event rows keep cursor order, exact ticket filters and safe thread links",
   expect(eventRows(events, "AB")[0]?.href).toBeNull();
 });
 
-test("stage badges follow the factory's named step, not the public status", () => {
+test("the page says the word its stage declares, unless a live activity or a stop says more", () => {
+  const word = (task: Partial<FeedTask>) =>
+    derive(
+      null,
+      {
+        ...feed(["unknown"]),
+        tasks: [{ ...feed(["unknown"]).tasks[0]!, ...task }],
+      },
+      NOW,
+    ).tickets[0]!.status;
+  const spoken = {
+    queued: "queued",
+    planned: "planned",
+    preparing: "unknown",
+    creating: "unknown",
+    building: "unknown",
+    gating: "unknown",
+    reviewing: "unknown",
+    "rate-limited": "unknown",
+    escalated: "blocked",
+    parked: "blocked",
+    blocked: "blocked",
+    uncertain: "blocked",
+    accepted: "accepted",
+    merged: "accepted",
+  } as const;
+  for (const [stage, expected] of Object.entries(spoken))
+    expect(word({ stage: stage as Stage, activity: null })).toBe(expected);
+  expect(word({ stage: "building", activity: "idle" })).toBe("idle");
+  expect(word({ stage: "building", activity: "working" })).toBe("working");
+  const stop = {
+    reason: "worker-error",
+    role: "worker",
+    thread: "T-w",
+  } as const;
+  expect(word({ stage: "building", activity: "working", stop })).toBe(
+    "blocked",
+  );
+  expect(
+    word({
+      stage: "reviewing",
+      activity: "blocked",
+      evidence: { review: { pending: true } },
+    }),
+  ).toBe("working");
+});
+
+test("stage badges follow the factory's named step", () => {
   const named = (task: Partial<FeedTask>) =>
     derive(
       null,
@@ -562,7 +630,6 @@ test("stage badges follow the factory's named step, not the public status", () =
   expect(gating.steps).toEqual(["done", "done", "done", "done", "now", "", ""]);
   expect(gating.stage).toBe(4);
   const conflicted = named({
-    status: "blocked",
     stage: "escalated",
     actor: "foreman",
     step: 6,
@@ -578,8 +645,6 @@ test("stage badges follow the factory's named step, not the public status", () =
     "done",
     "fail",
   ]);
-  // A feed without stages keeps the earlier inference.
-  expect(named({}).steps).toEqual(["", "", "", "", "", "", ""]);
 });
 
 function graphFeed(

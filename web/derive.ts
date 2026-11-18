@@ -1,6 +1,10 @@
 import type { DashboardEvent, DashboardSnapshot } from "../factory/dashboard";
 import { pipelineSteps } from "../factory/pipeline";
-import type { Stage, StopIncident } from "../factory/persistence";
+import type {
+  Stage,
+  StopIncident,
+  stages as declaredStages,
+} from "../factory/persistence";
 import type { Actor } from "../factory/pipeline";
 
 export type EventRow = DashboardEvent & {
@@ -54,7 +58,7 @@ export type FeedTask = DashboardSnapshot["tasks"][number] & {
   } | null;
   parked?: boolean;
   rejections?: { attempt: number; thread: string }[];
-  stage?: Stage; // the factory's named stage; the page prints it, never infers it
+  stage: Stage; // the factory's named stage; the page prints it, never infers it
   kind?: string | null; // the run's saved kind, a key of the lifecycle table; null before a run
   stopName?: string | null; // the declared stop holding the run, a key of that kind's stops
   stageSince?: string | null; // when the run entered its stage, null for older state
@@ -86,6 +90,14 @@ export type LifecycleTable = Record<
   }
 >;
 
+// What the page says about a ticket: the declared status of its stage, or the live activity of a
+// run in flight.
+type DeclaredStatus = (typeof declaredStages)[number]["status"];
+type Status = DeclaredStatus | NonNullable<FeedTask["activity"]>;
+
+// A feed task with the word the page shows for it.
+type Shown = FeedTask & { status: Status };
+
 // One step chip of a COMING row, placed in SVG units.
 type Chip = { text: string; x: number; width: number };
 
@@ -98,13 +110,13 @@ export type Feed = {
   fresh: boolean;
   pipelineSteps?: readonly (typeof pipelineSteps)[number][];
   lifecycle?: LifecycleTable; // the declared run lifecycle; the lifecycle graph is drawn from it
-  stages?: readonly { id: string; actor: Actor | null }[]; // named stages, in pipeline order
+  stages: readonly { id: Stage; actor: Actor | null; status: DeclaredStatus }[]; // named stages, in pipeline order
   tasks: FeedTask[];
 };
 
 // One ticket as the page shows it. Missing tickets pad fixed-size rows as "empty".
 type Cell = {
-  status: FeedTask["status"] | "empty";
+  status: Status | "empty";
   id: string;
   label: string;
   href: string | null;
@@ -235,15 +247,6 @@ const CHIP_X = 311; // where a row's chips start, under the ACTIVE stage pills
 const CHIP_END = 1233;
 const CHIP_GAP = 20; // room for the arrow between two chips
 const QUIET = ["accepted", "queued", "empty"];
-// ponytail: the feed has one status per ticket, so stages are inferred from it. A builder
-// thread implies worktree and setup; an idle one has reported. Use per-stage evidence when
-// /api/status carries it.
-const REACHED: Partial<Record<Cell["status"], number>> = {
-  working: 3,
-  idle: 4,
-  blocked: 3,
-  accepted: Infinity,
-};
 
 function pad<T>(items: T[], length: number): (T | undefined)[] {
   return Array.from({ length }, (_, i) => items[i]);
@@ -263,7 +266,7 @@ function label(task: FeedTask): string {
     : task.title;
 }
 
-function describe(task: FeedTask): string {
+function describe(task: Shown): string {
   const revision = task.revision ? ` · ${task.revision.slice(0, 7)}` : "";
   // The tooltip is one unwrapped line, so a brief-length title is cut to fit.
   const title = label(task) && ` · ${cut(label(task), 40)}`;
@@ -273,7 +276,7 @@ function describe(task: FeedTask): string {
   return `${task.id}${title} · ${task.status}${revision}${about}`;
 }
 
-function cell(task: FeedTask | undefined): Cell {
+function cell(task: Shown | undefined): Cell {
   if (!task)
     return { status: "empty", id: "", label: "", href: null, stage: 0 };
   return {
@@ -284,30 +287,10 @@ function cell(task: FeedTask | undefined): Cell {
       task.thread && /^T-[\w-]+$/.exec(task.thread)?.[0] === task.thread
         ? `https://ampcode.com/threads/${task.thread}`
         : null,
-    stage: stagesOf(task).filter((step) => step === "done").length,
+    stage: namedStages(task, pipelineSteps.length).filter(
+      (step) => step === "done",
+    ).length,
   };
-}
-
-// A pending review record is evidence the gate passed and cold review is running.
-function steps(
-  status: Cell["status"],
-  reviewing = false,
-  count: number = pipelineSteps.length,
-): string[] {
-  const done = reviewing ? 5 : (REACHED[status] ?? 0);
-  const current =
-    status === "blocked" && !reviewing ? "fail" : done ? "now" : "";
-  return Array.from({ length: count }, (_, i) =>
-    i < done ? "done" : i === done ? current : "",
-  );
-}
-
-function failedStage(task: FeedTask) {
-  if (!task.stop?.thread || !task.stop.role) return null;
-  if (task.stop.role === "reviewer") return "review";
-  return task.stop.reason === "verification-rejected"
-    ? (task.rejectedBy ?? "gate")
-    : "builder";
 }
 
 const STOPPED = new Set(["escalated", "parked", "blocked", "uncertain"]);
@@ -330,27 +313,6 @@ function namedStages(task: FeedTask, count: number): string[] {
           ? mark
           : "",
   );
-}
-
-function stagesOf(
-  task: FeedTask,
-  stages: NonNullable<Feed["pipelineSteps"]> = pipelineSteps,
-): string[] {
-  // Feeds from before stages fall back to inferring progress from the public status.
-  if (task.stage && task.step !== undefined)
-    return namedStages(task, stages.length);
-  const result = steps(
-    task.status,
-    task.evidence?.review?.pending === true,
-    stages.length,
-  );
-  const failed = stages.findIndex((stage) => stage.id === failedStage(task));
-  if (failed >= 0) {
-    return result.map((value, i) =>
-      i < failed ? "done" : i === failed ? "fail" : "",
-    );
-  }
-  return result;
 }
 
 function pullRequest(merge: FeedTask["merge"]): Ticket["pullRequest"] {
@@ -389,7 +351,7 @@ function ticketLinks(
   task: FeedTask,
   stages: NonNullable<Feed["pipelineSteps"]>,
 ) {
-  const states = stagesOf(task, stages);
+  const states = namedStages(task, stages.length);
   return {
     stageLinks: stages.map((stage, i) => stageLink(task, stage, states[i])),
     stop: task.stop
@@ -409,15 +371,16 @@ function lifecycle({ stage, actor, clearsAt }: FeedTask): string {
 }
 
 function ticket(
-  task: FeedTask,
+  task: Shown,
   stages: NonNullable<Feed["pipelineSteps"]>,
 ): Ticket {
   const review = task.evidence?.review;
   return {
     ...cell(task),
     title: label(task),
-    steps: stagesOf(task, stages),
-    stage: stagesOf(task, stages).filter((step) => step === "done").length,
+    steps: namedStages(task, stages.length),
+    stage: namedStages(task, stages.length).filter((step) => step === "done")
+      .length,
     ...ticketLinks(task, stages),
     parked: task.parked === true,
     lifecycle: lifecycle(task),
@@ -446,7 +409,7 @@ function chips(labels: string[]): Chip[] {
 
 // Row 0 is the ACTIVE ticket, which keeps the stage pills instead of its own steps.
 function ticketRow(
-  task: FeedTask | undefined,
+  task: Shown | undefined,
   row: number,
   stages: NonNullable<Feed["pipelineSteps"]>,
 ): View["coming"][number] {
@@ -455,14 +418,14 @@ function ticketRow(
       id: "",
       title: "",
       status: "empty",
-      steps: steps("empty", false, stages.length),
+      steps: Array.from({ length: stages.length }, () => ""),
       chips: [],
     };
   return {
     id: task.id,
     title: cut(label(task), 32),
     status: task.status,
-    steps: stagesOf(task, stages),
+    steps: namedStages(task, stages.length),
     chips: row ? chips(task.steps) : [],
   };
 }
@@ -473,9 +436,9 @@ function observed(feed: Feed, now: number): string {
   return `observed ${Math.max(0, seconds)} s ago`;
 }
 
-function counts(feed: Feed): View["counts"] {
-  const count = (status: FeedTask["status"]) =>
-    feed.tasks.filter((task) => task.status === status).length;
+function counts(tasks: Shown[]): View["counts"] {
+  const count = (status: Status) =>
+    tasks.filter((task) => task.status === status).length;
   return {
     landed: count("accepted"),
     queued: count("queued"),
@@ -495,15 +458,19 @@ function tally({ landed, queued, blocked }: View["counts"]): string {
 // review is work in progress, so it counts as working everywhere on the page.
 // The feed lists an admitted ticket after the planned ones it was picked from; every admitted
 // ticket runs before any planned one, so planned tickets go last and the rest keep their order.
-function settle(feed: Feed): Feed {
-  const tasks = feed.tasks.map((task): FeedTask =>
-    task.stop
-      ? { ...task, status: "blocked" }
-      : task.evidence?.review?.pending
-        ? { ...task, status: "working" }
-        : task,
+function settle(feed: Feed): Omit<Feed, "tasks"> & { tasks: Shown[] } {
+  const declared = new Map(
+    feed.stages.map((entry) => [entry.id, entry.status]),
   );
-  const planned = (task: FeedTask) => task.status === "planned";
+  const tasks = feed.tasks.map((task): Shown => ({
+    ...task,
+    status: task.stop
+      ? "blocked"
+      : task.evidence?.review?.pending
+        ? "working"
+        : (task.activity ?? declared.get(task.stage)!),
+  }));
+  const planned = (task: Shown) => task.status === "planned";
   return {
     ...feed,
     tasks: [...tasks.filter((t) => !planned(t)), ...tasks.filter(planned)],
@@ -750,7 +717,7 @@ function graph(feed: Feed, now: number): Graph | null {
   };
 }
 
-function nextLabel(active: FeedTask | undefined, total: number): string {
+function nextLabel(active: Shown | undefined, total: number): string {
   // Older feeds carry the attempt only on a pending review record.
   const attempt = active?.attempt ?? active?.evidence?.review?.attempt;
   if (active)
@@ -782,7 +749,7 @@ export function derive(
   const rejected = tasks.find(
     (t) => t.status !== "accepted" && !t.evidence?.review && reviewed.has(t.id),
   )?.id;
-  const became = (status: FeedTask["status"]) =>
+  const became = (status: Status) =>
     tasks.find((t) => t.status === status && before.get(t.id) !== status)?.id;
   const rows = tasks
     .filter((t) => (before.get(t.id) ?? t.status) !== "accepted")
@@ -813,7 +780,7 @@ export function derive(
   const blocked = rejected ?? became("blocked");
   const stages = next.pipelineSteps ?? pipelineSteps;
   const tickets = tasks.map((task) => ticket(task, stages));
-  const count = counts(next);
+  const count = counts(tasks);
   return {
     state: !next.fresh ? "stale" : next.enabled ? "live" : "paused",
     project: next.project.toUpperCase(),

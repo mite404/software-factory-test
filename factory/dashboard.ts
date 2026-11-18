@@ -148,14 +148,7 @@ export type DashboardSnapshot = {
     id: string;
     title: string;
     steps: string[];
-    status:
-      | "working"
-      | "idle"
-      | "blocked"
-      | "planned"
-      | "queued"
-      | "accepted"
-      | "unknown";
+    activity: "working" | "idle" | "blocked" | null;
     thread: string | null;
     revision: string | null;
   }[];
@@ -178,17 +171,17 @@ function reference(value: unknown, pattern: RegExp): string | null {
   return matched;
 }
 
+// Observations saved before activity existed carry none, so a missing value reads as unobserved.
 function activity(
   value: unknown,
-): DashboardSnapshot["tasks"][number]["status"] {
+): DashboardSnapshot["tasks"][number]["activity"] {
   switch (value) {
+    case undefined:
+    case null:
+      return null;
     case "working":
     case "idle":
     case "blocked":
-    case "planned":
-    case "queued":
-    case "accepted":
-    case "unknown":
       return value;
     default:
       throw new Error("Invalid activity");
@@ -201,7 +194,7 @@ function parseTask(value: unknown): DashboardSnapshot["tasks"][number] {
     id: string(task.id),
     title: string(task.title),
     steps: taskSteps(task.steps),
-    status: activity(task.status),
+    activity: activity(task.activity),
     thread: reference(task.thread, /^T-[\w-]+$/),
     revision: reference(task.revision, /^[a-f0-9]{40}$/),
   };
@@ -285,17 +278,12 @@ function rejectedReviews(
   );
 }
 
-function durableTask(
-  id: string,
-  steps: string[],
-  run: Run | undefined,
-  intake: Task["intake"],
-) {
+function durableTask(id: string, steps: string[], run: Run | undefined) {
   const row: DashboardSnapshot["tasks"][number] = {
     id,
     title: id,
     steps,
-    status: runStage(run, intake).status,
+    activity: null,
     thread: null,
     revision: null,
   };
@@ -303,7 +291,8 @@ function durableTask(
   if ("thread" in run) row.thread = reference(run.thread ?? null, /^T-[\w-]+$/);
   if (run.kind === "done")
     row.revision = reference(run.revision, /^[a-f0-9]{40}$/);
-  if (run.kind === "running" && run.delivery !== "sent") row.status = "blocked";
+  if (run.kind === "running" && run.delivery !== "sent")
+    row.activity = "blocked";
   return row;
 }
 
@@ -311,17 +300,13 @@ function applyObservation(
   row: DashboardSnapshot["tasks"][number],
   observed: DashboardSnapshot["tasks"][number] | undefined,
   fresh: boolean,
+  open: boolean,
 ) {
   if (!observed) return;
   if (observed.thread !== row.thread || observed.revision !== row.revision)
     return;
-  if (
-    fresh &&
-    row.status === "unknown" &&
-    row.thread !== null &&
-    new Set(["working", "idle", "blocked"]).has(observed.status)
-  )
-    row.status = observed.status;
+  if (fresh && open && row.activity === null && row.thread !== null)
+    row.activity = observed.activity;
 }
 
 function attemptOf(run: Run | undefined): number | null {
@@ -424,10 +409,13 @@ function projectTask(
   fresh: boolean,
   repository: string | null,
 ) {
-  const row = durableTask(id, steps, run, intake);
+  const row = durableTask(id, steps, run);
   const review = reviewFor(id, run);
   const workerThread = row.thread;
-  const pending = row.status !== "accepted";
+  // The declared status of the run's stage; only runs still in flight take a live activity.
+  const declared = runStage(run, intake).status;
+  const open = declared === "unknown";
+  const pending = declared !== "accepted";
   let gate = null;
   let reviewEvidence = null;
   if (review) {
@@ -439,8 +427,7 @@ function projectTask(
       row.thread = thread;
     }
     row.revision = revision;
-    if (row.status === "unknown" && review.delivery !== "sent")
-      row.status = "blocked";
+    if (open && review.delivery !== "sent") row.activity = "blocked";
     gate = { revision, base, stage: review.stage };
     reviewEvidence = {
       ...gate,
@@ -449,7 +436,7 @@ function projectTask(
       thread,
     };
   }
-  applyObservation(row, observed, fresh);
+  applyObservation(row, observed, fresh, open);
   return {
     ...row,
     workerThread,
@@ -601,9 +588,11 @@ export function startDashboard({ root, port }: { root: string; port: number }) {
           };
         });
         const counts = {
-          planned: tasks.filter((task) => task.status === "planned").length,
-          queued: tasks.filter((task) => task.status === "queued").length,
-          accepted: tasks.filter((task) => task.status === "accepted").length,
+          planned: tasks.filter((task) => task.stage === "planned").length,
+          queued: tasks.filter((task) => task.stage === "queued").length,
+          accepted: tasks.filter((task) =>
+            ["accepted", "merged"].includes(task.stage),
+          ).length,
         };
         return Response.json(
           {

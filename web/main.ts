@@ -1,5 +1,12 @@
 import type { DashboardEvent } from "../factory/dashboard";
-import { derive, eventBatch, eventRows, type Feed, type View } from "./derive";
+import {
+  derive,
+  eventBatch,
+  eventRows,
+  type Feed,
+  type FeedTask,
+  type View,
+} from "./derive";
 import { mount } from "./spec/tickets";
 
 const POLL_MS = 5000;
@@ -38,6 +45,15 @@ const DEMO_STEPS = [
   ["reproduce in e2e", "guard shared parser", "regression test"],
 ];
 
+// Where a sample ticket sits: landed, waiting, blocked, or building with a live activity.
+const SAMPLE = {
+  accepted: { stage: "accepted", step: 6, activity: null },
+  queued: { stage: "queued", step: null, activity: null },
+  blocked: { stage: "blocked", step: 3, activity: null },
+  working: { stage: "building", step: 3, activity: "working" },
+  idle: { stage: "building", step: 4, activity: "idle" },
+} satisfies Record<string, Pick<FeedTask, "stage" | "step" | "activity">>;
+
 // Labeled sample feed for ?demo: one ticket at a time works, goes idle, then lands.
 function demoFeed(tick: number): Feed {
   const step = tick % 27; // 9 tickets, 3 polls each
@@ -53,10 +69,18 @@ function demoFeed(tick: number): Feed {
     observedAt: new Date().toISOString(),
     enabled: true,
     fresh: true,
+    stages: [
+      { id: "queued", actor: "computer", status: "queued" },
+      { id: "building", actor: "model", status: "unknown" },
+      { id: "blocked", actor: "foreman", status: "blocked" },
+      { id: "accepted", actor: "foreman", status: "accepted" },
+    ],
     tasks: Array.from({ length: 9 }, (_, i) => ({
       id: `feature-0${i + 1}-ticket1`,
       title: `Sample ticket ${i + 1}`,
-      status: i < done ? "accepted" : i > done ? "queued" : phases[step % 3]!,
+      ...SAMPLE[
+        i < done ? "accepted" : i > done ? "queued" : phases[step % 3]!
+      ],
       thread: null,
       steps: DEMO_STEPS[i % DEMO_STEPS.length]!,
       revision: i < done ? `${i + 1}`.repeat(40) : null,
