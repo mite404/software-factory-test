@@ -707,7 +707,8 @@ test("HTTP reads durable acceptance without a heartbeat and never discloses priv
     );
     for (const path of [
       "/state.sqlite",
-      "/api/evidence",
+      "/api/evidence/A",
+      "/evidence",
       "/.git/factory/state.sqlite",
     ])
       expect((await fetch(new URL(path, url))).status).toBe(404);

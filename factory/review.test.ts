@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +12,8 @@ import {
   watchdogFixture,
 } from "./bookkeeping.fixture";
 import {
+  evidenceContent,
+  factoryEvidence,
   factoryEvents,
   factoryStatus,
   type Task,
@@ -66,7 +69,7 @@ async function fixture(
       tickets: "tickets.json",
       scope: ["src/"],
       verify:
-        `printf gate >> '${join(root, ".git/gates")}'` +
+        `printf gate >> '${join(root, ".git/gates")}'; cat src/value` +
         (failure === "gate" ? '; test "$(cat src/value)" != "value 1"' : ""),
       permissions: { execute: true, publish: false, externalTickets: false },
     }),
@@ -101,7 +104,16 @@ async function fixture(
       watched.push(thread);
     },
   };
-  let factory = createFactory(root, host, openStore);
+  const ledger: unknown[] = [];
+  const store = () => ({
+    ...openStore(),
+    ledger: {
+      async record(entry: unknown) {
+        ledger.push(entry);
+      },
+    },
+  });
+  let factory = createFactory(root, host, store);
   const initial = (await factory.tick("start", "T-owner")).runs.A;
   if (initial?.kind !== "running") throw new Error("No worker");
   const worktree = initial.worktree;
@@ -137,8 +149,8 @@ async function fixture(
     };
     await writeFile(row.report, JSON.stringify(value));
   };
-  const submit = async (attempt: number) => {
-    await writeFile(join(worktree, "src/value"), `value ${attempt}`);
+  const submit = async (attempt: number, value = `value ${attempt}`) => {
+    await writeFile(join(worktree, "src/value"), value);
     git(worktree, "add", ".");
     git(worktree, "commit", "-qm", "candidate");
     await writeFile(
@@ -155,6 +167,7 @@ async function fixture(
     root,
     worktree,
     host,
+    ledger,
     settings,
     messages,
     notices,
@@ -177,7 +190,7 @@ async function fixture(
       activity = value;
     },
     reload() {
-      factory = createFactory(root, host, openStore);
+      factory = createFactory(root, host, store);
     },
     get factory() {
       return factory;
@@ -962,6 +975,195 @@ test("dashboard keeps worker, failed reviewer and rejection history separate wit
     await f.close();
   }
 });
+
+test("accepted evidence outlives worker files and HTTP serves only allowlisted metadata", async () => {
+  const f = await fixture({ size: "small" });
+  const directory = join(f.root, ".git/factory");
+  const server = startDashboard({ root: f.root, port: 0 });
+  const get = (query: string) =>
+    fetch(`http://localhost:${server.port}/api/evidence${query}`);
+  const gateCanary = "CANARY-GATE-OUTPUT";
+  try {
+    await f.submit(1, gateCanary);
+    const revision = git(f.worktree, "rev-parse", "HEAD");
+    expect((await f.tick()).runs.A).toMatchObject({ kind: "done", revision });
+    for (const file of ["A.report.json", "A-1.log", "A-1.log.excerpt.json"])
+      await rm(join(directory, file));
+    git(f.root, "worktree", "remove", "--force", f.worktree);
+    const response = await get("?ticket=A");
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    for (const secret of [
+      "CANARY-WORKER-RATIONALE",
+      gateCanary,
+      f.root,
+      "report.json",
+      "printf",
+      "openai",
+    ])
+      expect(text).not.toContain(secret);
+    const body = JSON.parse(text);
+    expect(body).toMatchObject({ durable: "available", ticket: "A" });
+    expect(body.evidence).toEqual([
+      expect.objectContaining({
+        kind: "report",
+        attempt: 1,
+        revision,
+        outcome: "candidate",
+        preserved: true,
+      }),
+      expect.objectContaining({
+        kind: "gate",
+        attempt: 1,
+        revision,
+        outcome: "gate-passed",
+        bytes: gateCanary.length,
+        preserved: true,
+      }),
+    ]);
+    const [report, gate] = body.evidence;
+    expect(JSON.parse(evidenceContent(directory, "A", report.sha256))).toEqual({
+      kind: "candidate",
+      attempt: 1,
+      revision,
+      insight: "CANARY-WORKER-RATIONALE",
+    });
+    expect(evidenceContent(directory, "A", gate.sha256)).toBe(gateCanary);
+    expect((await get("?ticket=B")).status).toBe(200);
+    for (const [query, status] of [
+      ["", 400],
+      ["?ticket=", 400],
+      ["?ticket=../state.sqlite", 400],
+      ["?ticket=A%2F..%2F..%2Fstate.sqlite", 400],
+      [`?ticket=evidence/${gate.sha256}`, 400],
+      ["?ticket=A&path=state.sqlite", 400],
+      ["?ticket=Z", 404],
+      [`/${gate.sha256}?ticket=A`, 404],
+    ] as const) {
+      const refused = await get(query);
+      expect(refused.status, query).toBe(status);
+      expect(await refused.text()).not.toContain(gateCanary);
+    }
+    expect(() => evidenceContent(directory, "B", gate.sha256)).toThrow(
+      "Unknown evidence identity",
+    );
+    expect(() => evidenceContent(directory, "A", "../state.sqlite")).toThrow(
+      "Unknown evidence identity",
+    );
+    const blob = join(directory, "evidence", gate.sha256);
+    await writeFile(blob, "tampered");
+    await rm(join(directory, "evidence", report.sha256));
+    const database = await readFile(join(directory, "state.sqlite"));
+    const damaged = await (await get("?ticket=A")).json();
+    expect(
+      damaged.evidence.map((row: { preserved: boolean }) => row.preserved),
+    ).toEqual([false, false]);
+    for (const digest of [report.sha256, gate.sha256])
+      expect(() => evidenceContent(directory, "A", digest)).toThrow(
+        "Evidence content missing or corrupt",
+      );
+    expect(await readFile(blob, "utf8")).toBe("tampered");
+    expect(await readFile(join(directory, "state.sqlite"))).toEqual(database);
+    expect(existsSync(join(directory, "evidence", report.sha256))).toBe(false);
+  } finally {
+    await server.stop(true);
+    await f.close();
+  }
+});
+
+test("a failed evidence write leaves integration and the ledger untouched until it succeeds", async () => {
+  const f = await fixture({ size: "small" });
+  const directory = join(f.root, ".git/factory");
+  try {
+    const base = git(f.root, "rev-parse", "HEAD");
+    await f.submit(1);
+    const revision = git(f.worktree, "rev-parse", "HEAD");
+    await writeFile(join(directory, "evidence"), "not a directory");
+    const failure = await f.tick().then(
+      () => "landed",
+      (error: unknown) => String(error),
+    );
+    expect(failure).toContain("evidence");
+    expect(git(f.root, "rev-parse", "HEAD")).toBe(base);
+    expect(f.ledger).toEqual([]);
+    expect((await f.status()).runs.A).toMatchObject({
+      kind: "running",
+      attempt: 1,
+    });
+    expect(factoryEvidence(directory, "A")).toEqual([]);
+    expect(
+      factoryEvents(directory, 0, 500)!.map((event) => event.action),
+    ).not.toContain("accepted");
+    await rm(join(directory, "evidence"));
+    f.reload();
+    expect((await f.tick()).runs.A).toMatchObject({ kind: "done", revision });
+    expect(git(f.root, "rev-parse", "HEAD")).toBe(revision);
+    expect(f.ledger).toEqual([expect.objectContaining({ sha: revision })]);
+  } finally {
+    await f.close();
+  }
+});
+
+test.each(["intact", "corrupt", "stale", "report-missing"] as const)(
+  "a passing review lands only with intact report and gate proof bound to its revision (%s)",
+  async (proof) => {
+    const f = await fixture();
+    const directory = join(f.root, ".git/factory");
+    try {
+      const base = git(f.root, "rev-parse", "HEAD");
+      await f.submit(1);
+      const revision = git(f.worktree, "rev-parse", "HEAD");
+      await f.tick();
+      const [report, gate] = factoryEvidence(directory, "A")!;
+      expect(report).toMatchObject({ kind: "report", revision });
+      expect(gate).toMatchObject({
+        kind: "gate",
+        revision,
+        outcome: "gate-passed",
+      });
+      if (proof === "corrupt")
+        await writeFile(join(directory, "evidence", gate!.sha256), "tampered");
+      if (proof === "report-missing")
+        await rm(join(directory, "evidence", report!.sha256));
+      if (proof === "stale") {
+        const db = new Database(join(directory, "state.sqlite"));
+        db.query("UPDATE evidence SET revision = ? WHERE kind = 'gate'").run(
+          base,
+        );
+        db.close();
+      }
+      await f.verdict("pass", { note: "CANARY-REVIEW-NOTE" });
+      const run = (await f.tick()).runs.A!;
+      if (proof === "intact") {
+        expect(run).toMatchObject({ kind: "done", revision });
+        expect(git(f.root, "rev-parse", "HEAD")).toBe(revision);
+        const rows = factoryEvidence(directory, "A")!;
+        expect(
+          rows.map((row) => [row.kind, row.outcome, row.revision]),
+        ).toEqual([
+          ["report", "candidate", revision],
+          ["gate", "gate-passed", revision],
+          ["review", "pass", revision],
+        ]);
+        expect(evidenceContent(directory, "A", rows[2]!.sha256)).toContain(
+          "CANARY-REVIEW-NOTE",
+        );
+        return;
+      }
+      expect(run).toMatchObject({
+        kind: "blocked",
+        incident: { reason: "evidence-missing", recovery: "inspect" },
+      });
+      expect(git(f.root, "rev-parse", "HEAD")).toBe(base);
+      await f.tick();
+      const settled = factoryEvents(directory, 0, 500);
+      await f.tick();
+      expect(factoryEvents(directory, 0, 500)).toEqual(settled);
+    } finally {
+      await f.close();
+    }
+  },
+);
 
 test("reviewer recovery renews notices without repeating unchanged stop transitions", async () => {
   const f = await fixture();

@@ -314,6 +314,8 @@ const REASONS: Record<StopIncident["reason"], string> = {
   "target-changed": "The integration target moved under the candidate.",
   "review-identity-changed":
     "The candidate or base changed after its review began.",
+  "evidence-missing":
+    "No intact gate or review proof is bound to the candidate revision.",
   "brief-incomplete": "Its brief is incomplete.",
 };
 

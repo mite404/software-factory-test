@@ -6,7 +6,13 @@ import { join } from "node:path";
 import { configuration, createFactory, type NativeHost } from "./native";
 import { openStore } from "./bookkeeping.fixture";
 import { startDashboard } from "./dashboard";
-import { factoryEvents, openPersistence, type Run } from "./persistence";
+import {
+  evidenceContent,
+  factoryEvents,
+  factoryEvidence,
+  openPersistence,
+  type Run,
+} from "./persistence";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
@@ -538,6 +544,18 @@ test("a light candidate behind a landed main candidate is rebased, gated and lan
     );
     expect((await f.gates()).at(-1)).toBe(done.revision);
     expect(f.created).toHaveLength(2);
+    const directory = join(f.root, ".git/factory");
+    const gates = factoryEvidence(directory, "L1")!.filter(
+      (row) => row.kind === "gate",
+    );
+    expect(gates.map((row) => [row.revision, row.outcome])).toEqual([
+      [reported, "gate-passed"],
+      [done.revision, "gate-passed"],
+    ]);
+    for (const row of gates)
+      expect(typeof evidenceContent(directory, "L1", row.sha256)).toBe(
+        "string",
+      );
   } finally {
     await f.close();
   }
