@@ -53,7 +53,7 @@ that observes the thread no longer in error or after one watchdog interval, whic
 ## Scope
 
 - In: reading `agentError`, the `provider-limit` reason and `wait` recovery, the stored reset time,
-  the single automatic continuation, the reset-aligned wake, tests, README and foreman.md.
+  the single automatic continuation, the reset-aligned wake, tests, README and the Foreman prompt.
 - Out: switching models or providers; F006 owns that.
 - Out: transferring ownership; F005 owns that.
 - Out: parsing assistant prose, replacing a worker or reviewer, and unbounded retries.
@@ -100,7 +100,7 @@ reset instant from the message text in the test, not from the code under test.
 | `factory/native.ts`, `factory/native.test.ts`     | Lifecycle  | `activityReasons`, incidents, nudges      | Edit         |
 | `factory/persistence.ts`                          | Records    | Incident reasons and recovery values      | Edit         |
 | `factory/watchdog.ts`, `factory/watchdog.test.ts` | Schedule   | The fixed rule and drift detection        | Edit         |
-| `factory/README.md`, `factory/foreman.md`         | Operations | Stops, recovery actions, watchdog turn    | Edit         |
+| `factory/README.md`, `factory/config/agents/foreman/agent.md`         | Operations | Stops, recovery actions, watchdog turn    | Edit         |
 
 Build order: classification, records, nudge, wake, documents.
 

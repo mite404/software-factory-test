@@ -408,8 +408,8 @@ Edge cases this run exposed:
   worker lost every tool. It could not write a report, so the factory saw only an idle thread.
 - Each later factory delivery reached the worker with no executor attached. The Foreman
   reconnected the same worker three times with a one-shot `amp threads continue`. The factory
-  neither detects this nor records it; `factory/foreman.md` now carries the operator's standing
-  authorization and the procedure.
+  neither detects this nor records it; `factory/config/agents/foreman/agent.md` now carries the
+  operator's standing authorization and the procedure.
 - The Foreman paused the factory during the outage so the old candidate would not be read as the
   new attempt. That was unnecessary: the factory ignores a report whose attempt is not current.
 - The worker's brief forbade live effects and its own capability probe returned `No such tool`,

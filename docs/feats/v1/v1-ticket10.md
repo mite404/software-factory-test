@@ -52,7 +52,7 @@ A known idle state is not evidence that restarting execution is safe or that wor
 | `factory/plugin.ts`, `factory/plugin.test.ts` | Native adapter | Observations and recovery              | Edit         |
 | `factory/native.ts`, `factory/native.test.ts` | Lifecycle      | Pending actions and owner retention    | Edit         |
 | `factory/persistence.ts`                      | History        | Recovery attempts                      | Edit         |
-| `factory/foreman.md`, `factory/README.md`     | Policy         | TEST labeling and bounded intervention | Edit         |
+| `factory/config/agents/foreman/agent.md`, `factory/README.md`     | Policy         | TEST labeling and bounded intervention | Edit         |
 
 Inspect API capability before implementing recovery actions.
 
