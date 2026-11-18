@@ -126,9 +126,9 @@ A baseline failure goes back to the Foreman; it does not widen the worker's scop
 
 ## Done when
 
-- [ ] Every blocked or rejected ticket in the feed carries a stop code from the closed list.
-- [ ] A gate rejection produces one notice that names the gate and the attempt.
-- [ ] No notice or card prints "the feed gives no reason".
-- [ ] Worker, log and review text never reach the feed.
+- [x] Every blocked or rejected ticket in the feed carries a stop code from the closed list.
+- [x] A gate rejection produces one notice that names the gate and the attempt.
+- [x] No notice or card prints "the feed gives no reason".
+- [x] Worker, log and review text never reach the feed.
 - [ ] The live dashboard shows a reason on a real rejection or block.
-- [ ] Full gates, guard and a fresh cold review pass on the accepted revision.
+- [x] Full gates, guard and a fresh cold review pass on the accepted revision.
