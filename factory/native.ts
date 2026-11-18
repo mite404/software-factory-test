@@ -2162,9 +2162,31 @@ export function createFactory(
           throw new Error(
             "Retry-create requires the owning Foreman, a parked creation, its exact current incident and a decision",
           );
+        const create =
+          run.kind === "creating"
+            ? () => createWorker(task, run.base, run.worktree)
+            : recreateReviewer(task, run);
         delete run.incident;
         commit(task.id, "create-retried", request.decision);
-        return createWorker(task, run.base, run.worktree);
+        return create();
+      }
+      // A reviewer is recreated only over the exact staged candidate it was creating for.
+      function recreateReviewer(
+        task: Task,
+        run: Extract<Run, { kind: "running" }>,
+      ) {
+        const review = run.review!;
+        if (
+          !existsSync(review.worktree) ||
+          !unchanged(review.worktree, review.revision)
+        )
+          throw new Error(
+            "Retry-create refuses a reviewer whose staged worktree changed or is missing",
+          );
+        return async () => {
+          await createReviewer(task, run);
+          return state;
+        };
       }
       if (action === "retry-create") return await retryCreate();
       await recoverUncertainDeliveries();

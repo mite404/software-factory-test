@@ -287,6 +287,8 @@ type LifecycleKind = {
   exits: readonly LifecycleExit[];
   stops: Record<string, LifecycleStop>;
   reasonOverride?: boolean;
+  /** Actions are admitted only while the stop holding the run's incident declares them. */
+  heldActions?: true;
 };
 
 /** Declared lifecycle rules. Conditions describe evidence, never grant authority. */
@@ -368,8 +370,9 @@ export const runLifecycle = {
   },
   running: {
     actor: "model",
-    actions: [],
+    actions: ["retry-create"],
     blocks: ["resume", "dispatch"],
+    heldActions: true,
     exits: [
       {
         event: "accepted",
@@ -444,9 +447,13 @@ export const runLifecycle = {
         recovery: "inspect",
         matches: (run) =>
           run.kind === "running" && run.review?.delivery === "creating",
-        exits: [],
-        foremanOnly:
-          "The host cannot look up an ambiguous reviewer creation; retry-create admits only worker creation.",
+        exits: [
+          {
+            action: "retry-create",
+            when: "the owner proves no reviewer exists and supplies the exact incident and decision; the staged worktree is unchanged",
+            actor: "foreman",
+          },
+        ],
       },
       reviewerError: {
         actor: "foreman",
@@ -739,7 +746,12 @@ export function admitsRun<A extends RunAction>(
 ): run is AdmittedRun<A> {
   if (!run) return false;
   const entry: LifecycleKind = runLifecycle[run.kind];
-  return entry.actions.includes(action);
+  if (!entry.actions.includes(action)) return false;
+  if (!entry.heldActions) return true;
+  const stop = run.incident && heldBy(run)?.[1];
+  return !!stop?.exits.some(
+    (exit) => "action" in exit && exit.action === action,
+  );
 }
 
 /** Whether a saved kind holds this action before its evidence-specific checks. */

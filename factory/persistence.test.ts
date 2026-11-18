@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { createFactory, tasks, type NativeHost } from "./native";
 import { pipelineSteps } from "./pipeline";
 import {
+  admitsRun,
   factoryEvents,
   factoryRecords,
   factoryStatus,
@@ -56,7 +57,6 @@ test("lifecycle walking names every exitless stop and validates recoveries and p
   ]);
   const expectedExitless = [
     "blocked.withoutWorker",
-    "running.reviewerCreation",
     "running.reviewerDeliveryLegacy",
     "running.workerDeliveryLegacy",
     "uncertain.legacy",
@@ -180,6 +180,74 @@ test("lifecycle walking names every exitless stop and validates recoveries and p
   } finally {
     storage.close();
   }
+});
+
+test("retry-create admits a running run only while its reviewer creation is the held stop", () => {
+  const sha = "a".repeat(40);
+  const incident = (reason: string) => ({
+    incident: { id: "I", reason } as NonNullable<Run["incident"]>,
+  });
+  const running = (delivery?: string) =>
+    ({
+      kind: "running",
+      base: sha,
+      worktree: "/w",
+      thread: "T-worker",
+      attempt: 1,
+      delivery: "sent",
+      ...(delivery ? { review: { delivery } } : {}),
+    }) as Run;
+  const cases: [string, Run, boolean][] = [
+    [
+      "reviewer creation",
+      { ...running("creating"), ...incident("creation-unknown") },
+      true,
+    ],
+    ["reviewer creating before any incident", running("creating"), false],
+    [
+      "reviewer sent",
+      { ...running("sent"), ...incident("creation-unknown") },
+      false,
+    ],
+    [
+      "reviewer delivery",
+      { ...running("sending"), ...incident("delivery-unknown") },
+      false,
+    ],
+    [
+      "reviewer creating at a limit",
+      { ...running("creating"), ...incident("provider-limit") },
+      false,
+    ],
+    [
+      "worker without review",
+      { ...running(), ...incident("creation-unknown") },
+      false,
+    ],
+    [
+      "worker creation",
+      {
+        kind: "creating",
+        base: sha,
+        worktree: "/w",
+        ...incident("creation-unknown"),
+      },
+      true,
+    ],
+    [
+      "worker creation before any incident",
+      { kind: "creating", base: sha, worktree: "/w" },
+      true,
+    ],
+  ];
+  for (const [name, run, admitted] of cases)
+    expect(admitsRun(run, "retry-create"), name).toBe(admitted);
+  expect(
+    admitsRun(
+      { kind: "blocked", reason: "x", ...incident("worker-blocked") },
+      "resume",
+    ),
+  ).toBe(true);
 });
 
 test("every run kind and stop reason names exactly one declared stage and actor", () => {
