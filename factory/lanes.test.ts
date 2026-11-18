@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { configuration, createFactory, type NativeHost } from "./native";
 import { openStore } from "./bookkeeping.fixture";
+import { startDashboard } from "./dashboard";
 import { factoryEvents, openPersistence, type Run } from "./persistence";
 
 const git = (cwd: string, ...args: string[]) =>
@@ -76,6 +77,7 @@ async function fixture(
   return {
     root,
     directory,
+    host,
     created,
     messages,
     activity,
@@ -729,6 +731,206 @@ test("a light queue entry without a light lane fails parsing", async () => {
     await writeFile(path, JSON.stringify({ ...raw, capacity: 1 }));
     expect(configuration(f.root)).rejects.toThrow(/Invalid ticket lane/);
   } finally {
+    await f.close();
+  }
+});
+
+// Reads the feed while each worker message is in flight, as a poll between a transition and its
+// delivery; `during` keeps the polls taken while a rejection's repair message was in flight.
+function feedDuringRepair(f: Awaited<ReturnType<typeof fixture>>) {
+  const server = startDashboard({ root: f.root, port: 0 });
+  const read = async (path: string) =>
+    (await fetch(`http://localhost:${server.port}${path}`)).text();
+  const status = () => read("/api/status");
+  const during: string[] = [];
+  const sends: { message: string; feed: string }[] = [];
+  const send = f.host.send.bind(f.host);
+  f.host.send = async (thread, message) => {
+    const feed = await status();
+    sends.push({ message, feed });
+    if (message.includes("Verification rejected attempt")) during.push(feed);
+    return send(thread, message);
+  };
+  return {
+    during,
+    sends,
+    status,
+    events: () => read("/api/events"),
+    stop: () => server.stop(true),
+  };
+}
+
+const taskIn = (text: string, id: string) =>
+  JSON.parse(text).tasks.find((task: { id: string }) => task.id === id);
+
+const rejectedIn = (text: string) =>
+  JSON.parse(text).events.filter(
+    (event: { action: string }) => event.action === "rejected",
+  );
+
+test("a first gate rejection reads as working with its code and attempt, and no private text crosses", async () => {
+  const gateCanary = "CANARY-GATE-LOG";
+  const blockedCanary = "CANARY-BLOCKED-REPORT";
+  const f = await fixture([{ id: "A" }, { id: "B", lane: "light" }], {
+    capacity: 2,
+    lightWorker: light,
+    verify: "cat src/*; ! grep -q bad src/*",
+  });
+  const feed = feedDuringRepair(f);
+  try {
+    await f.start();
+    await f.submit("A", "a", `bad ${gateCanary}\n`);
+    await writeFile(
+      join(f.directory, "B.report.json"),
+      JSON.stringify({ attempt: 1, kind: "blocked", reason: blockedCanary }),
+    );
+    await f.tick();
+    expect(await readFile(join(f.directory, "A-1.log"), "utf8")).toContain(
+      gateCanary,
+    );
+    expect(feed.during).toHaveLength(1);
+    expect(taskIn(feed.during[0]!, "A")).toMatchObject({
+      activity: "working",
+      stop: null,
+      repair: { reason: "gate-failed", attempt: 1 },
+      attempt: 2,
+    });
+    const delivered = await feed.status();
+    expect(taskIn(delivered, "A")).toMatchObject({ repair: null, stop: null });
+    // After delivery the status no longer names the cause; the durable event still does.
+    const events = await feed.events();
+    expect(rejectedIn(events)).toEqual([
+      {
+        id: expect.any(Number),
+        at: expect.any(String),
+        ticket: "A",
+        action: "rejected",
+        attempt: 1,
+        reason: "gate-failed",
+      },
+    ]);
+    expect(taskIn(delivered, "B")).toMatchObject({
+      stop: { reason: "worker-blocked" },
+      repair: null,
+    });
+    await f.submit("A", "a", `still bad ${gateCanary}\n`, 2);
+    await f.tick();
+    const escalated = await feed.status();
+    expect(taskIn(escalated, "A")).toMatchObject({
+      stage: "escalated",
+      stop: { reason: "verification-rejected" },
+      repair: null,
+    });
+    for (const text of [
+      ...feed.during,
+      delivered,
+      escalated,
+      events,
+      await feed.events(),
+    ]) {
+      expect(text).not.toContain(gateCanary);
+      expect(text).not.toContain(blockedCanary);
+      expect(text).not.toContain(f.directory);
+    }
+  } finally {
+    await feed.stop();
+    await f.close();
+  }
+});
+
+test("a first review rejection reads as working with review-rejected until its repair message is delivered", async () => {
+  const reviewCanary = "CANARY-REVIEW-FINDING";
+  const f = await fixture([{ id: "A" }], { review: true });
+  const feed = feedDuringRepair(f);
+  try {
+    await f.start();
+    await f.submit("A", "a", "a\n");
+    await f.tick();
+    const running = (await f.factory.tick("status")).runs.A;
+    if (running?.kind !== "running" || !running.review)
+      throw new Error("Expected review");
+    await writeFile(
+      running.review.report,
+      JSON.stringify({
+        ticket: "A",
+        attempt: 1,
+        revision: running.review.revision,
+        base: running.review.base,
+        stage: "post-graft",
+        kind: "issues",
+        findings: [
+          {
+            severity: "critical",
+            location: "src/a:1",
+            evidence: reviewCanary,
+            correction: "Repair a",
+          },
+        ],
+      }),
+    );
+    await f.tick();
+    expect(f.messages.at(-1)!.message).toContain(reviewCanary);
+    expect(feed.during).toHaveLength(1);
+    expect(taskIn(feed.during[0]!, "A")).toMatchObject({
+      activity: "working",
+      stop: null,
+      repair: { reason: "review-rejected", attempt: 1 },
+    });
+    expect(taskIn(await feed.status(), "A").repair).toBeNull();
+    const events = await feed.events();
+    expect(rejectedIn(events)).toMatchObject([
+      { ticket: "A", attempt: 1, reason: "review-rejected" },
+    ]);
+    expect(feed.during[0]).not.toContain(reviewCanary);
+    expect(await feed.status()).not.toContain(reviewCanary);
+    expect(events).not.toContain(reviewCanary);
+  } finally {
+    await feed.stop();
+    await f.close();
+  }
+});
+
+test("a worker that blocks after a gate repair is resumed without reusing the old rejection", async () => {
+  const f = await fixture([{ id: "A" }], {
+    verify: "! grep -q bad src/*",
+  });
+  const feed = feedDuringRepair(f);
+  try {
+    await f.start();
+    await f.submit("A", "a", "bad\n");
+    await f.tick();
+    expect(taskIn(feed.during[0]!, "A").repair).toEqual({
+      reason: "gate-failed",
+      attempt: 1,
+    });
+    await writeFile(
+      join(f.directory, "A.report.json"),
+      JSON.stringify({ attempt: 2, kind: "blocked", reason: "Stuck" }),
+    );
+    const blocked = (await f.tick()).runs.A;
+    if (blocked?.kind !== "blocked" || !blocked.incident)
+      throw new Error("Expected blocked worker");
+    expect(blocked.incident.reason).toBe("worker-blocked");
+    const before = feed.sends.length;
+    const resumed = await f.factory.tick(
+      "resume",
+      "T-owner",
+      async () => "idle",
+      {
+        ticket: "A",
+        incident: blocked.incident.id,
+        decision: "Continue",
+      },
+    );
+    expect(resumed.runs.A).toMatchObject({ kind: "running", attempt: 3 });
+    const resumeSends = feed.sends.slice(before);
+    expect(resumeSends).toHaveLength(1);
+    expect(taskIn(resumeSends[0]!.feed, "A")).toMatchObject({
+      attempt: 3,
+      repair: null,
+    });
+  } finally {
+    await feed.stop();
     await f.close();
   }
 });

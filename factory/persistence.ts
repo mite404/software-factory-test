@@ -117,6 +117,16 @@ export function providerResetAt(limit: ProviderLimit) {
   return limit.resetAt ?? limit.observedAt + 1_800_000;
 }
 type PipelineStep = (typeof pipelineSteps)[number]["id"];
+/** The public reason code a first rejection by each step records; a merge rejection is a moved
+ * target the candidate did not replay onto. */
+export const rejectionReasons = {
+  gate: "gate-failed",
+  review: "review-rejected",
+  merge: "target-changed",
+} as const satisfies Record<
+  "gate" | "review" | "merge",
+  StopIncident["reason"]
+>;
 export type StopIncident = {
   id: string;
   ticket: string;
@@ -124,8 +134,12 @@ export type StopIncident = {
   cause?: { thread: ThreadID; role: "worker" | "reviewer" };
   base: string;
   attempt: number;
+  // `gate-failed` and `review-rejected` are never saved on an incident: a first rejection that
+  // sends the same worker back records them on its `rejected` event.
   reason:
     | "verification-rejected"
+    | "gate-failed"
+    | "review-rejected"
     | "worker-blocked"
     | "worker-error"
     | "provider-limit"
@@ -168,6 +182,8 @@ export type Run = (
       gate?: { at: number; pid: number; start?: string; killed?: true };
       /** The pipeline step that rejected the previous attempt. */
       rejectedBy?: Extract<PipelineStep, "gate" | "review" | "merge">;
+      /** The attempt a first rejection sent back to this worker, saved by that rejection. */
+      rejectedAttempt?: number;
       /** The factory rebased the reported revision `from` onto `base` as `revision`, moving the
        * worker's HEAD from `source`; `at` is "verified" only once that HEAD is at `revision`. */
       rebased?: {
@@ -1182,7 +1198,8 @@ function validStageFacts(run: Record<string, unknown>): boolean {
     (run.gate === undefined || validGateMarker(record(run.gate))) &&
     [undefined, "gate", "review", "merge"].includes(
       run.rejectedBy as string | undefined,
-    )
+    ) &&
+    (run.rejectedAttempt === undefined || positiveInteger(run.rejectedAttempt))
   );
 }
 

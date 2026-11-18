@@ -198,7 +198,10 @@ F035 landed outside the factory with the operator's approval after four attempts
 the observer's private replies, lost wakes for owner-only work, rights kept after removal, alerts
 held by the hourly budget, and finally a prompt that woke the owner on routine progress, which the
 Foreman fixed. F017 landed at attempt one: the feed carries the stage only. All are placed. The
-factory can run a main and a light lane at once from merged main.
+factory can run a main and a light lane at once from merged main. F023 landed at attempt two: the
+first review found a rejection notice without its cause or attempt, a cause kept after delivery,
+and a worded code that worker creation shares. Its live box stays open until the live dashboard
+shows a reason on a real rejection or block.
 
 On 2026-11-18 the operator reordered the open units for the least blocking scaffolding first; the
 unit table above lists them in that order. After F023 come F034 on the main lane and v1-ticket3 on

@@ -47,6 +47,7 @@ import {
   runBlocks,
   runStage,
   publicSummary,
+  rejectionReasons,
   providerResetAt,
   laneHeld,
   runLane,
@@ -2511,9 +2512,16 @@ export function createFactory(
         run.rejectedBy = rejectedBy;
         const capped = run.attempt >= repairAttemptCap;
         if (!capped && run.attempt % 2 === 1) {
+          // Only the closed code and the failed attempt are public; the evidence stays private.
+          const rejected = {
+            reason: rejectionReasons[rejectedBy],
+            attempt: run.attempt,
+            evidence,
+          };
+          run.rejectedAttempt = run.attempt;
           run.attempt++;
           run.delivery = "queued";
-          commit(task.id, "rejected", evidence);
+          commit(task.id, "rejected", JSON.stringify(rejected));
         } else {
           state.runs[task.id] = {
             kind: capped ? "parked" : "blocked",

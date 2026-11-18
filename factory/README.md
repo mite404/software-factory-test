@@ -269,6 +269,14 @@ A report may add an explicitly public `summary`; acceptance curates it like a ti
 `publicSummary` (one line, at most 120 characters, refused if it holds a path, URL or thread ID)
 and saves only the result on the done run. The feed publishes that field or `null`; landings and
 older runs omit it.
+A first rejection sends the same worker back with no stop. `reject` saves the failed attempt as
+`rejectedAttempt` and records a `rejected` event whose detail is
+`{ reason, attempt, evidence }`: `gate-failed`, `review-rejected` or `target-changed` (a merge
+rejection) from `rejectionReasons`, the failed attempt, and the private gate log or verdict that
+the audit reads. Until the repair message is sent, the feed reads the ticket as `working` and
+publishes `repair: { reason, attempt }`. It is `null` otherwise, so delivery and acceptance clear
+it, and a later resume, whose attempt has moved past `rejectedAttempt`, never reuses it. The page
+words every reason code in one fixed sentence.
 
 The walking test pins five exitless stops by name: `blocked.withoutWorker`,
 `running.reviewerCreation`, `running.reviewerDeliveryLegacy`, `running.workerDeliveryLegacy` and
@@ -1060,12 +1068,12 @@ the run kinds and are not in the table.
   wait (dim, with a countdown to `clearsAt`), then work in progress, then quiet states. The
   actors are the ones `runLifecycle` declares. Ties keep table order.
 - A count of tickets whose `actor` is the operator is always shown at the top of the section.
-- A ticket on a stop gets a banner with who must act, the declared reason code, the stop's exit
+- A ticket on a stop gets a banner with who must act, the stop's reason, the stop's exit
   actions, the causing thread with its role, and when the stage began. A run with no recorded stop
   lists the exits its kind's stops declare, and says "no exit" only when none declares one.
   Colour keeps the page's meaning (green done, orange now, red stopped with the text "stopped",
   unlit when empty or queued; a clock wait stays dim); `uncertain` states say "outcome unknown".
-  The feed has no public reason label yet, so the banner prints the code.
+  The banner and the ticket sheet print the reason code's fixed sentence from `web/derive.ts`.
 
 The section is read-only; `web/replay.ts` frames 19 to
 22 show an empty factory, one running ticket, one stopped ticket and four tickets on one state.
@@ -1080,8 +1088,9 @@ Pass the last returned `id` as `after` on the next request.
 
 Each row has `id`, `at` (the stored timestamp), `ticket`, and `action`. Optional fields are
 `attempt` (a positive safe integer), `revision` (40 lowercase hexadecimal characters), and `thread`
-(a `T-` ID containing letters, digits, underscores, or hyphens). JSON details for preparation,
-setup-spawned, repair-resumed, and review creation or delivery supply only these validated fields.
+(a `T-` ID containing letters, digits, underscores, or hyphens). A first rejection adds `reason`,
+one of its closed codes. JSON details for preparation, setup-spawned, rejected, repair-resumed,
+and review creation or delivery supply only these validated fields.
 Legacy accepted revisions and created, sent, sending, or provider-continuation thread references
 are validated too. Unknown actions remain visible without any detail-derived fields.
 Briefs, paths, verdicts, arbitrary text, nested objects, and all other detail fields stay private.
@@ -1096,7 +1105,8 @@ The ticket selector filters locally. New rows arrive on the existing five-second
 into view only while the reader is at the end. Scrolling up keeps the reading position.
 The drawer and filter reset on reload. Notices use received events, not inferred poll differences.
 The replay includes labelled illustrative event rows; it is not a private event-log export.
-Stage-change events are not available yet. Replay guarantees and curated reasons remain future work.
+A first rejection's notice prints its reason sentence and the failed attempt.
+Stage-change events are not available yet. Replay guarantees remain future work.
 
 ### Pipeline motion
 

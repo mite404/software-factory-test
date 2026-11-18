@@ -4910,11 +4910,12 @@ test.each([
     try {
       expect(
         db
-          .query(
+          .query<{ detail: string }, []>(
             "SELECT detail FROM events WHERE ticket='A' AND action='rejected'",
           )
-          .all(),
-      ).toEqual([{ detail: log }]);
+          .all()
+          .map((row) => JSON.parse(row.detail)),
+      ).toEqual([{ reason: "gate-failed", attempt: 1, evidence: log }]);
     } finally {
       db.close();
     }
@@ -5057,7 +5058,8 @@ test("definition rename is rejected and private instructions stay deduplicated",
     true,
   );
   expect(messages.join("\n")).not.toContain("Private PRD paragraph");
-  expect(JSON.stringify(rejected).length).toBeLessThan(2000);
+  // The repeated PRD is 46,000 characters; a copy in state would exceed this bound many times.
+  expect(JSON.stringify(rejected).length).toBeLessThan(2500);
   const db = new Database(join(engine.directory, "state.sqlite"), {
     readonly: true,
   });

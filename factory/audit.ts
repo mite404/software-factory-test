@@ -363,12 +363,21 @@ async function gateExcerpt(path: string) {
   }
 }
 
+// A first rejection saves its private evidence beside its public reason code; older rejections
+// saved the evidence alone.
+function evidenceOf(event: { action: string; detail: string }) {
+  const wrapped = event.action === "rejected" ? json(event.detail) : {};
+  return typeof wrapped.evidence === "string" ? wrapped.evidence : event.detail;
+}
+
 function allEvents(directory: string) {
   const events: NonNullable<ReturnType<typeof factoryEvents>> = [];
   let after = 0;
   for (;;) {
     const page = factoryEvents(directory, after, 500) ?? [];
-    events.push(...page);
+    events.push(
+      ...page.map((event) => ({ ...event, detail: evidenceOf(event) })),
+    );
     if (page.length < 500) break;
     after = page[page.length - 1]!.id;
   }

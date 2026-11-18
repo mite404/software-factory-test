@@ -76,6 +76,7 @@ const NONE: Ticket = {
   attempt: null,
   stageLinks: [],
   stop: null,
+  reason: "",
   parked: false,
   rejections: [],
   lifecycle: "",
@@ -201,6 +202,16 @@ function Thread({ href }: { href: string | null }) {
   );
 }
 
+function Reason({ text }: { text: string }) {
+  if (!text) return null;
+  return (
+    <dd>
+      <span>reason</span>
+      {text}
+    </dd>
+  );
+}
+
 // The gray LCD: what the feed records about one ticket, beside the gate's fixed rules.
 function Sheet({ ticket }: { ticket: Ticket }) {
   return (
@@ -243,6 +254,7 @@ function Sheet({ ticket }: { ticket: Ticket }) {
             <span>thread</span>
             <Thread href={ticket.href} />
           </dd>
+          <Reason text={ticket.reason} />
         </div>
       </dl>
       {ticket.rejections.length > 0 && (

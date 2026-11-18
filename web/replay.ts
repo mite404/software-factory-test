@@ -43,6 +43,8 @@ const EVENTS: DashboardEvent[] = [
     at: "2026-11-13T23:33:28Z",
     ticket: "backup-adoption-ticket1",
     action: "rejected",
+    attempt: 5,
+    reason: "review-rejected",
   },
   {
     id: 6,
@@ -141,8 +143,9 @@ const TICKETS = [
 // One poll each: the newest ticket in the feed, its stage and activity, and its pending review.
 // Stages were not in the 2026-11 recording; frames 15 to 18 are illustrative stage examples, and
 // frames 19 to 22 are the lifecycle graph's cases: an empty factory, one running ticket, one
-// stopped ticket and several tickets on one state. Every frame names the run's kind, and its
-// stop when one holds it, as keys of the declared table.
+// stopped ticket and several tickets on one state. Frame 23 is a gate rejection on its way back
+// to the same builder. Every frame names the run's kind, and its stop when one holds it, as keys
+// of the declared table.
 type Frame = {
   ticket: number; // index of the newest ticket; -1 is an empty factory
   kind: string | null;
@@ -155,6 +158,7 @@ type Frame = {
   stopped?: boolean;
   parked?: boolean;
   escalated?: boolean;
+  repair?: true; // the gate rejected attempt 1 and the repair message is not sent yet
 };
 
 const BUILDING = {
@@ -256,6 +260,7 @@ export const FRAMES: Frame[] = [
     stopName: "repair",
   },
   { ticket: 3, activity: "working", crowd: true, ...BUILDING },
+  { ticket: 3, activity: "working", repair: true, ...BUILDING },
 ];
 
 const STOPPED_REVIEW = {
@@ -295,6 +300,11 @@ const PROVIDER_LIMIT = {
   rejections: [],
 } satisfies Partial<FeedTask>;
 
+const GATE_REPAIR = {
+  attempt: 2,
+  repair: { reason: "gate-failed", attempt: 1 },
+} satisfies Partial<FeedTask>;
+
 function stopFrame(frame: Frame): Partial<FeedTask> {
   if (frame.stopName === "providerLimit") return PROVIDER_LIMIT;
   if (frame.parked) return PARKED_REVIEW;
@@ -327,7 +337,11 @@ function stageFrame(
       actor: frame.actor,
       step: STEP[frame.stage] ?? null,
       rejectedBy:
-        frame.stopped && frame.stage !== "reviewing" ? "review" : null,
+        frame.stopped && frame.stage !== "reviewing"
+          ? "review"
+          : frame.repair
+            ? "gate"
+            : null,
       clearsAt:
         frame.stage === "rate-limited"
           ? new Date(Date.now() + 25 * 60_000).toISOString()
@@ -393,8 +407,10 @@ function taskAt(frame: Frame, ticket: (typeof TICKETS)[number], i: number) {
       ticket.revision,
     ),
     stop: null,
+    repair: null,
     rejections: [],
     ...(stoppedIn(frame, landed) ? stopFrame(frame) : {}),
+    ...(frame.repair && !landed ? GATE_REPAIR : {}),
     ...stageFrame(frame, landed, !!ticket.merge),
     ...outcomeFrame(frame, ticket, landed),
   };

@@ -474,6 +474,14 @@ test("the kit device gets every ticket and only notifies from recorded events", 
         attempt: 2,
       },
       { id: 6, at: "2026-11-13T12:00:04Z", ticket: "T4", action: "rejected" },
+      {
+        id: 7,
+        at: "2026-11-13T12:00:05Z",
+        ticket: "T5",
+        action: "rejected",
+        attempt: 1,
+        reason: "gate-failed",
+      },
     ]).news,
   ).toEqual([
     {
@@ -487,6 +495,12 @@ test("the kit device gets every ticket and only notifies from recorded events", 
       tone: "danger",
       title: "T4 rejected",
       text: "2026-11-13T12:00:04Z",
+    },
+    {
+      at: "2026-11-13T12:00:05Z",
+      tone: "danger",
+      title: "T5 rejected",
+      text: "The pinned gate failed. Attempt 1 goes back to its builder. · 2026-11-13T12:00:05Z",
     },
   ]);
 });
@@ -822,7 +836,7 @@ test("operator-owned stops sort first and the waiting count is the operator's ti
     urgency: 0,
     tone: "danger",
     title: "B · parked · repair · operator must act",
-    text: "Reason verification-rejected. Exit: resume, record-landing.",
+    text: "Verification rejected the repaired candidate; it waits for a decision. Exit: resume, record-landing.",
     cause: { role: "reviewer", href: "https://ampcode.com/threads/T-b" },
     when: "Stage began 2026-11-14 01:47Z.",
   });
@@ -1141,4 +1155,83 @@ test("a setup failure saved without an incident still shows its declared exit", 
   expect(terminal.graph!.banners[0]!.text).toBe(
     "Reason not recorded. No exit in the factory.",
   );
+});
+
+test("every reason code prints one fixed sentence on the sheet and the banner, never the code", () => {
+  const codes = [
+    ...new Set([
+      ...Object.values(lifecycleStatus()).flatMap((entry) =>
+        Object.values(entry.stops).flatMap((stop) => stop.reasons),
+      ),
+      "gate-failed",
+      "review-rejected",
+    ]),
+  ] as NonNullable<FeedTask["stop"]>["reason"][];
+  expect(codes).toHaveLength(14);
+  const sentences = codes.map((reason) => {
+    const view = derive(
+      null,
+      graphFeed([
+        {
+          id: "A",
+          kind: "blocked",
+          stopName: null,
+          stage: "blocked",
+          actor: "foreman",
+          stop: { reason, role: null, thread: null },
+        },
+      ]),
+      NOW,
+    );
+    const sentence = view.tickets[0]!.reason;
+    expect(sentence, reason).toMatch(/^[A-Z][^\n]*\.$/);
+    expect(sentence).not.toContain(reason);
+    expect(view.graph!.banners[0]!.text.startsWith(`${sentence} `)).toBe(true);
+    expect(view.graph!.banners[0]!.text).not.toContain("Reason not recorded");
+    return sentence;
+  });
+  expect(new Set(sentences).size).toBe(codes.length);
+});
+
+test("an unknown creation names no role, whether the worker or the reviewer was being created", () => {
+  const view = derive(
+    null,
+    graphFeed([
+      {
+        id: "W",
+        kind: "creating",
+        stopName: "unknown",
+        stage: "creating",
+        actor: "foreman",
+        stop: { reason: "creation-unknown", role: null, thread: null },
+      },
+      {
+        id: "R",
+        kind: "running",
+        stopName: "reviewerCreation",
+        stage: "reviewing",
+        actor: "foreman",
+        stop: { reason: "creation-unknown", role: null, thread: null },
+      },
+    ]),
+    NOW,
+  );
+  const texts = view.graph!.banners.map((banner) => [banner.id, banner.text]);
+  expect(texts.map(([id]) => id).sort()).toEqual(["R", "W"]);
+  for (const [, text] of texts) {
+    expect(text).toStartWith("Whether its thread was created is unknown.");
+    expect(text).not.toMatch(/reviewer|worker|builder/i);
+  }
+});
+
+test("a gate rejection on its way back to the builder reads as working with its reason and attempt", () => {
+  const n = FRAMES.findIndex((frame) => frame.repair);
+  const view = derive(feedAt(n - 1), feedAt(n), NOW);
+  const ticket = view.tickets.at(-1)!;
+  expect(ticket.status).toBe("working");
+  expect(ticket.reason).toBe(
+    "The pinned gate failed. Attempt 1 goes back to its builder.",
+  );
+  expect(view.backRow).toBe(0);
+  expect(derive(null, feedAt(n - 1), NOW).tickets.at(-1)!.reason).toBe("");
 });
