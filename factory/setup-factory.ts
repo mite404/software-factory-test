@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import {
   access,
+  appendFile,
   mkdtemp,
   mkdir,
   readFile,
@@ -12,9 +13,9 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseArgs } from "node:util";
+import { isDeepStrictEqual, parseArgs } from "node:util";
 import {
   configuration,
   effectiveDefinition,
@@ -47,6 +48,16 @@ function resolveStore(path?: string) {
   return store;
 }
 
+async function requireDashboard(root: string, check: boolean) {
+  if (!check) return;
+  for (const file of dashboardFiles)
+    await access(join(root, dashboardDir, file));
+  if ((await servicesAppend(root)) !== "")
+    throw new Error(
+      "Dashboard service is not declared in .amp/services.yaml; run --refresh",
+    );
+}
+
 async function checkOrReuse(root: string, pluginPath: string, check: boolean) {
   if (
     !check &&
@@ -57,12 +68,124 @@ async function checkOrReuse(root: string, pluginPath: string, check: boolean) {
     return false;
   await configuration(root);
   await access(pluginPath);
+  await requireDashboard(root, check);
   process.stdout.write(
     check
       ? "SETUP OK (execution remains separately controlled)\n"
       : "SETUP UNCHANGED\n",
   );
   return true;
+}
+
+const serviceName = "factory-dashboard";
+// Generated, like the plugin: git-excluded and rebuilt by --refresh. The service runs only this copy.
+const dashboardDir = ".amp/factory";
+const dashboardFiles = ["dashboard.js", "dashboard.html"];
+
+// The read-only dashboard on the API origin. Declaring it grants no execution, schedule, ticket or push permission.
+// The command is constant and names only a repository-local file, so it needs no shell quoting.
+function dashboardService() {
+  return {
+    command: `bun ${dashboardDir}/dashboard.js --repo .`,
+    port: 4310,
+    health: "/api/status",
+    portal: {
+      title: "Factory dashboard",
+      description: "Read-only factory status served on the API origin.",
+    },
+  };
+}
+
+// The parse is only a reader; parsesTo proves the appended file before anything is written.
+function parseServices(text: string) {
+  const top = (Bun.YAML.parse(text.trim() || "{}") ?? {}) as {
+    services?: Record<string, unknown>;
+  };
+  return { top, declared: top.services ?? {} };
+}
+
+function serviceEntry(old: string, hasServices: boolean, want: object) {
+  const entry = Bun.YAML.stringify({ [serviceName]: want }, null, 2).replace(
+    /^(?=.)/gm,
+    "  ",
+  );
+  return (
+    (/(^|\n)$/.test(old) ? "" : "\n") +
+    (hasServices ? "" : "services:\n") +
+    entry
+  );
+}
+
+function parsesTo(text: string, expected: unknown) {
+  try {
+    return isDeepStrictEqual(Bun.YAML.parse(text), expected);
+  } catch {
+    return false;
+  }
+}
+
+async function readText(path: string) {
+  return existsSync(path) ? readFile(path, "utf8") : "";
+}
+
+/**
+ * Text to append to the repository's .amp/services.yaml to declare the dashboard; "" when it is already declared.
+ * The application's own bytes are never rewritten, only appended to.
+ * @throws On a different entry of that name, or a file that cannot be appended to without reformatting it.
+ */
+async function servicesAppend(root: string) {
+  const want = dashboardService();
+  const old = await readText(join(root, ".amp/services.yaml"));
+  const { top, declared } = parseServices(old);
+  if (Object.hasOwn(declared, serviceName)) {
+    if (isDeepStrictEqual(declared[serviceName], want)) return "";
+    throw new Error(
+      `.amp/services.yaml already declares a different ${serviceName}; resolve it by hand`,
+    );
+  }
+  const append = serviceEntry(old, top.services !== undefined, want);
+  const expected = { ...top, services: { ...declared, [serviceName]: want } };
+  if (!parsesTo(old + append, expected))
+    throw new Error(
+      `Cannot append ${serviceName} to .amp/services.yaml without reformatting it; add it by hand`,
+    );
+  return append;
+}
+
+async function installServices(root: string, append: string) {
+  if (append === "") return;
+  await mkdir(join(root, ".amp"), { recursive: true });
+  await appendFile(join(root, ".amp/services.yaml"), append);
+}
+
+// Self-contained copy of the dashboard so the installed service never reaches into the source checkout.
+async function bundleDashboard() {
+  const result = await Bun.build({
+    entrypoints: [join(import.meta.dir, "dashboard.ts")],
+    root: import.meta.dir,
+    target: "bun",
+    minify: false,
+  });
+  if (!result.success || !result.outputs[0])
+    throw new Error(
+      `Bundle failed: ${result.logs.map((log) => log.message).join("\n")}`,
+    );
+  return {
+    "dashboard.js": await result.outputs[0].text(),
+    "dashboard.html": await readFile(
+      join(import.meta.dir, "dashboard.html"),
+      "utf8",
+    ),
+  };
+}
+
+async function installDashboard(
+  root: string,
+  files: Awaited<ReturnType<typeof bundleDashboard>>,
+) {
+  await mkdir(join(root, dashboardDir), { recursive: true });
+  for (const [name, text] of Object.entries(files))
+    await replaceFile(join(root, dashboardDir, name), text);
 }
 
 async function existingSetup(
@@ -95,20 +218,28 @@ async function bundlePlugin(root: string, store: string) {
       throw new Error(
         `Bundle failed: ${result.logs.map((log) => log.message).join("\n")}`,
       );
-    return result.outputs[0].text();
+    // Bun comments each module with its path; the random temp directory would change every refresh.
+    return (await result.outputs[0].text()).replaceAll(
+      relative(process.cwd(), entry),
+      "factory-bundle/entry.ts",
+    );
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }
 }
 
-async function refreshPlugin(pluginPath: string, plugin: string) {
-  const temporary = `${pluginPath}.${randomUUID()}.tmp`;
+async function replaceFile(path: string, text: string) {
+  const temporary = `${path}.${randomUUID()}.tmp`;
   try {
-    await writeFile(temporary, plugin, { flag: "wx" });
-    await rename(temporary, pluginPath);
+    await writeFile(temporary, text, { flag: "wx" });
+    await rename(temporary, path);
   } finally {
     await rm(temporary, { force: true });
   }
+}
+
+async function refreshPlugin(pluginPath: string, plugin: string) {
+  await replaceFile(pluginPath, plugin);
   process.stdout.write("REFRESH OK; reload the factory plugin.\n");
 }
 
@@ -182,7 +313,7 @@ async function initialInputs(root: string, values: ReturnType<typeof options>) {
   for (const path of values.scope!) localPath(root, path);
 }
 
-async function excludePlugin(root: string) {
+async function excludeGenerated(root: string) {
   const excludePath = execFileSync(
     "git",
     ["-C", root, "rev-parse", "--git-path", "info/exclude"],
@@ -190,8 +321,15 @@ async function excludePlugin(root: string) {
   ).trim();
   const exclude = resolve(root, excludePath);
   await mkdir(resolve(exclude, ".."), { recursive: true });
-  const old = existsSync(exclude) ? await readFile(exclude, "utf8") : "";
-  await writeFile(exclude, old + "\n/.amp/plugins/software-factory.js\n");
+  const old = await readText(exclude);
+  const present = new Set(old.split("\n"));
+  const missing = [
+    "/.amp/plugins/software-factory.js",
+    `/${dashboardDir}/`,
+  ].filter((rule) => !present.has(rule));
+  if (missing.length === 0) return;
+  const gap = old === "" || old.endsWith("\n") ? "" : "\n";
+  await appendFile(exclude, `${gap}${missing.join("\n")}\n`);
 }
 
 async function definitionOperation(
@@ -232,10 +370,15 @@ async function main() {
   if (await existingSetup(root, pluginPath, values)) return;
   if (!refresh) await initialInputs(root, values);
   const store = resolveStore(values.store);
+  const services = await servicesAppend(root);
   const plugin = await bundlePlugin(root, store);
+  const dashboard = await bundleDashboard();
   await mkdir(join(root, ".amp/plugins"), { recursive: true });
   if (refresh) {
     await refreshPlugin(pluginPath, plugin);
+    await installDashboard(root, dashboard);
+    await installServices(root, services);
+    await excludeGenerated(root);
     return;
   }
   const config = {
@@ -272,7 +415,9 @@ async function main() {
     await writeFile(configPath, JSON.stringify(config, null, 2) + "\n", {
       flag: "wx",
     });
-    await excludePlugin(root);
+    await installDashboard(root, dashboard);
+    await installServices(root, services);
+    await excludeGenerated(root);
     process.stdout.write(
       "SETUP OK; execution disabled. Review .factory.json and .factory-tickets.json.\n",
     );

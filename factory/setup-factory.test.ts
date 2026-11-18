@@ -1,9 +1,11 @@
 import { expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
+  cp,
   link,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   rm,
   stat,
@@ -418,3 +420,280 @@ test("refresh rebuilds only the adapter in two repositories", async () => {
     await rm(home, { recursive: true, force: true });
   }
 }, 60_000);
+
+async function tree(root: string) {
+  const files: Record<string, string> = {};
+  for (const path of await readdir(root, { recursive: true }))
+    if ((await stat(join(root, path))).isFile())
+      files[path] = await readFile(join(root, path), "utf8");
+  return files;
+}
+
+// Runs the declared command in a copy of the installed repository, as a new orb would.
+async function runMoved(root: string, moved: string, command: string) {
+  await cp(root, moved, { recursive: true });
+  const child = Bun.spawn(command.split(" "), {
+    cwd: moved,
+    env: { ...process.env, PORT: "0" },
+    stdout: "pipe",
+    stderr: "ignore",
+  });
+  try {
+    const { value } = await child.stdout.getReader().read();
+    const port = /port (\d+)/.exec(new TextDecoder().decode(value))?.[1];
+    expect(port).toBeDefined();
+    const url = `http://127.0.0.1:${port}`;
+    expect(await (await fetch(`${url}/`)).text()).toBe(
+      await readFile(join(import.meta.dir, "dashboard.html"), "utf8"),
+    );
+    expect((await fetch(`${url}/api/status`)).status).toBe(200);
+    expect((await fetch(`${url}/api/status`, { method: "POST" })).status).toBe(
+      405,
+    );
+  } finally {
+    child.kill();
+    await child.exited;
+  }
+}
+
+test("setup and refresh declare the dashboard service in two repositories without rewriting their own services", async () => {
+  const home = await mkdtemp(join(tmpdir(), "factory-services-"));
+  try {
+    const store = join(home, "store.ts");
+    await writeFile(store, "export function openStore() {}\n");
+    const own =
+      '# Our services\nservices:\n  api:   # keep this\n    command: "bun api.ts"\n    port: 3000\n';
+    const conflict =
+      "services:\n  factory-dashboard:\n    command: bun mine.ts\n";
+    const fourSpaces = "services:\n    api:\n        command: bun api.ts\n";
+    const setup = (name: string) => {
+      const root = join(home, name);
+      execFileSync("git", ["init", "-q", root]);
+      const run = (...flags: string[]) =>
+        spawnSync(
+          "bun",
+          [
+            installer,
+            "--repo",
+            root,
+            "--prd",
+            "prd.md",
+            "--verify",
+            "true",
+            "--scope",
+            "src/",
+            "--store",
+            store,
+            ...flags,
+          ],
+          { encoding: "utf8" },
+        );
+      return { root, run };
+    };
+    const services = (root: string) => join(root, ".amp/services.yaml");
+    const want = {
+      command: "bun .amp/factory/dashboard.js --repo .",
+      port: 4310,
+      health: "/api/status",
+      portal: {
+        title: "Factory dashboard",
+        description: "Read-only factory status served on the API origin.",
+      },
+    };
+
+    const refused = [
+      ["conflict", conflict],
+      ["four-spaces", fourSpaces],
+    ] as const;
+    for (const [name, content] of refused) {
+      const { root, run } = setup(name);
+      await writeFile(join(root, "prd.md"), "# Fixture\n");
+      await mkdir(join(root, ".amp"));
+      await writeFile(services(root), content);
+      const before = await tree(root);
+      const result = run();
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("services.yaml");
+      expect(await tree(root)).toEqual(before);
+    }
+
+    for (const [name, own_] of [
+      ["first", own],
+      ["second", undefined],
+    ] as const) {
+      const { root, run } = setup(name);
+      await writeFile(join(root, "prd.md"), "# Fixture\n");
+      if (own_ !== undefined) {
+        await mkdir(join(root, ".amp"));
+        await writeFile(services(root), own_);
+      }
+      expect(run().status).toBe(0);
+      const installed = await readFile(services(root), "utf8");
+      expect(installed.startsWith(own_ ?? "services:\n")).toBe(true);
+      const parsed = Bun.YAML.parse(installed) as {
+        services: Record<string, unknown>;
+      };
+      expect(Object.keys(parsed.services)).toEqual(
+        own_ ? ["api", "factory-dashboard"] : ["factory-dashboard"],
+      );
+      expect(parsed.services["factory-dashboard"]).toEqual(want);
+      const config = await Bun.file(join(root, ".factory.json")).json();
+      expect(config.permissions).toEqual({
+        execute: false,
+        publish: false,
+        externalTickets: false,
+      });
+
+      const settled = await tree(root);
+      expect(run().stdout).toContain("SETUP UNCHANGED");
+      expect(run("--check").status).toBe(0);
+      expect(run("--refresh").status).toBe(0);
+      expect(await tree(root)).toEqual(settled);
+      expect(
+        execFileSync("git", ["-C", root, "status", "--porcelain"], {
+          encoding: "utf8",
+        }),
+      ).not.toContain(".amp/factory");
+
+      const bundle = await readFile(
+        join(root, ".amp/factory/dashboard.js"),
+        "utf8",
+      );
+      expect(bundle).not.toContain(resolve(import.meta.dir));
+      await runMoved(root, join(home, `${name}-moved`), want.command);
+
+      await writeFile(services(root), own_ ?? "");
+      const old = await tree(root);
+      expect(run("--check").status).toBe(1);
+      expect(await tree(root)).toEqual(old);
+      expect(run("--refresh").status).toBe(0);
+      expect(await readFile(services(root), "utf8")).toBe(installed);
+      expect(await tree(root)).toEqual(settled);
+
+      await writeFile(join(root, ".amp/plugins/software-factory.js"), "old\n");
+      await writeFile(services(root), conflict);
+      const stale = await tree(root);
+      expect(run("--refresh").status).toBe(1);
+      expect(await tree(root)).toEqual(stale);
+      await writeFile(services(root), installed);
+      expect(run("--refresh").status).toBe(0);
+
+      await mkdir(join(root, "web/dist"), { recursive: true });
+      await writeFile(join(root, "web/dist/index.html"), "<p>built page</p>");
+      const before = await tree(root);
+      const server = startDashboard({ root, port: 0 });
+      try {
+        const url = `http://127.0.0.1:${server.port}`;
+        expect(await (await fetch(`${url}/`)).text()).toBe("<p>built page</p>");
+        expect((await fetch(`${url}/api/status`)).status).toBe(200);
+        for (const method of ["POST", "PUT", "PATCH", "DELETE"])
+          for (const path of [
+            "/",
+            "/api/status",
+            "/api/events",
+            "/api/definition",
+          ])
+            expect(
+              (await fetch(`${url}${path}`, { method, body: "{}" })).status,
+            ).toBe(405);
+      } finally {
+        await server.stop(true);
+      }
+      expect(await tree(root)).toEqual(before);
+    }
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+}, 120_000);
+
+test("refresh excludes the generated plugin and dashboard in an upgraded install and a fresh clone", async () => {
+  const home = await mkdtemp(join(tmpdir(), "factory-exclude-"));
+  try {
+    const store = join(home, "store.ts");
+    await writeFile(store, "export function openStore() {}\n");
+    const git = (root: string, ...args: string[]) =>
+      execFileSync(
+        "git",
+        [
+          "-C",
+          root,
+          "-c",
+          "user.name=fixture",
+          "-c",
+          "user.email=fixture@example.invalid",
+          "-c",
+          "commit.gpgsign=false",
+          ...args,
+        ],
+        { encoding: "utf8" },
+      );
+    const refresh = (root: string, ...flags: string[]) =>
+      spawnSync(
+        "bun",
+        [installer, "--repo", root, "--refresh", "--store", store, ...flags],
+        { encoding: "utf8" },
+      );
+    const source = join(home, "source");
+    execFileSync("git", ["init", "-q", source]);
+    await writeFile(join(source, "prd.md"), "# Fixture\n");
+    const created = spawnSync(
+      "bun",
+      [
+        installer,
+        "--repo",
+        source,
+        "--prd",
+        "prd.md",
+        "--verify",
+        "true",
+      ].concat(["--scope", "src/", "--store", store]),
+      { encoding: "utf8" },
+    );
+    expect(created.status).toBe(0);
+    git(source, "add", "-A");
+    git(source, "commit", "-q", "-m", "fixture");
+    expect(git(source, "status", "--porcelain")).toBe("");
+
+    // The base installer excluded only the plugin and never wrote .amp/factory.
+    const upgraded = join(home, "upgraded");
+    await cp(source, upgraded, { recursive: true });
+    await rm(join(upgraded, ".amp/factory"), { recursive: true });
+    const exclude = join(upgraded, ".git/info/exclude");
+    await writeFile(exclude, "/.amp/plugins/software-factory.js\n");
+    expect(git(upgraded, "status", "--porcelain")).toBe("");
+
+    const cloned = join(home, "cloned");
+    execFileSync("git", ["clone", "-q", source, cloned]);
+    expect(
+      await Bun.file(join(cloned, ".amp/plugins/software-factory.js")).exists(),
+    ).toBe(false);
+
+    for (const root of [upgraded, cloned]) {
+      const excludePath = join(root, ".git/info/exclude");
+      const before = await readFile(excludePath, "utf8");
+      expect(refresh(root, "--check").status).toBe(1);
+      expect(await readFile(excludePath, "utf8")).toBe(before);
+      expect(refresh(root).status).toBe(0);
+      expect(git(root, "status", "--porcelain")).toBe("");
+      const settled = await readFile(excludePath, "utf8");
+      expect(refresh(root).status).toBe(0);
+      expect(await readFile(excludePath, "utf8")).toBe(settled);
+      const lines = settled.split("\n");
+      for (const rule of [
+        "/.amp/plugins/software-factory.js",
+        "/.amp/factory/",
+      ])
+        expect(lines.filter((line) => line === rule)).toHaveLength(1);
+      expect(
+        await Bun.file(join(root, ".amp/factory/dashboard.js")).exists(),
+      ).toBe(true);
+    }
+    expect(
+      (await readFile(exclude, "utf8")).startsWith(
+        "/.amp/plugins/software-factory.js\n",
+      ),
+    ).toBe(true);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+}, 120_000);
