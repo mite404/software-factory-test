@@ -1004,6 +1004,27 @@ Existing configuration, tickets, and runtime state stay unchanged. Reload the fa
 explicitly after a successful refresh. Ordinary repeated setup remains a no-op, and `--check` never
 writes.
 
+### Dashboard service declaration
+
+Setup and `--refresh` also install a self-contained copy of the dashboard in
+`.amp/factory/` (`dashboard.js` and its fallback `dashboard.html`) and declare a
+`factory-dashboard` service in the repository's `.amp/services.yaml`, so a new orb can start it with
+`amp orb services ensure`. The command is the constant `bun .amp/factory/dashboard.js --repo .`:
+it names only repository-local files, never the checkout that ran setup, and the installed
+repository can move to another directory or orb. Like the plugin, the copy is generated and
+git-excluded, so run `--refresh` after a fresh clone. Setup and every refresh add any missing
+exclude rule to `.git/info/exclude` and leave existing lines alone, so an install made before the
+dashboard copy existed is also covered. The service runs only the read-only dashboard on port
+4310. It grants no execution, schedule, ticket or push permission.
+
+The application's own services file is never rewritten or reformatted: the entry is appended after
+the existing text. Setup and refresh refuse, before writing anything, when the file already declares
+a different `factory-dashboard` or when the entry cannot be appended without reformatting (for
+example a file indented by four spaces). Add the entry by hand in that case. An identical entry is
+left alone, so repeated setup and refresh runs leave every byte unchanged. `--check` reports a
+missing runtime copy or a missing or conflicting declaration and writes nothing. Setup does not
+start any service.
+
 ## Recover a disconnected worker
 
 Use the factory control tool's `reconcile` action after reloading the plugin. Native Amp state stays
@@ -1037,8 +1058,10 @@ amp orb service start factory-dashboard \
 ```
 
 Use the portal URL returned by Amp. Do not expose the loopback service directly on a public host.
-Installing the dashboard into another repo is still part of F01; these commands run the source
-available in this checkout, not a published package.
+Setup declares this service for a managed repository (see
+[Dashboard service declaration](#dashboard-service-declaration)); these commands run the source
+available in this checkout, not a published package. Every non-GET request answers 405 and changes
+nothing.
 
 ### Pipeline view
 
