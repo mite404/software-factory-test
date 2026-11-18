@@ -67,5 +67,5 @@ Run the common preflight in `docs/v1-execution.md`; no service packaging checks 
 ## Done when
 
 - [ ] Two repos run through supervised services without factory source edits or app overwrite.
-- [ ] Check-only and installation grant no execution, schedule, external ticket, or push permission.
+- [x] Check-only and installation grant no execution, schedule, external ticket, or push permission.
 - [ ] Required gates, browser evidence, and cold review pass.

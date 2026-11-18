@@ -202,7 +202,10 @@ factory can run a main and a light lane at once from merged main. F023 landed at
 first review found a rejection notice without its cause or attempt, a cause kept after delivery,
 and a worded code that worker creation shares. Its live box stays open until the live dashboard
 shows a reason on a real rejection or block. F034 landed at attempt one: an interrupted reviewer
-creation now has a retry-create exit.
+creation now has a retry-create exit. v1-ticket3 landed at attempt three on the light lane: reviews
+found an installed command that ran the installer's own checkout, a path quoted without shell
+escaping, and a refresh that left the generated dashboard untracked. Its fixture tests cover two
+repositories; real supervised services and a rendered portal stay open as live boxes.
 
 On 2026-11-18 the operator reordered the open units for the least blocking scaffolding first; the
 unit table above lists them in that order. After F023 come F034 on the main lane and v1-ticket3 on

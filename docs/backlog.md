@@ -8,7 +8,7 @@ status come from the factory database, shown on the dashboard; this file is the 
 User stories are in [stories.md](stories.md), requirements in the [PRD](prd.md), and dependencies
 and admission rules in [v1-execution.md](v1-execution.md).
 
-## Landed with open boxes (5)
+## Landed with open boxes (6)
 
 Merged, but at least one box, usually a live proof, is still open.
 
@@ -19,14 +19,14 @@ Merged, but at least one box, usually a live proof, is still open.
 | [F003-provider-limit-resume](feats/durability/F003-provider-limit-resume.md) | Same threads resume after a provider limit | 5/6 |
 | [F011-step-actor-labels](feats/lifecycle-view/F011-step-actor-labels.md) | Each step and exit names who performs it | 5/6 |
 | [F023-public-stop-reasons](feats/lifecycle-view/F023-public-stop-reasons.md) | A blocked or rejected ticket says why | 5/6 |
+| [v1-ticket3](feats/v1/v1-ticket3.md) | Repeat-safe repository services | 1/3 |
 
-## Not started (31)
+## Not started (30)
 
 In dispatch order.
 
 | Ticket | Outcome | Done when |
 | --- | --- | --- |
-| [v1-ticket3](feats/v1/v1-ticket3.md) | Repeat-safe repository services | 0/3 |
 | [v1-ticket4](feats/v1/v1-ticket4.md) | Durable private evidence records | 0/3 |
 | [F025-config-directory](feats/config-layout/F025-config-directory.md) | Factory settings live in one file per concern | 0/7 |
 | [F029-gate-check-files](feats/config-layout/F029-gate-check-files.md) | The gate reports every check on its own | 0/6 |
