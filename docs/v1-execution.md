@@ -57,7 +57,7 @@ prerequisites, not permission to dispatch every draft against today's base.
 | [F035-observer-watchdog-thread](feats/done/F035-observer-watchdog-thread.md) | Routine watchdog checks run in a cheap observer thread    | F014-lifecycle-stages                                                    | F03, operator autonomy priority           |
 | [F037-two-worker-lanes](feats/done/F037-two-worker-lanes.md)                             | Two lanes run two tickets at once                         | F011-step-actor-labels                                                   | R1, R10, operator throughput priority     |
 | [F023-public-stop-reasons](feats/lifecycle-view/F023-public-stop-reasons.md)             | A blocked or rejected ticket says why                     | None                                                                     | F07, operator observability priority      |
-| [F034-reviewer-retry-create](feats/durability/F034-reviewer-retry-create.md)             | An interrupted reviewer creation can be retried           | F007-run-transition-table                                                | F03, operator autonomy priority           |
+| [F034-reviewer-retry-create](feats/done/F034-reviewer-retry-create.md)             | An interrupted reviewer creation can be retried           | F007-run-transition-table                                                | F03, operator autonomy priority           |
 | [v1-ticket3](feats/v1/v1-ticket3.md)                                                     | Repeat-safe repository services                           | v1-ticket2                                                               | F01, AC13-AC16, AC20                      |
 | [v1-ticket4](feats/v1/v1-ticket4.md)                                                     | Durable private evidence records                          | v1-ticket2                                                               | F02, F07, R6-R7                           |
 | [F025-config-directory](feats/config-layout/F025-config-directory.md)                    | Factory settings live in one file per concern             | None                                                                     | F12, operator configuration priority      |
@@ -201,7 +201,8 @@ Foreman fixed. F017 landed at attempt one: the feed carries the stage only. All 
 factory can run a main and a light lane at once from merged main. F023 landed at attempt two: the
 first review found a rejection notice without its cause or attempt, a cause kept after delivery,
 and a worded code that worker creation shares. Its live box stays open until the live dashboard
-shows a reason on a real rejection or block.
+shows a reason on a real rejection or block. F034 landed at attempt one: an interrupted reviewer
+creation now has a retry-create exit.
 
 On 2026-11-18 the operator reordered the open units for the least blocking scaffolding first; the
 unit table above lists them in that order. After F023 come F034 on the main lane and v1-ticket3 on

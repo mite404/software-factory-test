@@ -20,13 +20,12 @@ Merged, but at least one box, usually a live proof, is still open.
 | [F011-step-actor-labels](feats/lifecycle-view/F011-step-actor-labels.md) | Each step and exit names who performs it | 5/6 |
 | [F023-public-stop-reasons](feats/lifecycle-view/F023-public-stop-reasons.md) | A blocked or rejected ticket says why | 5/6 |
 
-## Not started (32)
+## Not started (31)
 
 In dispatch order.
 
 | Ticket | Outcome | Done when |
 | --- | --- | --- |
-| [F034-reviewer-retry-create](feats/durability/F034-reviewer-retry-create.md) | An interrupted reviewer creation can be retried | 0/5 |
 | [v1-ticket3](feats/v1/v1-ticket3.md) | Repeat-safe repository services | 0/3 |
 | [v1-ticket4](feats/v1/v1-ticket4.md) | Durable private evidence records | 0/3 |
 | [F025-config-directory](feats/config-layout/F025-config-directory.md) | Factory settings live in one file per concern | 0/7 |
@@ -67,7 +66,7 @@ Written up but set aside; not dispatched until the operator asks for it.
 | --- | --- | --- |
 | [F036-context-window-reminders](feats/worker-budgets/F036-context-window-reminders.md) | Context-window reminders with an operator-chosen handoff | 0/5 |
 
-## Done (34)
+## Done (35)
 
 | Ticket | Outcome | Done when |
 | --- | --- | --- |
@@ -105,3 +104,4 @@ Written up but set aside; not dispatched until the operator asks for it.
 | [F033-provider-error-shape](feats/done/F033-provider-error-shape.md) | A real provider limit waits instead of stopping | 4/4 |
 | [F035-observer-watchdog-thread](feats/done/F035-observer-watchdog-thread.md) | Routine watchdog checks run in a cheap observer thread | 5/5 |
 | [F037-two-worker-lanes](feats/done/F037-two-worker-lanes.md) | Two lanes run two tickets at once | 5/5 |
+| [F034-reviewer-retry-create](feats/done/F034-reviewer-retry-create.md) | An interrupted reviewer creation can be retried | 5/5 |
