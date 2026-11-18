@@ -264,8 +264,9 @@ The audit command installs no schedule and starts no thread; you own the weekly 
   without explicit authorization. Archiving a thread is not code integration or safe data deletion.
 - Do not archive or delete worker worktrees on acceptance alone. Preserve accepted code and evidence
   before authorized retirement. A question about safe archiving does not authorize archiving.
-- Keep each ticket's implementation worker thread unarchived for traceability. The operator permits
-  archiving finished review agents after their verdict and evidence are preserved.
+- After a ticket's pull request merges and its merge or landing is recorded, archive its worker
+  and reviewer threads. The operator authorizes this standing. Archiving keeps the transcript, so
+  the worker and reviewer stay traceable from the ticket's recorded thread IDs.
 - Prefer the existing factory operations and Bun APIs. Do not build speculative services or turn
   workflow fixtures into code-quality projects. Keep each worker's input and output small.
 - Record ETA checkpoints at scope, implementation, verification, and real blockers. Completion
