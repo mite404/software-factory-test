@@ -2445,9 +2445,11 @@ test("an observer takes wakes and nudges but may only reconcile and read the sum
     runMode: "existing",
     enabled: true,
   });
-  expect(String(schedules.get("T-observer")!.prompt)).toContain(
-    "status-summary",
-  );
+  const prompt = String(schedules.get("T-observer")!.prompt);
+  expect(prompt).toContain("status-summary");
+  // Healthy progress such as building to reviewing must not wake the owner.
+  expect(prompt).not.toContain("verdict, kind or stage");
+  expect(prompt).toContain("building to reviewing, is routine progress");
   const saved = await engine.tick("status");
   const events = factoryEvents(engine.directory, 0, 500)!.length;
   for (const action of [

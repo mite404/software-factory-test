@@ -476,9 +476,10 @@ alert reservation is not due, and no alert is due while the rolling hourly notif
 spent. An alert's due ID includes the latest reservation time, so an alert left over when the
 budget ran out is escalated again once capacity returns. It has no briefs, report paths,
 worktrees or thread content, and the observer's `reconcile` replies with the same summary instead
-of full state. The observer messages the owner only for a new incident, verdict,
-kind or stage, a suspicion nudge, or a due ID it has not reported before, so each due ID is
-reported once; otherwise it ends its turn silently.
+of full state. The observer messages the owner only for a new incident ID, a higher attempt (a
+rejection or a resume), a run newly done (accepted), a suspicion nudge, or a due ID it has not
+reported before, so each due ID is reported once. Any other kind or stage change, such as building
+to reviewing, is routine progress, and the observer ends its turn silently.
 
 `remove-observer` clears the observer's schedule, confirms the clear by read-back, and moves wakes
 and nudges back to the owner. The removed thread is recorded as retired, and the caller check
