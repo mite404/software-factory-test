@@ -2,7 +2,6 @@ import { expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   cp,
-  link,
   mkdir,
   mkdtemp,
   readdir,
@@ -66,7 +65,6 @@ test("two project definitions migrate explicitly, preserve metadata and expose o
       };
       await writeFile(legacy, JSON.stringify(raw, null, 2) + "\n");
       const before = await readFile(legacy, "utf8");
-      const metadata = await stat(legacy);
       const persistence = openPersistence(join(root, ".git/factory"), []);
       persistence.commit(
         { enabled: false, owner: "T-existing-owner", runs: {} },
@@ -82,21 +80,20 @@ test("two project definitions migrate explicitly, preserve metadata and expose o
       expect(await Bun.file(yaml).exists()).toBe(false);
       expect(run("--migrate").status).toBe(0);
       expect(await Bun.file(legacy).exists()).toBe(false);
-      expect(await readFile(yaml, "utf8")).toBe(before);
-      const migrated = await stat(yaml);
-      expect([migrated.mode, migrated.uid, migrated.gid, migrated.ino]).toEqual(
-        [metadata.mode, metadata.uid, metadata.gid, metadata.ino],
-      );
-      expect(await configuration(root)).toEqual(resolved);
+      expect(await Bun.file(yaml).exists()).toBe(false);
+      const { digest: migratedDigest, ...migrated } = await configuration(root);
+      const { digest: flatDigest, ...flat } = resolved;
+      expect(migrated).toEqual(flat);
+      expect(migratedDigest).not.toBe(flatDigest);
       expect(run("--migrate").status).toBe(0);
       expect(run("--refresh", "--store", store).status).toBe(0);
-      expect(await readFile(yaml, "utf8")).toBe(before);
+      expect((await configuration(root)).digest).toBe(migratedDigest);
       const effective = run("--effective");
       expect(effective.status).toBe(0);
       const safe = JSON.parse(effective.stdout);
       expect(safe).toEqual({
         version: 1,
-        digest: resolved.digest,
+        digest: migratedDigest,
         permissions: {
           execute: index === 0,
           backup: index === 0,
@@ -120,13 +117,19 @@ test("two project definitions migrate explicitly, preserve metadata and expose o
       } finally {
         await server.stop(true);
       }
-      await link(yaml, legacy);
+      // A flat file beside the directory is a conflict; migration finishes it only when identical.
+      await writeFile(legacy, before);
       expect(run("--check").status).toBe(1);
       expect(run("--migrate").status).toBe(0);
-      await writeFile(legacy, before);
+      expect(await Bun.file(legacy).exists()).toBe(false);
+      const settings = join(root, "factory/config/factory.yaml");
+      const directorySettings = await readFile(settings, "utf8");
+      await writeFile(legacy, JSON.stringify({ ...raw, scope: ["other/"] }));
       expect(run("--migrate").status).toBe(1);
-      expect(await readFile(yaml, "utf8")).toBe(before);
+      expect(await Bun.file(legacy).exists()).toBe(true);
+      expect(await readFile(settings, "utf8")).toBe(directorySettings);
       await rm(legacy);
+      await rm(join(root, "factory/config"), { recursive: true });
       const invalid = [
         { ...raw, version: 2 },
         { ...raw, hooks: [] },

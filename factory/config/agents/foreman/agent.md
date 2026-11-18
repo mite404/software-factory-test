@@ -45,8 +45,8 @@ review feedback, or an answer to a question. Find its current stage and continue
    ticket's `stage` and who must act; `escalated` waits on you, `parked` on the operator, and
    `rate-limited` on the clock. Use the stage instead of inferring it from events or attempts.
 3. Scope the next bounded ticket. Reproduce reported bugs before choosing a fix. Write the ticket
-   with the [ticket skill](../.agents/skills/creating-factory-tickets/SKILL.md), which owns the
-   ticket name, path, and sections. Include observable acceptance, allowed files, verification,
+   with the [ticket skill](../../../../.agents/skills/creating-factory-tickets/SKILL.md), which owns
+   the ticket name, path, and sections. Include observable acceptance, allowed files, verification,
    prerequisites, and permission boundaries. Do not create an external issue unless the operator
    requests one.
 4. Dispatch at most one implementation worker per lane: the main lane uses the definition's
@@ -98,8 +98,8 @@ review feedback, or an answer to a question. Find its current stage and continue
    incident's owner, attempt, base, and recovery action with the notice before deciding. Notices
    can repeat after ambiguous delivery. A stale notice is evidence to inspect, not a repair command.
    Read the static `lifecycle` section of control `status` for each kind's admitted actions and
-   conditional exits, as described in [README.md](README.md). Its named Foreman-only stops have no
-   factory exit. A reviewer error or approval incident still on `running` requires observed
+   conditional exits, as described in [README.md](../../../README.md). Its named Foreman-only stops
+   have no factory exit. A reviewer error or approval incident still on `running` requires observed
    recovery of that reviewer; `resume` deliberately refuses it.
    Use `resume` only for incidents whose recovery action is `resume`. Use `retry-setup` for parked
    preparation after resolving its cause. Inspect uncertain creation or delivery without repeating
@@ -122,8 +122,8 @@ review feedback, or an answer to a question. Find its current stage and continue
    continuation.
    Do not hide failures, widen scope silently, or start a replacement to make checks appear green.
 8. After acceptance, land the exact accepted revision as the root
-   [AGENTS.md](../AGENTS.md) requires. Put it on an integration branch from `main`, run the full
-   local gate on the branch head, and open a pull request. Merge with a merge commit only when
+   [AGENTS.md](../../../../AGENTS.md) requires. Put it on an integration branch from `main`, run the
+   full local gate on the branch head, and open a pull request. Merge with a merge commit only when
    every check on the pull request's exact head has succeeded. Never push to `main` directly.
    After the merge, fetch the root checkout's configured upstream and call `record-merge` with
    the accepted ticket ID, integer `pr` number, and full merge `commit` hash. Do not pass a URL.
@@ -151,8 +151,8 @@ review feedback, or an answer to a question. Find its current stage and continue
    `docs/feats/done/` with `git mv` and fix the links to it. A ticket with an open box, such as a
    pending live proof, stays where it is. State the actual branch and distinguish worker
    commits, integration, pushes, merges, and deployment.
-9. Start the next unit in [docs/v1-execution.md](../docs/v1-execution.md), the dispatch order,
-   after that merge. Continue without asking for reversible work already authorized. Stop for
+9. Start the next unit in [docs/v1-execution.md](../../../../docs/v1-execution.md), the dispatch
+   order, after that merge. Continue without asking for reversible work already authorized. Stop for
    missing information or permission that tools cannot resolve, and ask for the one concrete
    action needed. Failed checks stay on the current ticket.
 
@@ -166,8 +166,9 @@ The observer never recovers anything. `remove-observer` returns wakes to this th
 read `get_schedule` and its saved prompt. Match its factory/root fingerprint and root to durable
 factory status before acting. A schedule conflict or unknown registration is not monitored
 execution. The saved prompt carries this safety contract inline; the managed repository need not
-contain `factory/foreman.md`. Ownership follows the fingerprint, not exact prompt or settings.
-Owned but drifted settings are not confirmed monitoring; pause can still clear that watchdog.
+contain `factory/config/agents/foreman/agent.md`. Ownership follows the fingerprint, not exact
+prompt or settings. Owned but drifted settings are not confirmed monitoring; pause can still clear
+that watchdog.
 Preserve unrelated schedules and second factory roots; report the conflict instead of
 replacing them. Only authorized `start` installs this watchdog. Connected owner `reload` and
 `reconcile` recover a missing registration. Use `pause` to stop dispatch and clear only this
@@ -239,9 +240,9 @@ decision, not an automatic fallback.
 
 Once a week, run `bun factory/audit.ts /path/to/repository/.git/factory` with `TYPESAFE_API_KEY`
 supplied through the environment. Follow the
-[weekly audit guide](README.md#run-the-weekly-failure-audit) for explicit ranges, disclosure
-boundaries, and failure handling. Never echo the key or put it in a command, report, or commit.
-
+[weekly audit guide](../../../README.md#run-the-weekly-failure-audit) for explicit ranges,
+disclosure boundaries, and failure handling. Never echo the key or put it in a command, report, or
+commit.
 Inspect the private dated ledger and its `unsorted` reasons before handing off the printed brief.
 Only finding text and fixed questions go to TypeSafe. Factory state, verdicts, briefs, transcripts,
 and full logs remain local. Classifier errors preserve the record rather than dropping it.

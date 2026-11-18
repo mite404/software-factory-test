@@ -4,9 +4,9 @@ The dispatcher uses Bun SQLite persistence and native Amp thread APIs. Cross-orb
 worker retirement, and dashboard chat are not implemented. Remaining stories live in
 [stories.md](../docs/stories.md) and their tickets in [the backlog](../docs/backlog.md).
 
-The [Foreman prompt](foreman.md) defines the current orchestration procedure: one worker per lane,
-at most two lanes. It is a reusable prompt, not an automatically installed agent mode or a change
-to worker instructions.
+The [Foreman prompt](config/agents/foreman/agent.md) defines the current orchestration
+procedure: one worker per lane, at most two lanes. It is a reusable prompt, not an automatically
+installed agent mode or a change to worker instructions.
 
 ## Take over a stopped Foreman in the same orb
 
@@ -113,15 +113,62 @@ never creates threads, installs schedules, changes acceptance, or acts on audit 
 
 ## Project definition and reload
 
-The project owns one version-1 definition: `factory/definition.yaml`, or legacy `.factory.json`.
-Both use the settings described by `factory/definition.schema.json`; instructions remain in the
-Markdown file referenced by `prd`. Independent copies of both definition files are a conflict,
-not an override order. Checks reject unknown settings, unsupported capabilities and unsafe paths.
+The project owns one version-1 definition. It is the directory `factory/config/`, or one legacy
+flat file: `factory/definition.yaml` or `.factory.json`. A flat file keeps loading exactly as
+before. The directory beside a flat file is a conflict, not an override order, and the error names
+both. Beside a flat file, a directory without `factory.yaml` may hold only the bundled Foreman
+prompt as a bare body; front matter on it is refused too, since the flat file would ignore it.
+Any other file, valid or not, is refused at load by path, so `--check` fails too; that
+includes the leftovers of an interrupted migration, which `--migrate` completes.
 
-Run `bun factory/setup-factory.ts --repo /local/project/root --migrate` to move a validated legacy
-definition explicitly. Migration preserves its bytes, ownership and mode without overwriting an
-existing destination. JSON remains valid YAML. Repeating migration is safe, including recovery
-after an interrupted move. Checks, refresh, status and ordinary reads never migrate definitions.
+```text
+factory/config/
+  factory.yaml                  version, capacity, mode, prd, tickets, scope, verify, permissions,
+                                backup, bookkeepingSHA256, watchdog, providerLimit
+  agents/foreman/agent.md       front matter: model (orchestratorModel). Body: the Foreman prompt
+  agents/implementer/agent.md   front matter: model, effort, runner (workerModel, workerEffort,
+                                workerRunner). Body must be empty
+  agents/light-implementer/agent.md
+                                front matter: model, effort (lightWorker). Present with capacity 2
+  agents/reviewer/agent.md      front matter only. The file's presence turns review on
+  agents/observer/agent.md      front matter: model, effort (observer). Optional; see below
+  runners/<name>.yaml           setup, setupTimeoutMs; <name> is the implementer's runner ID,
+                                or `local` when it names none
+```
+
+The loader composes these files into the flat object that `factory/definition.schema.json`
+describes and validates that object with the same rules, so nothing downstream of it changes.
+`factory/config.schema.json` lists the setting names each file may hold. Checks refuse, naming
+the file, an unknown setting, an unknown file or directory (even an empty one), a missing
+`factory.yaml` or implementer, a runner file that no agent names, an implementer naming a runner
+with no file, and a non-empty implementer, light-implementer, observer or reviewer body (nothing
+reads those bodies yet). A `factory/config` that is a link, or sits under a linked `factory`, is
+refused before anything is read, and migration also refuses a linked `factory` that has no config
+child yet, before it writes anything, so it cannot alias a path a worker may edit or reach
+outside the repository. Instructions remain in the Markdown file referenced by `prd`.
+The optional `observer` setting (`model` and `effort`, in the flat file or in
+`agents/observer/agent.md`) names what `register-observer` creates; without it the observer is
+`anthropic/claude-haiku-5-5` at high effort. Like other agent settings it is part of the accepted
+definition: an edit changes nothing, including after a restart, until `reload`, and an older
+accepted definition without it keeps the built-in observer. Registration records the thread,
+model and effort. Authorization and the observer's two allowed actions do not change.
+
+The digest covers every file under `factory/config/` in sorted path order, each with its path,
+plus the `prd` instructions, so changing any one byte changes it. Workers may not edit anything
+under `factory/config/`: a scope entry inside it is refused, and the changed-path check rejects a
+candidate that touches it even when `factory/` is in scope. Checks reject unknown settings,
+unsupported capabilities and unsafe paths.
+
+Run `bun factory/setup-factory.ts --repo /local/project/root --migrate` to write the directory
+from a validated flat definition and then remove the flat file. Migration refuses to overwrite: a
+file that already holds different content, or a file it does not plan to write, stops it before
+anything is written. The one exception is an existing Foreman prompt without front matter, which
+keeps its body and gains the model. `factory.yaml` is written last, so a half-written directory is
+never loaded as a definition. Each file is staged in its own fresh scratch file beside `factory/`,
+never one reopened for writing; a retry after an interruption only unlinks leftover scratch. The
+written directory is composed once more before the flat file is removed. Repeating migration is
+safe, including recovery after an interruption, and a migrated project is only revalidated.
+Checks, refresh, status and ordinary reads never migrate definitions.
 Use `--check` to validate authored settings and `--effective` to inspect the secret-free loaded
 digest, permissions and capabilities. The dashboard's `/api/definition` uses the same loaded view.
 
@@ -495,12 +542,13 @@ Parked runs do not generate timed suspicion nudges or further alert intents unti
 #### Observer thread
 
 The connected owner can call `register-observer` once. It creates one observer thread with model
-`anthropic/claude-haiku-5-5` at high effort through the same thread-creation path workers use,
-and records the thread, model, effort and time in the Foreman records. The watchdog schedule then
-targets the observer with a short prompt, and suspicion nudges go to it instead of the owner. The
-owner's own schedule is cleared only after the observer's registration is confirmed. Every
-connected owner reconcile repeats that cleanup by read-back, so a failed or interrupted clear is
-retried and `monitor.problem` stays until the clear is confirmed. Pause clears both.
+`anthropic/claude-haiku-5-5` at high effort (or the definition's `observer`) through the same
+thread-creation path workers use, and records the thread, model, effort and time in the Foreman
+records. The watchdog schedule then targets the observer with a short prompt, and suspicion
+nudges go to it instead of the owner. The owner's own schedule is cleared only after the
+observer's registration is confirmed. Every connected owner reconcile repeats that cleanup by
+read-back, so a failed or interrupted clear is retried and `monitor.problem` stays until the
+clear is confirmed. Pause clears both.
 
 The observer may call only `reconcile` and `status-summary`; the one caller check refuses every
 other action from it before any state change. Its reconcile has no connected tools, so it never

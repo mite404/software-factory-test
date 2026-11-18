@@ -2,15 +2,19 @@ import type { AgentReasoningEffort, PluginTools } from "@ampcode/plugin";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
-import {
-  link,
-  lstat,
-  mkdir,
-  readFile,
-  unlink,
-  writeFile,
-} from "node:fs/promises";
+import { lstat, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import {
+  composeDefinition,
+  digestConfigFiles,
+  configRootExists,
+  hasConfigDefinition,
+  isConfigPath,
+  readConfigFiles,
+  refuseUnfinishedConfig,
+  writeConfigFiles,
+  configDirectory,
+} from "./config";
 import definitionSchema from "./definition.schema.json";
 import type { Executor } from "./executor";
 import type { DeliveryIntent } from "./delivery";
@@ -382,6 +386,15 @@ export function lightRole(raw: Record<string, unknown>, review: boolean) {
   return light;
 }
 
+function observerRole(value: unknown) {
+  if (value === undefined) return undefined;
+  if (!validLightWorker(value))
+    throw new Error(
+      "Invalid observer; expected a known provider/model and a supported effort",
+    );
+  return value;
+}
+
 function workerExecutor(workerRunner: string | undefined): Executor {
   return workerRunner === undefined
     ? "local"
@@ -398,7 +411,8 @@ function allowedScope(root: string, value: unknown) {
       [".git", ".amp", ".factory"].some((prefix) =>
         normalized.startsWith(prefix),
       ) ||
-      normalized === "factory/definition.yaml"
+      normalized === "factory/definition.yaml" ||
+      isConfigPath(normalized)
     )
       throw new Error(
         "Scope must exclude factory configuration and runtime files",
@@ -433,6 +447,7 @@ async function validateConfiguration(
   const verify = text(raw.verify);
   const setup = parseSetup(raw.setup, raw.setupTimeoutMs);
   const watchdog = watchdogPolicy(raw.watchdog);
+  const observer = observerRole(raw.observer);
   const instructions = await readFile(prd, "utf8");
   tasks(
     JSON.parse(await readFile(tickets, "utf8")),
@@ -447,20 +462,46 @@ async function validateConfiguration(
     verify,
     setup,
     watchdog,
+    observer,
     instructions,
   };
 }
 
-/** Resolve one authored definition without running project commands or mutating state. @throws On conflicts or invalid inputs. */
+// The flat files that can hold a definition, in the order the conflict message names them.
+function flatDefinitions(root: string) {
+  return ["factory/definition.yaml", ".factory.json"].filter((path) =>
+    existsSync(localPath(root, path)),
+  );
+}
+
+/** Resolve one authored definition without running project commands or mutating state.
+ * It comes from `factory/config/` or one flat file. Beside a flat file a directory without
+ * `factory.yaml` may hold only the bundled Foreman prompt; anything else is refused.
+ * @throws On conflicts or invalid inputs.
+ */
 export async function configuration(root: string) {
-  const yaml = localPath(root, "factory/definition.yaml");
-  const legacy = localPath(root, ".factory.json");
-  if (existsSync(yaml) && existsSync(legacy))
-    throw new Error("Conflicting definitions; finish explicit --migrate first");
-  const source = existsSync(yaml) ? yaml : legacy;
+  const flat = flatDefinitions(root);
+  const directory =
+    hasConfigDefinition(root) || (!flat.length && configRootExists(root));
+  if (directory ? flat.length : flat.length > 1)
+    throw new Error(
+      `Conflicting definitions: ${[...(directory ? [`${configDirectory}/factory.yaml`] : []), ...flat].join(" and ")}; finish explicit --migrate first`,
+    );
+  if (!directory) await refuseUnfinishedConfig(root);
+  if (directory) {
+    const files = await readConfigFiles(root);
+    const config = await validateConfiguration(
+      root,
+      composeDefinition(files),
+    ).catch((error: Error) => {
+      throw new Error(`${configDirectory}: ${error.message}`);
+    });
+    return { ...config, digest: digestConfigFiles(files, config.instructions) };
+  }
+  const source = localPath(root, flat[0] ?? ".factory.json");
   const content = await readFile(source, "utf8");
   const raw = object(
-    source === yaml ? Bun.YAML.parse(content) : JSON.parse(content),
+    source.endsWith(".yaml") ? Bun.YAML.parse(content) : JSON.parse(content),
   );
   const config = await validateConfiguration(root, raw);
   const digest = createHash("sha256")
@@ -471,31 +512,33 @@ export async function configuration(root: string) {
   return { ...config, digest };
 }
 
-/** Move the legacy definition to its YAML home explicitly, retaining bytes, ownership and mode. @throws On invalid or conflicting definitions. */
+/** Write the `factory/config/` directory from the flat definition and remove the flat file.
+ * Repeat-safe, including after an interruption: files already holding the migrated content are kept,
+ * and any other existing file is refused rather than overwritten. A definition already in the
+ * directory is only revalidated.
+ * @throws On invalid or conflicting definitions, or files that migration would overwrite.
+ */
 export async function migrateDefinition(root: string) {
-  const yaml = localPath(root, "factory/definition.yaml");
-  const legacy = localPath(root, ".factory.json");
-  if (existsSync(yaml) && existsSync(legacy)) {
-    const [old, migrated] = await Promise.all([lstat(legacy), lstat(yaml)]);
-    if (!old.isFile() || old.dev !== migrated.dev || old.ino !== migrated.ino)
-      throw new Error(
-        "Conflicting definitions; migration refuses to overwrite project edits",
-      );
-    await validateConfiguration(
-      root,
-      object(Bun.YAML.parse(await readFile(yaml, "utf8"))),
+  const flat = flatDefinitions(root);
+  if (flat.length > 1)
+    throw new Error(
+      `Conflicting definitions: ${flat.join(" and ")}; finish explicit --migrate first`,
     );
-    await unlink(legacy);
+  if (!flat.length) {
+    await configuration(root);
     return;
   }
-  await configuration(root);
-  if (existsSync(yaml)) return;
-  if (!(await lstat(legacy)).isFile())
+  const source = localPath(root, flat[0]!);
+  if (!(await lstat(source)).isFile())
     throw new Error("Migration requires a regular definition file");
-  await mkdir(join(root, "factory"), { recursive: true });
-  // JSON is YAML 1.2. Linking retains metadata and cannot overwrite a concurrently authored file.
-  await link(legacy, yaml);
-  await unlink(legacy);
+  const content = await readFile(source, "utf8");
+  const raw = object(
+    source.endsWith(".yaml") ? Bun.YAML.parse(content) : JSON.parse(content),
+  );
+  await validateConfiguration(root, raw);
+  await writeConfigFiles(root, raw);
+  await unlink(source);
+  await configuration(root);
 }
 
 /** Return only public-safe capabilities, never commands, instructions, paths or backup targets. @throws On invalid definitions. */
@@ -530,6 +573,7 @@ export async function effectiveConfiguration(root: string) {
         workerRunner: loaded.workerRunner,
         providerLimit: loaded.providerLimit,
         lightWorker: loaded.lightWorker,
+        observer: loaded.observer,
       }
     : current;
 }
@@ -551,6 +595,7 @@ function definitionPin(
     watchdog,
     providerLimit,
     lightWorker,
+    observer,
   } = config;
   return {
     digest,
@@ -566,6 +611,7 @@ function definitionPin(
     watchdog,
     ...(providerLimit === undefined ? {} : { providerLimit }),
     ...(lightWorker === undefined ? {} : { lightWorker }),
+    ...(observer === undefined ? {} : { observer }),
   };
 }
 
@@ -884,6 +930,7 @@ function allowedChanges(
     changed.every(
       (path) =>
         path !== "factory/definition.yaml" &&
+        !isConfigPath(path) &&
         scope.some(
           (prefix) =>
             path === prefix ||
@@ -1354,7 +1401,11 @@ function legacyReview(
 }
 
 const observerActions = new Set(["reconcile", "status-summary"]);
-const observerModel = "anthropic/claude-haiku-5-5";
+// An observer the definition does not name; `observer` in the definition overrides it.
+const defaultObserver: { model: `${string}/${string}`; effort: "high" } = {
+  model: "anthropic/claude-haiku-5-5",
+  effort: "high",
+};
 
 function runAttempt(run: Run) {
   const checkpoint = runCheckpoint(run)!;
@@ -3575,20 +3626,12 @@ export function createFactory(
     const state = persistence.state;
     const previous = state.foreman?.observer?.thread;
     if (change === "register-observer" && !previous) {
+      const { model, effort } =
+        (await effectiveConfiguration(root)).observer ?? defaultObserver;
       // ponytail: an unknown create outcome records nothing; an orphan holds no rights.
-      const thread = await host.create(
-        owner,
-        observerModel,
-        "high",
-        "observer",
-      );
+      const thread = await host.create(owner, model, effort, "observer");
       state.foreman ??= { notes: [], handoffs: [] };
-      state.foreman.observer = {
-        thread,
-        model: observerModel,
-        effort: "high",
-        at: now(),
-      };
+      state.foreman.observer = { thread, model, effort, at: now() };
       persistence.commit(state, "factory", "observer-registered", thread);
     }
     if (change === "remove-observer" && previous) {
