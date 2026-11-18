@@ -59,7 +59,7 @@ prerequisites, not permission to dispatch every draft against today's base.
 | [F023-public-stop-reasons](feats/lifecycle-view/F023-public-stop-reasons.md)             | A blocked or rejected ticket says why                     | None                                                                     | F07, operator observability priority      |
 | [F034-reviewer-retry-create](feats/done/F034-reviewer-retry-create.md)             | An interrupted reviewer creation can be retried           | F007-run-transition-table                                                | F03, operator autonomy priority           |
 | [v1-ticket3](feats/v1/v1-ticket3.md)                                                     | Repeat-safe repository services                           | v1-ticket2                                                               | F01, AC13-AC16, AC20                      |
-| [v1-ticket4](feats/v1/v1-ticket4.md)                                                     | Durable private evidence records                          | v1-ticket2                                                               | F02, F07, R6-R7                           |
+| [v1-ticket4](feats/done/v1-ticket4.md)                                                     | Durable private evidence records                          | v1-ticket2                                                               | F02, F07, R6-R7                           |
 | [F025-config-directory](feats/config-layout/F025-config-directory.md)                    | Factory settings live in one file per concern             | None                                                                     | F12, operator configuration priority      |
 | [F029-gate-check-files](feats/config-layout/F029-gate-check-files.md)                    | The gate reports every check on its own                   | F025-config-directory                                                    | F03, F12, AC28                            |
 | [v1-ticket11](feats/v1/v1-ticket11.md)                                                   | Required and advisory verification tools                  | v1-ticket2                                                               | F12, AC28, AC35-AC36                      |
@@ -205,7 +205,10 @@ shows a reason on a real rejection or block. F034 landed at attempt one: an inte
 creation now has a retry-create exit. v1-ticket3 landed at attempt three on the light lane: reviews
 found an installed command that ran the installer's own checkout, a path quoted without shell
 escaping, and a refresh that left the generated dashboard untracked. Its fixture tests cover two
-repositories; real supervised services and a rendered portal stay open as live boxes.
+repositories; real supervised services and a rendered portal stay open as live boxes. v1-ticket4
+landed at attempt two: the first review found landing checked evidence still held in memory, a
+report left out of the acceptance check, and gate evidence lost on a rebase after the other lane
+landed. Evidence is now saved where each fact happens and read back before any merge.
 
 On 2026-11-18 the operator reordered the open units for the least blocking scaffolding first; the
 unit table above lists them in that order. After F023 come F034 on the main lane and v1-ticket3 on

@@ -72,6 +72,6 @@ Execute the common preflight in `docs/v1-execution.md`. Checks were not run duri
 
 ## Done when
 
-- [ ] Required evidence remains readable privately without worker storage.
-- [ ] Public reads exclude private contents and stale proof cannot authorize acceptance.
-- [ ] Migration, full gates, guard, and cold review pass.
+- [x] Required evidence remains readable privately without worker storage.
+- [x] Public reads exclude private contents and stale proof cannot authorize acceptance.
+- [x] Migration, full gates, guard, and cold review pass.

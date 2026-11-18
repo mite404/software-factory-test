@@ -1,6 +1,13 @@
 import { Database } from "bun:sqlite";
 import type { AgentReasoningEffort } from "@ampcode/plugin";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { validReview, type Review } from "./review";
 import { validExecutor, type Executor } from "./executor";
@@ -150,6 +157,7 @@ export type StopIncident = {
     | "creation-unknown"
     | "target-changed"
     | "review-identity-changed"
+    | "evidence-missing"
     | "brief-incomplete";
   recovery: "resume" | "retry-setup" | "inspect" | "wait";
   providerLimit?: ProviderLimit & {
@@ -620,6 +628,24 @@ export const runLifecycle = {
           },
         ],
       },
+      // Acceptance found no intact gate or review record bound to the exact attempt and revision.
+      evidenceMissing: {
+        actor: "foreman",
+        trigger: "stopped",
+        reasons: ["evidence-missing"],
+        recovery: "inspect",
+        matches: (run, reason) =>
+          run.kind === "blocked" &&
+          !!run.thread &&
+          reason === "evidence-missing",
+        exits: [
+          {
+            action: "record-landing",
+            when: "durable incident base and attempt, original thread and registered worktree prove an externally landed candidate, including multi-commit patch proof",
+            actor: "foreman",
+          },
+        ],
+      },
       uncheckpointed: {
         actor: "foreman",
         trigger: "stopped",
@@ -1000,6 +1026,138 @@ export type State = {
   };
 };
 type Event = { at: string; ticket: string; action: string; detail: string };
+
+/** Closed outcomes per evidence kind; anything else is refused at write and read. */
+export const evidenceOutcomes = {
+  report: ["candidate"],
+  gate: ["gate-passed", "gate-failed", "post-gate-changed"],
+  "gate-rerun": ["gate-passed", "gate-failed", "post-gate-changed"],
+  review: ["pass", "issues"],
+} as const;
+type EvidenceKind = keyof typeof evidenceOutcomes;
+/** One artifact a decision used. Its identity is the commit's ticket with attempt, kind, revision, outcome and content digest. */
+export type Evidence = {
+  attempt: number;
+  kind: EvidenceKind;
+  revision: string;
+  // The pinned definition digest; null for legacy unpinned runs.
+  definition: string | null;
+  // The check command, reviewer model or worker model that produced the content.
+  tool: string;
+  outcome: string;
+  content: string;
+};
+type EvidenceRecord = Omit<Evidence, "content"> & {
+  ticket: string;
+  sha256: string;
+  bytes: number;
+  at: string;
+};
+
+const evidenceColumns =
+  "ticket, attempt, kind, revision, definition, tool, outcome, sha256, bytes, at";
+
+/** The content digest that names a preserved artifact. */
+export function sha256(content: string | Buffer) {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+// Content is addressed by digest beside the database, so equal bytes converge on one file.
+function evidencePath(directory: string, digest: string) {
+  return join(directory, "evidence", digest);
+}
+
+function intact(directory: string, digest: string) {
+  try {
+    return sha256(readFileSync(evidencePath(directory, digest))) === digest;
+  } catch {
+    return false;
+  }
+}
+
+function preserve(directory: string, content: string) {
+  const digest = sha256(content);
+  if (!intact(directory, digest)) {
+    mkdirSync(join(directory, "evidence"), { recursive: true });
+    const temporary = `${evidencePath(directory, digest)}.${randomUUID()}.tmp`;
+    writeFileSync(temporary, content);
+    renameSync(temporary, evidencePath(directory, digest));
+    if (!intact(directory, digest))
+      throw new Error("Evidence preservation failed");
+  }
+  return { sha256: digest, bytes: Buffer.byteLength(content) };
+}
+
+// Preserve and verify every content first, so no row ever names bytes that were not written.
+function preparedEvidence(
+  directory: string,
+  ticket: string,
+  evidence: Evidence[],
+  at: number,
+): EvidenceRecord[] {
+  if (!evidence.every(validEvidence)) throw new Error("Invalid evidence");
+  return evidence.map(({ content, ...item }) => ({
+    ...item,
+    ticket,
+    ...preserve(directory, content),
+    at: new Date(at).toISOString(),
+  }));
+}
+
+function validEvidence(item: Evidence) {
+  return (
+    positiveInteger(item.attempt) &&
+    Object.hasOwn(evidenceOutcomes, item.kind) &&
+    (evidenceOutcomes[item.kind] as readonly string[]).includes(item.outcome) &&
+    /^[a-f0-9]{40}$/.test(item.revision) &&
+    (item.definition === null || validDigest(item.definition)) &&
+    text(item.tool)
+  );
+}
+
+function hasEvidenceTable(db: Database) {
+  return !!db
+    .query(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'evidence'",
+    )
+    .get();
+}
+
+function saveEvidence(db: Database, record: EvidenceRecord) {
+  const saved = db
+    .query<EvidenceRecord, [string, number, string, string, string, string]>(
+      `SELECT ${evidenceColumns} FROM evidence WHERE ticket = ? AND attempt = ? AND kind = ? AND revision = ? AND outcome = ? AND sha256 = ?`,
+    )
+    .get(
+      record.ticket,
+      record.attempt,
+      record.kind,
+      record.revision,
+      record.outcome,
+      record.sha256,
+    );
+  if (!saved) {
+    db.query(
+      `INSERT INTO evidence (${evidenceColumns}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      record.ticket,
+      record.attempt,
+      record.kind,
+      record.revision,
+      record.definition,
+      record.tool,
+      record.outcome,
+      record.sha256,
+      record.bytes,
+      record.at,
+    );
+    return;
+  }
+  if (
+    (["definition", "tool"] as const).some((key) => saved[key] !== record[key])
+  )
+    throw new Error("Conflicting provenance for recorded evidence");
+}
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value))
@@ -1467,6 +1625,7 @@ function validateIncident(id: string, value: unknown) {
       "creation-unknown",
       "target-changed",
       "review-identity-changed",
+      "evidence-missing",
       "brief-incomplete",
     ],
   };
@@ -1838,6 +1997,46 @@ export function factoryRecords(directory: string) {
   }
 }
 
+function ticketEvidence(db: Database, directory: string, ticket: string) {
+  if (!hasEvidenceTable(db)) return [];
+  return db
+    .query<EvidenceRecord, [string]>(
+      `SELECT ${evidenceColumns} FROM evidence WHERE ticket = ? ORDER BY rowid`,
+    )
+    .all(ticket)
+    .map((row) => ({ ...row, intact: intact(directory, row.sha256) }));
+}
+
+/** Read a known ticket's evidence records, verifying each preserved digest, without creating or changing storage. Returns null without durable storage and undefined for an unknown ticket. @throws On invalid storage. */
+export function factoryEvidence(directory: string, ticket: string) {
+  if (!existsSync(join(directory, "state.sqlite"))) return null;
+  const db = database(directory, true);
+  try {
+    return db.transaction(() => {
+      const known =
+        db.query("SELECT 1 FROM tickets WHERE id = ?").get(ticket) ||
+        db.query("SELECT 1 FROM runs WHERE ticket = ?").get(ticket);
+      return known ? ticketEvidence(db, directory, ticket) : undefined;
+    })();
+  } finally {
+    db.close();
+  }
+}
+
+/** Read a ticket's recorded artifact content for the owner; never serve it publicly. @throws On missing storage, content the ticket never recorded, or missing or corrupt content. */
+export function evidenceContent(
+  directory: string,
+  ticket: string,
+  digest: string,
+) {
+  const found = factoryEvidence(directory, ticket)?.find(
+    (row) => row.sha256 === digest,
+  );
+  if (!found) throw new Error("Unknown evidence identity");
+  if (!found.intact) throw new Error("Evidence content missing or corrupt");
+  return readFileSync(evidencePath(directory, found.sha256), "utf8");
+}
+
 function configuredTicket(
   task: Task,
   saved: Record<string, unknown> | undefined,
@@ -1914,6 +2113,11 @@ export function openPersistence(
         for (const event of imported.events) saveEvent(db, event);
       }
       definitionTables(db);
+      db.run(`CREATE TABLE IF NOT EXISTS evidence (ticket TEXT NOT NULL,
+        attempt INTEGER NOT NULL CHECK (attempt > 0), kind TEXT NOT NULL,
+        revision TEXT NOT NULL, definition TEXT, tool TEXT NOT NULL, outcome TEXT NOT NULL,
+        sha256 TEXT NOT NULL, bytes INTEGER NOT NULL, at TEXT NOT NULL,
+        PRIMARY KEY (ticket, attempt, kind, revision, outcome, sha256))`);
       const state = readState(db);
       refreshTickets(db, queue, now);
       return state;
@@ -2005,9 +2209,29 @@ export function openPersistence(
           )
           .get(ticket, action)?.detail;
       },
-      /** Persist state and its event together, stamping each run that changed stage. @throws On transaction failure; both roll back. */
-      commit(state: State, ticket: string, action: string, detail: string) {
+      /** Read the ticket's evidence bound to one attempt and revision, verifying each digest. @throws On storage failure. */
+      proof(ticket: string, attempt: number, revision: string) {
+        return ticketEvidence(db, directory, ticket).filter(
+          (row) => row.attempt === attempt && row.revision === revision,
+        );
+      },
+      /** Preserve evidence for a fact that has no state transition of its own, such as a gate run before its rerun; repeats write nothing. @throws On invalid or conflicting evidence or failed preservation. */
+      record(ticket: string, evidence: Evidence[]) {
+        const records = preparedEvidence(directory, ticket, evidence, now());
+        db.transaction(() => {
+          for (const record of records) saveEvidence(db, record);
+        })();
+      },
+      /** Persist state, its event and the evidence the decision used together, stamping each run that changed stage. Content is preserved and verified first; an identity is written once. @throws On invalid or conflicting evidence or transaction failure; all roll back. */
+      commit(
+        state: State,
+        ticket: string,
+        action: string,
+        detail: string,
+        evidence: Evidence[] = [],
+      ) {
         const at = now();
+        const records = preparedEvidence(directory, ticket, evidence, at);
         db.transaction(() => {
           const saved = new Map(
             db
@@ -2033,6 +2257,7 @@ export function openPersistence(
             action,
             detail,
           });
+          for (const record of records) saveEvidence(db, record);
         })();
       },
       /** Append a diagnostic without inventing a state transition. @throws On I/O failure. */

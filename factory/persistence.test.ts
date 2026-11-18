@@ -16,6 +16,7 @@ import { createFactory, tasks, type NativeHost } from "./native";
 import { pipelineSteps } from "./pipeline";
 import {
   admitsRun,
+  factoryEvidence,
   factoryEvents,
   factoryRecords,
   factoryStatus,
@@ -177,6 +178,73 @@ test("lifecycle walking names every exitless stop and validates recoveries and p
         expect(factoryStatus(directory).runs.A.incident?.reason).toBe(reason);
       }
     }
+  } finally {
+    storage.close();
+  }
+});
+
+test("evidence commits converge on repeats and refuse invalid or conflicting provenance with their transition", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "factory-evidence-"));
+  roots.push(directory);
+  expect(factoryEvidence(directory, "A")).toBeNull();
+  expect(await readdir(directory)).toEqual([]);
+  const storage = openPersistence(directory, queue);
+  try {
+    const { state } = storage;
+    const gate = {
+      attempt: 1,
+      kind: "gate",
+      revision: "a".repeat(40),
+      definition: null,
+      tool: "bun test",
+      outcome: "gate-passed",
+      content: "log one",
+    } as const;
+    storage.commit(state, "A", "accepted", "first", [gate]);
+    storage.commit(state, "A", "accepted", "repeat", [gate]);
+    const rerun = { ...gate, outcome: "gate-failed", content: "log two!" };
+    storage.commit(state, "A", "rejected", "rerun", [rerun]);
+    const recorded = () =>
+      factoryEvidence(directory, "A")!.map(
+        ({ outcome, bytes, intact, at: _at, sha256: _sha, ...row }) => ({
+          ...row,
+          outcome,
+          bytes,
+          intact,
+        }),
+      );
+    const row = {
+      ticket: "A",
+      attempt: 1,
+      kind: "gate" as const,
+      revision: "a".repeat(40),
+      definition: null,
+      tool: "bun test",
+      intact: true,
+    };
+    const expected = [
+      { ...row, outcome: "gate-passed", bytes: 7 },
+      { ...row, outcome: "gate-failed", bytes: 8 },
+    ];
+    expect(recorded()).toEqual(expected);
+    const events = factoryEvents(directory, 0, 500);
+    for (const invalid of [
+      { ...gate, tool: "another check" },
+      { ...gate, definition: "b".repeat(64) },
+      { ...gate, revision: "HEAD" },
+      { ...gate, outcome: "pass" },
+      { ...gate, kind: "review" },
+      { ...gate, attempt: 0 },
+      { ...gate, tool: "" },
+    ])
+      expect(() =>
+        storage.commit(state, "A", "accepted", "refused", [
+          invalid as typeof gate,
+        ]),
+      ).toThrow();
+    expect(factoryEvents(directory, 0, 500)).toEqual(events);
+    expect(recorded()).toEqual(expected);
+    expect(factoryEvidence(directory, "unknown")).toBeUndefined();
   } finally {
     storage.close();
   }

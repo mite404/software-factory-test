@@ -1167,7 +1167,7 @@ test("every reason code prints one fixed sentence on the sheet and the banner, n
       "review-rejected",
     ]),
   ] as NonNullable<FeedTask["stop"]>["reason"][];
-  expect(codes).toHaveLength(14);
+  expect(codes).toHaveLength(15);
   const sentences = codes.map((reason) => {
     const view = derive(
       null,

@@ -347,6 +347,32 @@ remains unproven. If no connected owner observes a limit, only the ordinary watc
 Fixtures prove these decisions, not a live limit, sleeping-orb wake, or successful model recovery.
 Those live proofs remain with the Foreman. The default policy performs no model or provider switch.
 
+### Retained evidence
+
+Evidence is recorded where each fact happens. Every completed gate run saves the candidate report
+it checked and its full output: the final run with its `gate-returned` transition (`gate`, or
+`gate-rerun` after a flake rerun), and a failed run before its rerun on its own. A review verdict
+is saved with its `review-verdict` event. So a rebase, rejection or block keeps the evidence for
+the revision it replaced. Each SQLite `evidence` row holds ticket, attempt, kind, 40-character
+revision, pinned definition digest (null for legacy unpinned runs), producing tool (check command,
+reviewer model or worker model), closed outcome, SHA-256, byte count and time. Content is written
+first to `factory/evidence/<sha256>` beside the database and verified by digest before the row
+commits; if that write fails, the transition fails with it and the gate reruns on the next
+reconcile. Worker reports, logs and removed worktrees can be deleted afterward. Repeats converge on
+one row. The same identity with a different definition or tool is refused with its transition.
+Invalid kinds, outcomes, revisions or tools are refused before anything is written.
+
+Before any merge or ledger entry, acceptance reads only persisted, intact records bound to the exact
+attempt and revision being landed: the candidate report whose digest matches the report it accepts,
+a `gate-passed` record and, when the run was reviewed, a `pass` review record. Records for earlier
+attempts or other revisions are stale and never count. Missing, corrupt or stale proof stops the run
+as `blocked` with reason `evidence-missing` and recovery `inspect`; the Foreman exits through
+`record-landing`. Tickets accepted before this record existed keep their done state unchanged; a
+review already in flight at upgrade has no gate record and stops this way rather than landing.
+The owner reads private content with `evidenceContent(directory, ticket, sha256)`, which refuses
+digests the ticket never recorded and missing or corrupt files. Evidence files are not included
+in private backup yet.
+
 ### Lifecycle stages
 
 `runStage` in `persistence.ts` names every ticket's stage and who must act. Status, the dashboard
@@ -1073,8 +1099,8 @@ amp orb service start factory-dashboard --command 'bun factory/dashboard.ts' --p
 ```
 
 The same service serves `web/dist/index.html` at `/` and `/index.html`, generated files under
-`/assets/`, and the read-only `/api/status` and `/api/events`. No Vite server, relay,
-cross-orb proxy, or sign-in cookie refresh is needed. Restart the service after rebuilding.
+`/assets/`, and the read-only `/api/status`, `/api/events` and `/api/evidence`. No Vite server,
+relay, cross-orb proxy, or sign-in cookie refresh is needed. Restart the service after rebuilding.
 Without a build, the existing activity page remains available.
 
 For frontend development, `amp orb services ensure` starts the recorded replay and Vite services
@@ -1131,6 +1157,13 @@ Briefs, paths, verdicts, arbitrary text, nested objects, and all other detail fi
 Missing storage returns HTTP 200 with `durable: "missing"` and `events: []`, like `/api/status`.
 Invalid storage returns HTTP 503 with `durable: "invalid"`; exhausted lock waits return 503 with
 `durable: "unavailable"`. Reads never initialize, import, migrate, or write storage.
+
+`GET /api/evidence?ticket=<id>` lists a known ticket's retained evidence as
+`{ durable, ticket, evidence }`. Each row has `attempt`, `kind`, `revision`, `outcome`,
+`definition`, `sha256`, `bytes`, `at` and `preserved`, which is false when the stored content is
+missing or no longer matches its digest. Content, paths and producing tools are never served.
+A missing or malformed ticket, or any other query parameter, returns HTTP 400; an unknown ticket
+returns 404. No request value names a file. Storage failures follow the event trace's 503 rules.
 
 The bottom **Event log** bar opens upward with a click, Enter, or Space. Escape closes it and
 returns focus to the bar. The list shows time, ticket, action, attempt, and available thread links.
@@ -1222,8 +1255,9 @@ also includes attempt, pending state, and the available reviewer thread. An abse
 Private report/log paths, commands, requirements, verdict contents, worker rationale, configuration,
 and raw event details are not served. Review titles omit paths, including in older observation
 files.
-Only the selected HTML, built assets, and GET `/api/status`, `/api/events`, and `/api/definition`
-are served. Source files, private factory files, other paths, and write methods are rejected.
+Only the selected HTML, built assets, and GET `/api/status`, `/api/events`, `/api/evidence` and
+`/api/definition` are served. Source files, private factory files, other paths, and write methods
+are rejected.
 No model call is used for observation, HTTP reads, or rendering.
 
 **Sample preview** switches to clearly labeled illustrative data. It never starts workers or

@@ -5,6 +5,8 @@ import { basename, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { effectiveDefinition } from "./native";
 import {
+  evidenceOutcomes,
+  factoryEvidence,
   factoryEvents,
   factoryRecords,
   lifecycleStatus,
@@ -71,6 +73,12 @@ function matchingString(value: unknown, pattern: RegExp): string | undefined {
     : undefined;
 }
 
+function durableFailure(error: unknown) {
+  return new Set(["SQLITE_BUSY", "SQLITE_LOCKED"]).has(String(errorCode(error)))
+    ? "unavailable"
+    : "invalid";
+}
+
 function publicEvent(
   row: NonNullable<ReturnType<typeof factoryEvents>>[number],
 ): DashboardEvent {
@@ -134,14 +142,96 @@ function eventsResponse(
       { headers },
     );
   } catch (error) {
-    const busy = new Set(["SQLITE_BUSY", "SQLITE_LOCKED"]).has(
-      String(errorCode(error)),
-    );
     return Response.json(
       {
-        durable: busy ? "unavailable" : "invalid",
+        durable: durableFailure(error),
         events: [],
         error: "Durable status unavailable.",
+      },
+      { status: 503, headers },
+    );
+  }
+}
+
+/** Public metadata of one preserved artifact; its content, path and producing tool never cross. */
+export type DashboardEvidence = {
+  attempt: number;
+  kind: keyof typeof evidenceOutcomes;
+  revision: string;
+  outcome: string;
+  definition: string | null;
+  sha256: string;
+  bytes: number;
+  at: string;
+  preserved: boolean;
+};
+
+function publicEvidence(
+  row: NonNullable<ReturnType<typeof factoryEvidence>>[number],
+): DashboardEvidence {
+  const outcomes: readonly string[] = evidenceOutcomes[row.kind] ?? [];
+  const revision = matchingString(row.revision, /^[a-f0-9]{40}$/);
+  const sha256 = matchingString(row.sha256, /^[a-f0-9]{64}$/);
+  const definition =
+    row.definition === null
+      ? null
+      : matchingString(row.definition, /^[a-f0-9]{64}$/);
+  if (
+    !revision ||
+    !sha256 ||
+    definition === undefined ||
+    !outcomes.includes(row.outcome)
+  )
+    throw new Error("Invalid evidence record");
+  return {
+    attempt: row.attempt,
+    kind: row.kind,
+    revision,
+    outcome: row.outcome,
+    definition,
+    sha256,
+    bytes: row.bytes,
+    at: row.at,
+    preserved: row.intact,
+  };
+}
+
+// Only a well-formed known ticket selects records; no request value ever names a file.
+function evidenceResponse(
+  directory: string,
+  url: URL,
+  headers: Record<string, string>,
+) {
+  const ticket = matchingString(
+    url.searchParams.get("ticket"),
+    /^[a-zA-Z0-9_-]+$/,
+  );
+  if (!ticket || [...url.searchParams.keys()].some((key) => key !== "ticket"))
+    return Response.json(
+      { error: "Invalid evidence query" },
+      { status: 400, headers },
+    );
+  try {
+    const rows = factoryEvidence(join(directory, "factory"), ticket);
+    if (rows === undefined)
+      return Response.json(
+        { error: "Unknown ticket" },
+        { status: 404, headers },
+      );
+    return Response.json(
+      {
+        durable: rows ? "available" : "missing",
+        ticket,
+        evidence: rows?.map(publicEvidence) ?? [],
+      },
+      { headers },
+    );
+  } catch (error) {
+    return Response.json(
+      {
+        durable: durableFailure(error),
+        evidence: [],
+        error: "Durable evidence unavailable.",
       },
       { status: 503, headers },
     );
@@ -541,6 +631,8 @@ export function startDashboard({ root, port }: { root: string; port: number }) {
   async function staticPage(url: URL) {
     const path = url.pathname;
     if (path === "/api/events") return eventsResponse(directory, url, headers);
+    if (path === "/api/evidence")
+      return evidenceResponse(directory, url, headers);
     if (path === "/" || path === "/index.html")
       return new Response(html, {
         headers: { ...headers, "content-type": "text/html; charset=utf-8" },
@@ -632,13 +724,10 @@ export function startDashboard({ root, port }: { root: string; port: number }) {
           { headers },
         );
       } catch (error) {
-        const busy = new Set(["SQLITE_BUSY", "SQLITE_LOCKED"]).has(
-          String(errorCode(error)),
-        );
         return Response.json(
           {
             ...empty,
-            durable: busy ? "unavailable" : "invalid",
+            durable: durableFailure(error),
             error: "Durable status unavailable.",
           },
           { status: 503, headers },
