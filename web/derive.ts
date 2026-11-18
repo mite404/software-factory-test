@@ -56,6 +56,7 @@ export type FeedTask = DashboardSnapshot["tasks"][number] & {
     role: "worker" | "reviewer" | null;
     thread: string | null;
   } | null;
+  repair?: { reason: StopIncident["reason"]; attempt: number } | null; // sent back, not stopped
   parked?: boolean;
   rejections?: { attempt: number; thread: string }[];
   stage: Stage; // the factory's named stage; the page prints it, never infers it
@@ -134,6 +135,7 @@ export type Ticket = Cell & {
   attempt: number | null;
   stageLinks: (string | null)[];
   stop: { role: "worker" | "reviewer" | null; href: string | null } | null;
+  reason: string; // the stop's or repair's fixed sentence, "" when neither is recorded
   parked: boolean;
   rejections: { attempt: number; href: string | null }[];
   lifecycle: string; // "<stage> · <actor>[ · <limit clear time>]", "" for feeds without stages
@@ -295,6 +297,43 @@ function cell(task: Shown | undefined): Cell {
 
 const STOPPED = new Set(["escalated", "parked", "blocked", "uncertain"]);
 
+// One fixed public sentence per factory reason code; report, log and review text never print.
+const REASONS: Record<StopIncident["reason"], string> = {
+  "verification-rejected":
+    "Verification rejected the repaired candidate; it waits for a decision.",
+  "gate-failed": "The pinned gate failed.",
+  "review-rejected": "Cold review rejected the candidate.",
+  "worker-blocked": "The builder reported that it is blocked.",
+  "worker-error": "Its thread stopped with an error.",
+  "provider-limit": "The model provider's usage limit was reached.",
+  "approval-required": "Its thread waits for a tool approval.",
+  "preparation-failed": "The worktree setup command failed.",
+  "preparation-interrupted": "The worktree setup was interrupted.",
+  "delivery-unknown": "Whether its last message arrived is unknown.",
+  "creation-unknown": "Whether its thread was created is unknown.",
+  "target-changed": "The integration target moved under the candidate.",
+  "review-identity-changed":
+    "The candidate or base changed after its review began.",
+  "brief-incomplete": "Its brief is incomplete.",
+};
+
+function repairText({ reason, attempt }: NonNullable<FeedTask["repair"]>) {
+  return `${REASONS[reason]} Attempt ${attempt} goes back to its builder.`;
+}
+
+function reasonText({ stop, repair }: FeedTask): string {
+  if (stop) return REASONS[stop.reason];
+  return repair ? repairText(repair) : "";
+}
+
+// A first rejection's notice names its recorded cause and the attempt that failed.
+function noticeText({ at, attempt, revision, reason }: DashboardEvent): string {
+  if (reason && attempt) return `${repairText({ reason, attempt })} · ${at}`;
+  return [at, attempt ? `attempt ${attempt}` : "", revision?.slice(0, 7)]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 // The factory's own step and stage, when the feed carries them; nothing is inferred.
 function namedStages(task: FeedTask, count: number): string[] {
   const { stage, step } = task;
@@ -382,6 +421,7 @@ function ticket(
     stage: namedStages(task, stages.length).filter((step) => step === "done")
       .length,
     ...ticketLinks(task, stages),
+    reason: reasonText(task),
     parked: task.parked === true,
     lifecycle: lifecycle(task),
     plan: task.steps,
@@ -615,9 +655,8 @@ function exitText(at: Placed): string {
   return " No exit in the factory.";
 }
 
-// The feed has no public label for a reason yet, so the declared code is printed.
-function bannerText(code: string | undefined, at: Placed): string {
-  return `Reason ${code || "not recorded"}.${exitText(at)}`;
+function bannerText(task: FeedTask, at: Placed): string {
+  return `${reasonText(task) || "Reason not recorded."}${exitText(at)}`;
 }
 
 function bannerWhen({ since, clears }: Marker): string {
@@ -638,7 +677,7 @@ function banner(task: FeedTask, at: Placed, found: Marker): Banner {
     urgency: urgency(found.actor, task.stage === "rate-limited", false),
     tone: found.actor === "computer" ? "warning" : "danger",
     title: `${task.id} · ${at.label} · ${found.actor ?? "nobody"} must act`,
-    text: bannerText(task.stop?.reason, at),
+    text: bannerText(task, at),
     cause: causeOf(task.stop),
     when: bannerWhen(found),
   };
@@ -800,13 +839,7 @@ export function derive(
             ? "danger"
             : "info",
       title: `${event.ticket} ${event.action}`,
-      text: [
-        event.at,
-        event.attempt ? `attempt ${event.attempt}` : "",
-        event.revision?.slice(0, 7),
-      ]
-        .filter(Boolean)
-        .join(" · "),
+      text: noticeText(event),
     })),
     head: main[0]?.revision?.slice(0, 7) ?? "nothing landed yet",
     next: label,

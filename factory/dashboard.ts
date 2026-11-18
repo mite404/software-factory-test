@@ -8,10 +8,12 @@ import {
   factoryEvents,
   factoryRecords,
   lifecycleStatus,
+  rejectionReasons,
   runCheckpoint,
   runStage,
   stages,
   taskSteps,
+  type StopIncident,
   type Task,
   type Run,
 } from "./persistence";
@@ -25,11 +27,14 @@ export type DashboardEvent = {
   attempt?: number;
   revision?: string;
   thread?: string;
+  /** A first rejection's closed reason code; its evidence never crosses. */
+  reason?: StopIncident["reason"];
 };
 
 const DETAIL_ACTIONS = new Set([
   "preparing",
   "setup-spawned",
+  "rejected",
   "repair-resumed",
   "review-creating",
   "review-created",
@@ -84,6 +89,9 @@ function publicEvent(
     event.attempt = detail.attempt;
   event.revision = matchingString(detail.revision, /^[a-f0-9]{40}$/);
   event.thread = matchingString(detail.thread, /^T-[\w-]+$/);
+  event.reason = Object.values(rejectionReasons).find(
+    (reason) => reason === detail.reason,
+  );
   return event;
 }
 
@@ -278,6 +286,23 @@ function rejectedReviews(
   );
 }
 
+// The first rejection that sent this attempt back, until its repair message is sent. A resume
+// of a later stop raises the attempt past it, so an older rejection is never reused.
+function projectRepair(run: Run | undefined) {
+  if (
+    run?.kind !== "running" ||
+    run.incident ||
+    !run.rejectedBy ||
+    run.rejectedAttempt !== run.attempt - 1 ||
+    run.delivery === "sent"
+  )
+    return null;
+  return {
+    reason: rejectionReasons[run.rejectedBy],
+    attempt: run.rejectedAttempt,
+  };
+}
+
 function durableTask(id: string, steps: string[], run: Run | undefined) {
   const row: DashboardSnapshot["tasks"][number] = {
     id,
@@ -292,7 +317,7 @@ function durableTask(id: string, steps: string[], run: Run | undefined) {
   if (run.kind === "done")
     row.revision = reference(run.revision, /^[a-f0-9]{40}$/);
   if (run.kind === "running" && run.delivery !== "sent")
-    row.activity = "blocked";
+    row.activity = projectRepair(run) ? "working" : "blocked";
   return row;
 }
 
@@ -362,6 +387,7 @@ function projectRunLinks(id: string, run: Run | undefined) {
   return {
     reviewerThread: reference(review?.thread ?? null, /^T-[\w-]+$/),
     stop: projectStop(run?.incident),
+    repair: projectRepair(run),
     parked: runStage(run).stage === "parked",
     // The owning worker's attempt; a repair after rejection raises it.
     attempt: attemptOf(checkpoint),
