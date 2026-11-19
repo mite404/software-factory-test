@@ -495,6 +495,22 @@ function projectAcceptance(run: Run | undefined) {
     : { acceptedAt: null, summary: null };
 }
 
+// The last gate's per-check results: names and statuses only, never commands or output.
+function projectChecks(run: Run | undefined) {
+  const work = runCheckpoint(run);
+  const checks = work && "checks" in work ? work.checks : undefined;
+  return checks
+    ? {
+        attempt: checks.attempt,
+        results: checks.results.map(({ name, required, status }) => ({
+          name,
+          required,
+          status,
+        })),
+      }
+    : null;
+}
+
 // Only the stage's own curated fields: no reasons, briefs, report paths or thread content. The
 // kind and stop name are keys of the declared table, so the page can place a run on its drawing.
 function projectStage(run: Run | undefined, intake: Task["intake"]) {
@@ -559,6 +575,7 @@ function projectTask(
     ...projectStage(run, intake),
     ...projectRunLinks(id, run),
     merge: projectMerge(run, repository),
+    checks: projectChecks(run),
     evidence: {
       acceptance: run?.kind === "done" ? { revision: row.revision } : null,
       gate,

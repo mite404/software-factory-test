@@ -4696,6 +4696,23 @@ test.each([
         : { kind: "running", attempt: 2 },
     );
     expect(await readFile(counter, "utf8")).toBe(`${runs}\n`);
+    // The flat command is recorded as the one required check named verify, from its last run.
+    const verifyStatus = {
+      pass: "pass",
+      flake: "pass",
+      fail: "fail",
+      dirty: "fail",
+      moved: "fail",
+      cap: "timeout",
+      "rerun mutates": "pass",
+      "passed but moved": "pass",
+    }[outcome];
+    expect(factoryStatus(engine.directory).runs.A).toMatchObject({
+      checks: {
+        attempt: 1,
+        results: [{ name: "verify", required: true, status: verifyStatus }],
+      },
+    });
     const log = join(engine.directory, "A-1.log");
     const rerunLog = join(engine.directory, "A-1.rerun.log");
     expect(await readFile(log, "utf8")).toContain("run 1\nerror 1\n");

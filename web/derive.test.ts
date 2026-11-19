@@ -912,7 +912,7 @@ test("markers print the ticket's own stage and actor, not the state's declared a
     "computer",
   ]);
   expect(at("running").markers.map((m) => m.text)).toEqual([
-    "G · gating · computer acts · gate · 10 min cap",
+    "G · gating · computer acts · gate · per-check cap",
   ]);
   expect(at("done").markers.map((m) => m.text)).toEqual([
     "AC · accepted · foreman acts · ff-merge",
@@ -1234,4 +1234,28 @@ test("a gate rejection on its way back to the builder reads as working with its 
   );
   expect(view.backRow).toBe(0);
   expect(derive(null, feedAt(n - 1), NOW).tickets.at(-1)!.reason).toBe("");
+});
+
+test("a ticket's check chips keep the recorded order and say a failure and an advisory in print", () => {
+  const raw = feed(["working", "queued"]);
+  raw.tasks[0] = {
+    ...raw.tasks[0]!,
+    checks: {
+      attempt: 1,
+      results: [
+        { name: "test", required: true, status: "pass" },
+        { name: "lint", required: true, status: "timeout" },
+        { name: "style", required: false, status: "fail" },
+        { name: "docs", required: false, status: "pass" },
+      ],
+    },
+  };
+  const [checked, flat] = derive(null, raw, NOW).tickets;
+  expect(checked!.checks.map((check) => check.label)).toEqual([
+    "test",
+    "lint · timeout",
+    "style · fail · advisory",
+    "docs · advisory",
+  ]);
+  expect(flat!.checks).toEqual([]);
 });

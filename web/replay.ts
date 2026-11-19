@@ -303,6 +303,15 @@ const PROVIDER_LIMIT = {
 const GATE_REPAIR = {
   attempt: 2,
   repair: { reason: "gate-failed", attempt: 1 },
+  checks: {
+    attempt: 1,
+    results: [
+      { name: "test", required: true, status: "pass" },
+      { name: "lint", required: true, status: "fail" },
+      { name: "typecheck", required: true, status: "pass" },
+      { name: "fallow", required: false, status: "fail" },
+    ],
+  },
 } satisfies Partial<FeedTask>;
 
 function stopFrame(frame: Frame): Partial<FeedTask> {

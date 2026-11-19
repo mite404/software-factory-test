@@ -13,6 +13,7 @@ import { validReview, type Review } from "./review";
 import { validExecutor, type Executor } from "./executor";
 import { validDeliveryIntent, type DeliveryIntent } from "./delivery";
 import type { Actor, pipelineSteps } from "./pipeline";
+import type { Check } from "./config";
 
 const modelFamilies = new Map<string, string>([
   ["alibaba", "alibaba"],
@@ -101,7 +102,10 @@ export type LightWorker = {
 export type DefinitionPin = {
   digest: string;
   scope: string[];
+  /** A summary of `checks` when present, else the one gate command. */
   verify: string;
+  /** The gate's checks in run order, from `checks/`; absent for a flat `verify` command. */
+  checks?: Check[];
   review: boolean;
   workerModel: `${string}/${string}`;
   workerEffort?: AgentReasoningEffort;
@@ -121,6 +125,14 @@ export type ProviderLimit = {
   observedAt: number;
   resetAt?: number;
 };
+/** One check's public result: its name, whether it decides acceptance, and how it ended. */
+export type CheckStatus = {
+  name: string;
+  required: boolean;
+  status: "pass" | "fail" | "timeout";
+};
+/** The per-check statuses of an attempt's last gate run, recorded when that gate returns. */
+export type CheckResults = { attempt: number; results: CheckStatus[] };
 /** When a provider limit is treated as reset: its parsed reset, else 30 minutes after it was seen. */
 export function providerResetAt(limit: ProviderLimit) {
   return limit.resetAt ?? limit.observedAt + 1_800_000;
@@ -189,9 +201,18 @@ export type Run = (
        * reconcile retires it once that group has stopped, and an idle report gates again.
        * `start` is the leader's boot ID and start tick, so only this gate is ever killed;
        * `killed` records that a reconcile killed it past its deadline. */
-      gate?: { at: number; pid: number; start?: string; killed?: true };
+      gate?: {
+        at: number;
+        pid: number;
+        start?: string;
+        killed?: true;
+        /** When the running command is past its own timeout; older markers use `at` plus 600000 ms. */
+        deadline?: number;
+      };
       /** The pipeline step that rejected the previous attempt. */
       rejectedBy?: Extract<PipelineStep, "gate" | "review" | "merge">;
+      /** Absent before a gate returns; a flat `verify` gate records one required check `verify`. */
+      checks?: CheckResults;
       /** The attempt a first rejection sent back to this worker, saved by that rejection. */
       rejectedAttempt?: number;
       /** The factory rebased the reported revision `from` onto `base` as `revision`, moving the
@@ -233,6 +254,7 @@ export type Run = (
       /** Curated by publicSummary at acceptance; the only report text the feed may show. */
       summary?: string;
       merge?: MergeRecord;
+      checks?: CheckResults;
       thread: ThreadID;
       insight: string;
       review?: Review;
@@ -1345,21 +1367,33 @@ function validRebase(value: unknown): boolean {
   );
 }
 
-// A gate marker; `killed` needs the `start` that identified the group it killed.
-function validGateMarker(gate: Record<string, unknown>): boolean {
+// A check's saved deadline, which older markers lack.
+function validDeadline(gate: Record<string, unknown>) {
+  return (
+    gate.deadline === undefined ||
+    (timestamp(gate.deadline) && gate.deadline > Number(gate.at))
+  );
+}
+
+// The leader's identity; `killed` needs the `start` that identified the group it killed.
+function validGateIdentity(gate: Record<string, unknown>) {
   const start =
     gate.start === undefined ||
     (typeof gate.start === "string" && /^[0-9a-f-]+:\d+$/.test(gate.start));
   const killed =
     gate.killed === undefined ||
     (gate.killed === true && gate.start !== undefined);
+  return start && killed;
+}
+
+function validGateMarker(gate: Record<string, unknown>): boolean {
   return (
     timestamp(gate.at) &&
     positiveInteger(gate.pid) &&
-    start &&
-    killed &&
+    validDeadline(gate) &&
+    validGateIdentity(gate) &&
     Object.keys(gate).every((key) =>
-      ["at", "pid", "start", "killed"].includes(key),
+      ["at", "pid", "start", "killed", "deadline"].includes(key),
     )
   );
 }
@@ -1368,10 +1402,68 @@ function validGateMarker(gate: Record<string, unknown>): boolean {
 function validStageFacts(run: Record<string, unknown>): boolean {
   return (
     (run.gate === undefined || validGateMarker(record(run.gate))) &&
+    validCheckResults(run.checks) &&
     [undefined, "gate", "review", "merge"].includes(
       run.rejectedBy as string | undefined,
     ) &&
     (run.rejectedAttempt === undefined || positiveInteger(run.rejectedAttempt))
+  );
+}
+
+const checkName = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+function exactKeys(value: unknown, keys: string[]) {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.keys(value).length === keys.length &&
+    keys.every((key) => Object.hasOwn(value, key))
+  );
+}
+
+// A list of uniquely named checks with at least one required; `valid` checks the rest of each.
+function namedChecks(
+  value: unknown,
+  keys: string[],
+  valid: (item: Record<string, unknown>) => boolean,
+) {
+  if (!Array.isArray(value) || !value.length) return false;
+  const items = value as Record<string, unknown>[];
+  return (
+    items.every(
+      (item) =>
+        exactKeys(item, keys) &&
+        typeof item.name === "string" &&
+        checkName.test(item.name) &&
+        typeof item.required === "boolean" &&
+        valid(item),
+    ) &&
+    items.some((item) => item.required) &&
+    new Set(items.map((item) => item.name)).size === items.length
+  );
+}
+
+function validCheckResults(value: unknown) {
+  if (value === undefined) return true;
+  const results = value as Record<string, unknown>;
+  return (
+    exactKeys(value, ["attempt", "results"]) &&
+    positiveInteger(results.attempt) &&
+    namedChecks(results.results, ["name", "required", "status"], (item) =>
+      ["pass", "fail", "timeout"].includes(String(item.status)),
+    )
+  );
+}
+
+function validPinnedChecks(value: unknown) {
+  return (
+    value === undefined ||
+    namedChecks(
+      value,
+      ["name", "command", "required", "timeoutMs"],
+      (item) => text(item.command) && positiveInteger(item.timeoutMs),
+    )
   );
 }
 
@@ -1447,6 +1539,7 @@ const runValidators: Record<string, (run: Record<string, unknown>) => boolean> =
         (typeof run.acceptedBase === "string" &&
           /^[a-f0-9]{40}$/.test(run.acceptedBase))) &&
       validAcceptance(run) &&
+      validCheckResults(run.checks) &&
       thread(run.thread) &&
       typeof run.insight === "string" &&
       reviewFields(run),
@@ -1554,6 +1647,13 @@ function optionalAgent(value: unknown) {
   return value === undefined || validLightWorker(value);
 }
 
+function gateAndWatchdog(pin: Record<string, unknown>) {
+  return (
+    validPinnedChecks(pin.checks) &&
+    (pin.watchdog === undefined || validWatchdogPolicy(pin.watchdog))
+  );
+}
+
 function definitionFields(value: unknown) {
   const pin = record(value);
   const patterns = [
@@ -1571,7 +1671,7 @@ function definitionFields(value: unknown) {
     pin.scope.every(text) &&
     typeof pin.review === "boolean" &&
     typeof pin.instructions === "string" &&
-    (pin.watchdog === undefined || validWatchdogPolicy(pin.watchdog)) &&
+    gateAndWatchdog(pin) &&
     workerSettings(pin)
   );
 }

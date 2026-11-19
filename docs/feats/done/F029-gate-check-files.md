@@ -41,8 +41,9 @@ factory/config/checks/<name>.yaml
 - When `checks/` exists, the gate runs every check in order, each with its own timeout, and
   records `{name, required, status, durationMs, outputTail}` per check. It continues after a
   failure so every result is known.
-- The gate passes when every required check exits 0. An advisory failure is reported to the
-  worker and in evidence, but does not reject.
+- The gate passes when every required check exits 0. An advisory failure is kept in evidence and
+  does not reject; an accepted run sends the worker no message, and the advisory tail reaches the
+  worker only inside a rejection.
 - A `checks/` directory with no required check is refused at load: that gate could never fail.
 - The flat `verify` string stays valid for projects without `checks/`, as one required check
   named `verify`. Both together is a conflict.
@@ -66,9 +67,10 @@ factory/config/checks/<name>.yaml
    directory with no required check, and `checks/` beside `verify`.
 2. **Run every check**. Run checks in order with their own timeouts, continuing after failures,
    and record one result per check.
-3. **Decide on required checks**. Pass only when every required check exits 0; report advisory
-   failures without rejecting.
-4. **Feed back per check**. Send the worker each failed check with its own output tail.
+3. **Decide on required checks**. Pass only when every required check exits 0; keep advisory
+   failures in evidence without rejecting or messaging the worker on an accepted run.
+4. **Feed back per check**. On a rejection, send the worker each failed check, required or
+   advisory, with its own output tail.
 5. **Publish check results**. Add per-check status to the feed and drive the dashboard chips from
    it.
 6. **Document check files**. Describe the file, the pass rule and the flat-file fallback in the
@@ -125,9 +127,9 @@ A baseline failure goes back to the Foreman; it does not widen the worker's scop
 
 ## Done when
 
-- [ ] Every check runs and is recorded even after an earlier one fails.
-- [ ] Only required checks decide acceptance; advisory failures are reported, not rejected.
-- [ ] The worker gets each failed check's own output in one rejection.
-- [ ] The dashboard chips show real per-check results.
-- [ ] A project with only `verify` gates exactly as before.
-- [ ] Full gates, guard and a fresh cold review pass on the accepted revision.
+- [x] Every check runs and is recorded even after an earlier one fails.
+- [x] Only required checks decide acceptance; advisory failures are kept in evidence, not rejected.
+- [x] The worker gets each failed check's own output in one rejection.
+- [x] The dashboard chips show real per-check results.
+- [x] A project with only `verify` gates exactly as before.
+- [x] Full gates, guard and a fresh cold review pass on the accepted revision.

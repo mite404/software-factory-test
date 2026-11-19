@@ -480,20 +480,15 @@
   font-style: normal;
 }
 
-#kit [data-checks] > i + i::before {
-  content: " → ";
+/* Each chip is the recorded result of one check; a failure also says so in print. */
+#kit [data-checks] > i[data-check="fail"],
+#kit [data-checks] > i[data-check="timeout"] {
+  font-weight: 700;
+  text-decoration: underline;
 }
 
-/* The six checks tick while the landing's marker sits on verify, as in style.css. */
-:root:has(#stage.landing) #kit [data-checks] > i {
-  animation: kit-tick 0.3s calc(2.35s + var(--i) * 75ms);
-}
-
-@keyframes kit-tick {
-  50% {
-    color: var(--gray-ink);
-    background: rgb(20 20 19 / 0.12);
-  }
+#kit [data-checks] > i[data-advisory] {
+  opacity: 0.7;
 }
 
 #kit [data-section] > p {

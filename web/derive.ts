@@ -1,6 +1,7 @@
 import type { DashboardEvent, DashboardSnapshot } from "../factory/dashboard";
 import { pipelineSteps } from "../factory/pipeline";
 import type {
+  CheckStatus,
   Stage,
   StopIncident,
   stages as declaredStages,
@@ -68,6 +69,8 @@ export type FeedTask = DashboardSnapshot["tasks"][number] & {
   step?: number | null; // index into pipelineSteps where the run sits; null before one exists
   rejectedBy?: "gate" | "review" | "merge" | null; // the step that rejected the last attempt
   summary?: string | null; // curated public one-line outcome, set at acceptance
+  // The last gate's per-check results (a flat verify is one check); null before any gate returned.
+  checks?: { attempt: number; results: CheckStatus[] } | null;
 };
 
 // The declared lifecycle table as GET /api/status serves it: only what the drawing reads.
@@ -139,6 +142,9 @@ export type Ticket = Cell & {
   parked: boolean;
   rejections: { attempt: number; href: string | null }[];
   lifecycle: string; // "<stage> · <actor>[ · <limit clear time>]", "" for feeds without stages
+  // The last gate's checks in run order, [] when none were recorded. The label says in print what
+  // the chip's style shows: "lint · fail · advisory".
+  checks: (CheckStatus & { label: string })[];
 };
 
 // A ticket on the lifecycle graph, placed by the factory's own kind, stop and stage.
@@ -432,7 +438,19 @@ function ticket(
     review: review?.pending ? "pending" : review ? "recorded" : "none",
     // Older feeds carry the attempt only on a pending review record.
     attempt: task.attempt ?? review?.attempt ?? null,
+    checks: checkResults(task),
   };
+}
+
+function checkResults(task: FeedTask): Ticket["checks"] {
+  return (task.checks?.results ?? []).map((check) => ({
+    ...check,
+    label: [
+      check.name,
+      ...(check.status === "pass" ? [] : [check.status]),
+      ...(check.required ? [] : ["advisory"]),
+    ].join(" · "),
+  }));
 }
 
 // Lay step labels out left to right from the chip column; steps that do not fit are dropped.
