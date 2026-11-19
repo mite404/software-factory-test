@@ -242,7 +242,9 @@ test("installer validates native effort before writes and dispatch rejects inval
       configPath,
       JSON.stringify({ ...config, review: true, workerModel: "unknown/model" }),
     );
-    expect(configuration(root)).rejects.toThrow(/OpenAI or Anthropic/);
+    expect(configuration(root)).rejects.toThrow(
+      /OpenAI, Anthropic, or Moonshot AI/,
+    );
     for (const setup of ["", " ", null, 1, false, [], {}]) {
       await writeFile(configPath, JSON.stringify({ ...config, setup }));
       expect(configuration(root)).rejects.toThrow(/nonempty text/);

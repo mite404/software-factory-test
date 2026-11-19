@@ -247,7 +247,7 @@ Inspect the private dated ledger and its `unsorted` reasons before handing off t
 Only finding text and fixed questions go to TypeSafe. Factory state, verdicts, briefs, transcripts,
 and full logs remain local. Classifier errors preserve the record rather than dropping it.
 
-Create one thread on `anthropic/claude-fable-5-2` with that brief and access to the local ledger and
+Create one thread on `moonshotai/kimi-k3` with that brief and access to the local ledger and
 code. Ask which architectural boundaries or concepts repeatedly fail, with evidence. Inspect its
 returned report, then commit it under `docs/audits/<date>.md` through the normal delivery path.
 Do not treat classification as permission to repair code, change acceptance, or expand scope.

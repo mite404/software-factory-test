@@ -106,7 +106,7 @@ probabilities, thresholds, and bucket summaries. Summaries include counts, ticke
 on the 0-to-4 rubric, and the five most frequent finding locations without line numbers. Retain
 the ledger privately; do not commit it or serve it through the dashboard.
 
-Copy the printed brief into one `anthropic/claude-fable-5-2` thread with access to the code and
+Copy the printed brief into one `moonshotai/kimi-k3` thread with access to the code and
 ledger. Ask it to audit the recurring boundaries and concepts, not repair individual tickets.
 Inspect its evidence and commit the returned report under `docs/audits/<date>.md`. The script
 never creates threads, installs schedules, changes acceptance, or acts on audit recommendations.
@@ -1061,6 +1061,9 @@ configuration. Invalid review, ticket size, or risk values fail parsing.
 Tickets may declare `size: "small" | "medium" | "large"` and boolean `risky`. With review enabled,
 only a small, low-risk first attempt skips review. Medium, large, unrated, risky, and retried work
 requires one cold post-graft review, never a pre-graft review or a model call to classify risk.
+The reviewer runs cold at high effort on the opposite model family's default: an OpenAI worker
+gets `moonshotai/kimi-k3`, and an Anthropic or Moonshot AI worker gets `openai/gpt-6-astra`.
+A worker from any other family is refused.
 
 Scope and risk are separate, following create-linear-ticket's Effort and Risk distinction. Small is
 bounded with local effects; medium spans cooperating components; large changes cross-cutting
