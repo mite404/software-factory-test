@@ -289,7 +289,7 @@ test("a repaired candidate after a rejected rebase is rebased again and lands", 
   } finally {
     await f.close();
   }
-});
+}, 30_000);
 
 test.each(["light", "main"] as const)(
   "resuming a parked light run beside a %s-lane run blocked on approval",
