@@ -19,10 +19,21 @@ export const configDirectory = "factory/config";
 
 type Files = Map<string, Buffer>;
 type Data = Record<string, unknown>;
+/** One gate check from `checks/<name>.yaml`; a definition holds them in run order. */
+export type Check = {
+  name: string;
+  command: string;
+  /** False makes the check advisory: its failure is reported but never rejects. */
+  required: boolean;
+  timeoutMs: number;
+};
+/** The timeout of a check that sets none, and of the flat `verify` command. */
+export const defaultCheckTimeoutMs = 600_000;
 
 const schemas: Record<string, { properties: object; required?: string[] }> =
   configSchema.$defs;
 const runnerTemplate = "runners/<name>.yaml";
+const checkTemplate = "checks/<name>.yaml";
 // Any first non-blank line starting with `---` claims front matter; only the strict form parses
 // (either line ending, optional BOM, trailing spaces), so a near miss is refused, not read as bare.
 const opensFrontMatter = /^\uFEFF?\s*---/;
@@ -30,6 +41,7 @@ const frontMatter =
   /^\uFEFF?---[ \t]*\r?\n(?:([\s\S]*?)\r?\n)?---[ \t]*(?:\r?\n|$)([\s\S]*)$/;
 const runnerName = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const runnerFile = /^runners\/([A-Za-z0-9][A-Za-z0-9._-]*)\.yaml$/;
+const checkPath = /^checks\/([A-Za-z0-9][A-Za-z0-9._-]*)\.yaml$/;
 const foreman = "agents/foreman/agent.md";
 const implementer = "agents/implementer/agent.md";
 const light = "agents/light-implementer/agent.md";
@@ -51,7 +63,9 @@ const layoutDirectories = new Set(
 // The one place a path becomes its schema; the template key itself is never a file.
 function schemaFor(path: string) {
   if (runnerFile.test(path)) return schemas[runnerTemplate];
-  return path !== runnerTemplate && Object.hasOwn(schemas, path)
+  if (checkPath.test(path)) return schemas[checkTemplate];
+  return ![runnerTemplate, checkTemplate].includes(path) &&
+    Object.hasOwn(schemas, path)
     ? schemas[path]
     : undefined;
 }
@@ -175,6 +189,9 @@ export async function readConfigFiles(root: string): Promise<Files> {
     const entries = await readdir(join(root, configDirectory, directory), {
       withFileTypes: true,
     });
+    // An empty checks/ would leave a gate that runs nothing; refuse it on every path.
+    if (directory === "checks" && !entries.length)
+      fail(directory, "is empty; add a required check or remove it");
     for (const entry of entries) {
       const path = directory ? `${directory}/${entry.name}` : entry.name;
       if (entry.isDirectory()) await walk(path);
@@ -234,11 +251,44 @@ function checkRunner(files: Files, named: unknown) {
   return runner;
 }
 
+// The one reader of check values. Files run by `order`, then by name, so ties are deterministic;
+// a set of only advisory checks is refused because that gate could never fail.
+function composeChecks(parsed: Map<string, { data: Data }>) {
+  const checks = [...parsed].flatMap(([path, { data }]) => {
+    const name = checkPath.exec(path)?.[1];
+    if (name === undefined) return [];
+    const { command, order } = data;
+    const { required = true, timeoutMs = defaultCheckTimeoutMs } = data;
+    if (typeof command !== "string" || !command.trim())
+      fail(path, "command must be a non-empty string");
+    if (typeof required !== "boolean")
+      fail(path, "required must be true or false");
+    for (const [key, value] of Object.entries({ timeoutMs, order }))
+      if (!Number.isSafeInteger(value) || (value as number) < 1)
+        fail(path, `${key} must be a positive integer`);
+    const check: Check = {
+      name,
+      command,
+      required,
+      timeoutMs: timeoutMs as number,
+    };
+    return [{ order: order as number, check }];
+  });
+  if (!checks.length) return undefined;
+  if (!checks.some(({ check }) => check.required))
+    fail("checks", "has no required check; that gate could never fail");
+  return checks
+    .sort((a, b) => a.order - b.order || (a.check.name < b.check.name ? -1 : 1))
+    .map(({ check }) => check);
+}
+
 /** Compose the flat settings object from the directory's files, validating layout, keys and references.
- * Value rules stay with the one validator of the flat object.
- * @throws With the offending file's path on an unknown file or setting, a missing or dangling reference, or an unread body.
+ * Value rules stay with the one validator of the flat object, except check values, which have no
+ * flat form: `checks` holds the parsed checks in run order when `checks/` exists.
+ * @throws With the offending file's path on an unknown file or setting, a missing or dangling
+ * reference, an unread body, an invalid check, or `verify` beside `checks/` or missing without it.
  */
-export function composeDefinition(files: Files): Data {
+export function composeDefinition(files: Files): Data & { checks?: Check[] } {
   for (const path of files.keys())
     if (!schemaFor(path)) fail(path, "is not part of the config layout");
   for (const path of ["factory.yaml", implementer])
@@ -252,11 +302,18 @@ export function composeDefinition(files: Files): Data {
   const data = (path: string) => parsed.get(path)?.data;
   const worker = data(implementer)!;
   const runner = checkRunner(files, worker.runner);
+  const checks = composeChecks(parsed);
+  const settings = data("factory.yaml")!;
+  if (checks && settings.verify !== undefined)
+    fail("factory.yaml", "verify is not allowed beside checks/; use one");
+  if (!checks && settings.verify === undefined)
+    fail("factory.yaml", "verify is required unless checks/ holds checks");
   const lightWorker = data(light);
   const observerSettings = data(observer);
   return {
-    ...data("factory.yaml"),
+    ...settings,
     ...defined({
+      checks,
       orchestratorModel: data(foreman)?.model,
       workerModel: worker.model,
       workerEffort: worker.effort,

@@ -134,7 +134,40 @@ factory/config/
   agents/observer/agent.md      front matter: model, effort (observer). Optional; see below
   runners/<name>.yaml           setup, setupTimeoutMs; <name> is the implementer's runner ID,
                                 or `local` when it names none
+  checks/<name>.yaml            command, order, required (default true), timeoutMs (default
+                                600000). Optional; replaces verify in factory.yaml
 ```
+
+### Check files
+
+With `checks/`, the gate runs each check as its own command, in `order` and then by name, each
+under its own `timeoutMs`. It keeps going after a failure, so every result is known, and records
+`{name, required, status}` per check, where status is `pass`, `fail` or `timeout`. The gate passes
+only when every required check exits 0. A check that times out, is killed or cannot start is a
+failure, never a skip. An advisory check (`required: false`) never rejects. Its result stays in
+evidence and the feed; an accepted worker gets no message about it, since it has nothing to act
+on. When the run is rejected, by the gate or by review, the repair feedback carries each failed
+advisory check's tail. The rule reads those per-check results, never log text.
+
+The loader refuses, naming the file: an empty `checks/`, one with no required check (that gate
+could never fail), a linked or non-regular check file or `checks/`, a subdirectory or a
+non-`.yaml` file inside it, an unknown key, a missing or empty `command`, a missing `order`, a
+non-integer or non-positive `order` or `timeoutMs`, invalid YAML, `checks/` beside `verify` in
+`factory.yaml`, and a directory with neither. `checks/` beside a flat definition file is refused
+like any other config file. Without `checks/`, the flat `verify` string gates exactly as before:
+one command under a 600 000 ms timeout. Checks are pinned with the definition, so an edit or a new
+check changes nothing for an active run until `reload`.
+
+A rejection lists every check with its status and time, then each failed check's own stdout and
+stderr tails. F008's 8192-byte budget is split evenly across the failed checks. A review
+rejection of a passed gate re-cuts the failed advisory checks' tails from that gate's evidence
+record to the same budget. The F019 rerun
+still runs once when a required check exits non-zero; a gate with a timed-out or killed required
+check is not rerun. The gate evidence record holds JSON with each check's status, duration and
+output tail. The status feed carries each ticket's last gate as `checks: {attempt, results}` with
+names, `required` and statuses only, and the kit page draws its verify chips from it. A flat
+`verify` gate is recorded there as one required check named `verify`; its log, excerpt, evidence
+and feedback stay as before.
 
 The loader composes these files into the flat object that `factory/definition.schema.json`
 describes and validates that object with the same rules, so nothing downstream of it changes.
@@ -445,26 +478,27 @@ feed and stop notices all read it; nothing else maps run kinds to stages. Run ki
 A stop on any stage names its actor from the matching stop in the transition table, so an
 interrupted setup stays `preparing` but waits on the Foreman.
 
-Each fact is recorded where it happens. When the gate command spawns, `checkCandidate` saves
-`gate: { at, pid }` with its detached process group and event `gate-started`; the command waits
-until that save succeeds. The marker is removed with `gate-returned` and the outcome as soon as
-the gate returns. Reconciles hold the store lock, so a marker found when a reconcile starts
-belongs to an earlier coordinator. While its process group is alive (or cannot be probed) the run
-stays `gating` and no reconcile settles it or starts another gate. The gate's ten-minute timer dies
-with its coordinator, for example in an Amp CLI restart. The marker also saves `start`, the boot ID
-and the leader's start tick, so a reconcile past `at` plus that deadline kills the group with
+Each fact is recorded where it happens. When the gate command spawns, `checkCandidate` saves `gate:
+{ at, pid, deadline }` with its detached process group and event `gate-started`; the command waits
+until that save succeeds. The marker is removed with `gate-returned` and the outcome as soon as the
+gate returns. Reconciles hold the store lock, so a marker found when a reconcile starts belongs to
+an earlier coordinator. While its process group is alive (or cannot be probed) the run stays
+`gating` and no reconcile settles it or starts another gate. The gate's timer dies with its
+coordinator, for example in an Amp CLI restart. The marker also saves `start`, the boot ID and the
+leader's start tick. `deadline` is `at` plus the running command's own timeout: each check saves its
+own marker when it spawns, and a flat `verify` saves 600 000 ms. A reconcile past `deadline`, or
+past `at` plus 600 000 ms for a marker saved before `deadline` existed, kills the group with
 SIGKILL, records `killed` and event `gate-killed`, but only while that same leader is alive. A
 reused PID is never killed; a marker from another boot is retired without killing, and one whose
-leader is gone or that has no `start` stays `gating`. Once the group has stopped, the
-next reconcile removes the marker with `gate-interrupted` before the paused or permission check,
-so a paused factory stops reporting `gating` without running anything. If the idle worker's
-report is still a clean candidate, the normal path
-gates it again once; otherwise the run is rejected or stopped as usual and never reads `gating`.
-A gate has no effect outside its worktree. The `status` action reads the committed snapshot
-without queueing behind a running reconcile, so it reports `gating` while a gate runs.
-Each commit stamps `stageAt` on every run whose stage changed. `reject` records `rejectedBy` as
-`gate`, `review` or `merge` (a rebase conflict), and acceptance records `acceptedAt`. Runs saved
-before these fields open unchanged and read `stageAt` as unknown.
+leader is gone or that has no `start` stays `gating`. Once the group has stopped, the next reconcile
+removes the marker with `gate-interrupted` before the paused or permission check, so a paused
+factory stops reporting `gating` without running anything. If the idle worker's report is still a
+clean candidate, the normal path gates it again once; otherwise the run is rejected or stopped as
+usual and never reads `gating`. A gate has no effect outside its worktree. The `status` action reads
+the committed snapshot without queueing behind a running reconcile, so it reports `gating` while a
+gate runs. Each commit stamps `stageAt` on every run whose stage changed. `reject` records
+`rejectedBy` as `gate`, `review` or `merge` (a rebase conflict), and acceptance records
+`acceptedAt`. Runs saved before these fields open unchanged and read `stageAt` as unknown.
 
 ### Provider limit policy
 
@@ -993,7 +1027,7 @@ bytes combined cut on line boundaries, and the full log path, or names the preco
 prevented the run.
 
 A nonzero gate exit gets one rerun in the same worktree, only while the candidate HEAD and clean
-tree still match. Precondition failures, the ten-minute cap, and execution errors reject without
+tree still match. Precondition failures, a timeout, and execution errors reject without
 a rerun. Logs remain at `<ticket>-<attempt>.log` and `<ticket>-<attempt>.rerun.log`. A second-run
 pass continues to cold review under the existing policy without spending a repair attempt. The
 `gate-flaked` event records both paths as JSON fields `log` and `rerunLog`; review and acceptance
@@ -1334,9 +1368,9 @@ The Bun process holds the file descriptor, so exit or SIGKILL releases the lock.
 the lock file; its stored PID can be stale when no run holds the lock.
 
 A waiting run writes `Waiting for test lock held by PID <pid> (<seconds>s elapsed)` to stderr
-every 30 s. Waiting precedes test timers, but counts toward the factory gate's fixed 600 000 ms
-budget. A gate that spends that budget waiting still times out. Builds and lint do not take
-this lock.
+every 30 s. Waiting precedes test timers, but counts toward the timeout of the gate command or
+check that runs the tests. A gate that spends that budget waiting still times out. Builds and
+lint do not take this lock.
 
 Installation enables Lefthook. Pre-commit runs type-aware correctness and async-safety lint,
 Oxlint's native TypeScript check over both `src` and `factory`, and a staged-diff Fallow audit.

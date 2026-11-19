@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import {
@@ -24,7 +24,14 @@ import {
   migrateDefinition,
   type NativeHost,
 } from "./native";
-import { factoryDefinition } from "./persistence";
+import { startDashboard } from "./dashboard";
+import {
+  evidenceContent,
+  factoryDefinition,
+  factoryEvents,
+  factoryEvidence,
+  factoryStatus,
+} from "./persistence";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -831,3 +838,504 @@ test("an observer first authored after the accepted definition stays inactive un
   await f.factory.observer("register-observer", "T-owner", f.tools);
   expect(created).toEqual([["anthropic/claude-haiku-5-5", "high", "observer"]]);
 });
+
+// The lean layout gated by check files instead of a flat verify.
+function checked(checks: Record<string, string>): Record<string, string> {
+  const files = lean();
+  files["factory.yaml"] = files["factory.yaml"]!.replace(
+    'verify: "true"\n',
+    "",
+  );
+  for (const [name, text] of Object.entries(checks))
+    files[`checks/${name}.yaml`] = text;
+  return files;
+}
+
+const passing = { test: "command: echo ok\norder: 1\n" };
+
+const checkRefusals: [
+  string,
+  Record<string, string>,
+  ((root: string) => Promise<unknown>) | null,
+  RegExp,
+][] = [
+  [
+    "a linked checks/ directory",
+    {},
+    async (root) => {
+      await mkdir(join(root, "elsewhere"));
+      await writeFile(join(root, "elsewhere/test.yaml"), passing.test);
+      await symlink(
+        join(root, "elsewhere"),
+        join(root, "factory/config/checks"),
+      );
+    },
+    /factory\/config\/checks: must be a regular file/,
+  ],
+  [
+    "a linked check file",
+    passing,
+    (root) =>
+      symlink(
+        join(root, "factory/config/checks/test.yaml"),
+        join(root, "factory/config/checks/alias.yaml"),
+      ),
+    /factory\/config\/checks\/alias\.yaml: must be a regular file/,
+  ],
+  [
+    "a check that is a FIFO",
+    passing,
+    async (root) =>
+      execFileSync("mkfifo", [join(root, "factory/config/checks/pipe.yaml")]),
+    /factory\/config\/checks\/pipe\.yaml: must be a regular file/,
+  ],
+  [
+    "a subdirectory inside checks/",
+    { ...passing, "nested/test": passing.test },
+    null,
+    /factory\/config\/checks\/nested: is not part of the config layout/,
+  ],
+  [
+    "a non-.yaml file inside checks/",
+    passing,
+    (root) => writeFile(join(root, "factory/config/checks/notes.txt"), "x\n"),
+    /factory\/config\/checks\/notes\.txt: is not part of the config layout/,
+  ],
+  [
+    "an empty checks/ directory",
+    {},
+    (root) => mkdir(join(root, "factory/config/checks"), { recursive: true }),
+    /factory\/config\/checks: is empty/,
+  ],
+  [
+    "checks/ with no required check",
+    { lint: "command: echo ok\norder: 1\nrequired: false\n" },
+    null,
+    /factory\/config\/checks: has no required check/,
+  ],
+  [
+    "an unknown key in a check",
+    { test: "command: echo ok\norder: 1\nretries: 2\n" },
+    null,
+    /factory\/config\/checks\/test\.yaml: unsupported setting retries/,
+  ],
+  [
+    "a check without a command",
+    { test: "order: 1\n" },
+    null,
+    /factory\/config\/checks\/test\.yaml: command is required/,
+  ],
+  [
+    "a check with an empty command",
+    { test: 'command: "  "\norder: 1\n' },
+    null,
+    /factory\/config\/checks\/test\.yaml: command must be a non-empty string/,
+  ],
+  [
+    "a check without an order",
+    { test: "command: echo ok\n" },
+    null,
+    /factory\/config\/checks\/test\.yaml: order is required/,
+  ],
+  [
+    "a fractional timeoutMs",
+    { test: "command: echo ok\norder: 1\ntimeoutMs: 1.5\n" },
+    null,
+    /factory\/config\/checks\/test\.yaml: timeoutMs must be a positive integer/,
+  ],
+  [
+    "a zero timeoutMs",
+    { test: "command: echo ok\norder: 1\ntimeoutMs: 0\n" },
+    null,
+    /factory\/config\/checks\/test\.yaml: timeoutMs must be a positive integer/,
+  ],
+  [
+    "a negative order",
+    { test: "command: echo ok\norder: -1\n" },
+    null,
+    /factory\/config\/checks\/test\.yaml: order must be a positive integer/,
+  ],
+  [
+    "a string order",
+    { test: 'command: echo ok\norder: "1"\n' },
+    null,
+    /factory\/config\/checks\/test\.yaml: order must be a positive integer/,
+  ],
+  [
+    "a non-boolean required",
+    { test: "command: echo ok\norder: 1\nrequired: yes please\n" },
+    null,
+    /factory\/config\/checks\/test\.yaml: required must be true or false/,
+  ],
+  [
+    "invalid YAML in a check",
+    { test: "command: [unclosed\n" },
+    null,
+    /factory\/config\/checks\/test\.yaml: is not valid YAML/,
+  ],
+];
+
+test.each(checkRefusals)(
+  "refuses %s",
+  async (_name, checks, arrange, message) => {
+    const f = await repository();
+    await put(f.root, checked(checks));
+    await arrange?.(f.root);
+    expect(await refused(configuration(f.root))).toMatch(message);
+  },
+);
+
+test("refuses checks/ beside a verify in factory.yaml, and a directory with neither", async () => {
+  const f = await repository();
+  await put(f.root, { ...lean(), "checks/test.yaml": passing.test });
+  expect(await refused(configuration(f.root))).toMatch(
+    /factory\/config\/factory\.yaml: verify is not allowed beside checks\//,
+  );
+  const g = await repository();
+  await put(g.root, checked({}));
+  expect(await refused(configuration(g.root))).toMatch(
+    /factory\/config\/factory\.yaml: verify is required unless checks\/ holds checks/,
+  );
+});
+
+test("refuses checks/ in a project that still uses a flat definition", async () => {
+  const f = await repository();
+  await putFlat(f.root, ".factory.json");
+  await put(f.root, { "checks/test.yaml": passing.test });
+  expect(await refused(configuration(f.root))).toMatch(
+    /factory\/config\/checks\/test\.yaml: is not allowed beside a flat definition/,
+  );
+});
+
+test("checks run by order, ties by name, with defaults for required and timeoutMs", async () => {
+  const f = await repository();
+  await put(
+    f.root,
+    checked({
+      zeta: "command: echo z\norder: 1\n",
+      beta: "command: echo b\norder: 2\nrequired: false\ntimeoutMs: 5000\n",
+      alpha: "command: echo a\norder: 2\n",
+    }),
+  );
+  expect((await configuration(f.root)).checks).toEqual([
+    { name: "zeta", command: "echo z", required: true, timeoutMs: 600_000 },
+    { name: "alpha", command: "echo a", required: true, timeoutMs: 600_000 },
+    { name: "beta", command: "echo b", required: false, timeoutMs: 5000 },
+  ]);
+});
+
+async function checkedEngine(checks: Record<string, string>) {
+  const f = await engine();
+  const config = join(f.root, "factory/config");
+  await writeFile(join(config, "factory.yaml"), checked({})["factory.yaml"]!);
+  await put(f.root, checked(checks));
+  f.git("add", "-A");
+  f.git("commit", "-qm", "checks");
+  const sent: string[] = [];
+  f.host.send = async (_thread, message) => {
+    sent.push(message);
+  };
+  return { ...f, sent };
+}
+
+test("every check runs after earlier failures, and one rejection names each failure with its own tail", async () => {
+  const f = await checkedEngine({
+    first: "command: echo FIRST-OUT; exit 3\norder: 1\n",
+    second: "command: echo SECOND-OUT\norder: 2\n",
+    third: "command: echo THIRD-ERR >&2; exit 4\norder: 3\n",
+  });
+  const result = await submit(f, "src/keep.ts");
+  expect(result.runs.A).toMatchObject({
+    kind: "running",
+    attempt: 2,
+    checks: {
+      attempt: 1,
+      results: [
+        { name: "first", required: true, status: "fail" },
+        { name: "second", required: true, status: "pass" },
+        { name: "third", required: true, status: "fail" },
+      ],
+    },
+  });
+  const feedback = f.sent.at(-1)!.split("Repair the candidate")[0]!;
+  expect(feedback).toContain("Gate failed twice");
+  expect(feedback).toMatch(/- first: fail in \d+ms/);
+  expect(feedback).toMatch(/- second: pass in \d+ms/);
+  expect(feedback).toMatch(/- third: fail in \d+ms/);
+  expect(feedback).toContain(
+    "BEGIN first STDOUT\nFIRST-OUT\n\nEND first STDOUT",
+  );
+  expect(feedback).toContain(
+    "BEGIN third STDERR\nTHIRD-ERR\n\nEND third STDERR",
+  );
+  expect(feedback).not.toContain("BEGIN second");
+  expect(feedback).not.toContain("SECOND-OUT");
+});
+
+const advisory = {
+  test: `command: "echo 'error: FAILED 3 tests'"\norder: 1\n`,
+  style: "command: echo ADVISORY-OUT; exit 1\norder: 2\nrequired: false\n",
+};
+
+test("an advisory failure is accepted without a worker message and kept in evidence; the pass rule ignores output", async () => {
+  const f = await checkedEngine(advisory);
+  const result = await submit(f, "src/keep.ts");
+  expect(result.runs.A).toMatchObject({
+    kind: "done",
+    checks: {
+      attempt: 1,
+      results: [
+        { name: "test", required: true, status: "pass" },
+        { name: "style", required: false, status: "fail" },
+      ],
+    },
+  });
+  // Only the dispatch prompt reached the worker; acceptance sends nothing to act on.
+  expect(f.sent).toHaveLength(1);
+  expect(f.sent[0]).not.toContain("BEGIN style");
+  const rows = factoryEvidence(f.factory.directory, "A")!;
+  const gate = rows.find((row) => row.kind === "gate")!;
+  expect(gate.outcome).toBe("gate-passed");
+  const content = JSON.parse(
+    evidenceContent(f.factory.directory, "A", gate.sha256),
+  );
+  expect(content.checks).toMatchObject([
+    { name: "test", required: true, status: "pass" },
+    {
+      name: "style",
+      required: false,
+      status: "fail",
+      outputTail: { stdout: "ADVISORY-OUT\n" },
+    },
+  ]);
+});
+
+test("a gate rejection carries a failed advisory check's tail beside the required failure", async () => {
+  const f = await checkedEngine({
+    ...advisory,
+    test: "command: echo REQUIRED-OUT; exit 1\norder: 1\n",
+  });
+  const result = await submit(f, "src/keep.ts");
+  expect(result.runs.A).toMatchObject({ kind: "running", attempt: 2 });
+  const feedback = f.sent.at(-1)!.split("Repair the candidate")[0]!;
+  expect(feedback).toContain("BEGIN test STDOUT\nREQUIRED-OUT\n");
+  expect(feedback).toContain("BEGIN style STDOUT\nADVISORY-OUT\n");
+  expect(feedback).toMatch(/- style \(advisory\): fail in \d+ms/);
+});
+
+test("a review rejection of a passed gate carries each failed advisory check's tail", async () => {
+  const f = await checkedEngine({
+    ...advisory,
+    docs: "command: echo DOCS-PASS\norder: 3\nrequired: false\n",
+  });
+  await put(f.root, { "agents/reviewer/agent.md": "---\n---\n" });
+  f.git("add", "-A");
+  f.git("commit", "-qm", "review on");
+  const run = (await submit(f, "src/keep.ts")).runs.A;
+  if (run?.kind !== "running" || !run.review)
+    throw new Error("Expected a candidate in review");
+  f.host.state = async () => "idle";
+  await f.tick("reconcile");
+  const review = (await f.tick("reconcile")).runs.A;
+  if (review?.kind !== "running" || !review.review)
+    throw new Error("Expected a sent review");
+  const finding = {
+    severity: "warning",
+    location: "src/keep.ts:1",
+    evidence: "REVIEW-FINDING",
+    correction: "Fix it",
+  };
+  await writeFile(
+    review.review.report,
+    JSON.stringify({
+      ticket: "A",
+      attempt: 1,
+      revision: review.review.revision,
+      base: review.review.base,
+      stage: "post-graft",
+      kind: "issues",
+      findings: [finding],
+    }),
+  );
+  const rejected = (await f.tick("reconcile")).runs.A;
+  expect(rejected).toMatchObject({
+    kind: "running",
+    attempt: 2,
+    rejectedBy: "review",
+  });
+  const feedback = f.sent.at(-1)!.split("Repair the candidate")[0]!;
+  expect(feedback).toContain("REVIEW-FINDING");
+  expect(feedback).toContain(
+    "BEGIN style (advisory, fail) STDOUT\nADVISORY-OUT\n",
+  );
+  expect(feedback).not.toContain("DOCS-PASS");
+  expect(feedback).not.toContain("BEGIN test");
+});
+
+test("a required check that times out, is killed or cannot start fails, and later checks still run", async () => {
+  const f = await checkedEngine({
+    slow: "command: sleep 5\norder: 1\ntimeoutMs: 300\n",
+    killed: "command: kill -9 $$\norder: 2\n",
+    missing: "command: /nonexistent/factory-check\norder: 3\n",
+    after: "command: echo AFTER-RAN\norder: 4\n",
+  });
+  const result = await submit(f, "src/keep.ts");
+  expect(result.runs.A).toMatchObject({
+    kind: "running",
+    attempt: 2,
+    checks: {
+      results: [
+        { name: "slow", status: "timeout" },
+        { name: "killed", status: "fail" },
+        { name: "missing", status: "fail" },
+        { name: "after", status: "pass" },
+      ],
+    },
+  });
+  const feedback = f.sent.at(-1)!;
+  expect(feedback).toMatch(/- slow: timeout in \d+ms/);
+  expect(feedback).toContain("Command timed out after 300ms");
+  // A gate with a killed or timed-out check has no exit status, so it is not rerun.
+  expect(feedback).not.toContain("Gate failed twice");
+  expect(
+    await readFile(join(f.factory.directory, "A-1.log"), "utf8"),
+  ).toContain("AFTER-RAN");
+});
+
+test("a check added or edited without reload does not change the active run's pinned gate", async () => {
+  const f = await checkedEngine(passing);
+  const run = (await f.tick("start")).runs.A;
+  if (run?.kind !== "running") throw new Error("Expected a running worker");
+  await put(f.root, {
+    "checks/test.yaml": "command: exit 1\norder: 1\n",
+    "checks/extra.yaml": "command: exit 9\norder: 2\n",
+  });
+  f.git("add", "-A");
+  f.git("commit", "-qm", "edit checks");
+  expect((await configuration(f.root)).checks?.map((c) => c.name)).toEqual([
+    "test",
+    "extra",
+  ]);
+  expect((await effectiveConfiguration(f.root)).checks).toEqual([
+    { name: "test", command: "echo ok", required: true, timeoutMs: 600_000 },
+  ]);
+  expect(
+    factoryDefinition(f.factory.directory, run.definition)?.checks,
+  ).toEqual([
+    { name: "test", command: "echo ok", required: true, timeoutMs: 600_000 },
+  ]);
+});
+
+test("the feed carries check names and statuses, never commands or output", async () => {
+  const canary = "CHECK-OUTPUT-CANARY";
+  const f = await checkedEngine({
+    test: `command: echo ${canary}; exit 2\norder: 1\n`,
+    style: `command: echo ${canary}\norder: 2\nrequired: false\n`,
+  });
+  await submit(f, "src/keep.ts");
+  const server = startDashboard({ root: f.root, port: 0 });
+  try {
+    const text = await (
+      await fetch(`http://localhost:${server.port}/api/status`)
+    ).text();
+    expect(text).not.toContain(canary);
+    expect(text).not.toContain("echo");
+    const task = JSON.parse(text).tasks.find(
+      (row: { id: string }) => row.id === "A",
+    );
+    expect(task.checks).toEqual({
+      attempt: 1,
+      results: [
+        { name: "test", required: true, status: "fail" },
+        { name: "style", required: false, status: "pass" },
+      ],
+    });
+  } finally {
+    await server.stop(true);
+  }
+});
+
+// A coordinator killed mid-check leaves its check running; restarted coordinators with a fixed
+// clock must keep it before its own saved deadline and kill it after.
+test.each([
+  ["shorter", 2000],
+  ["longer", 1_200_000],
+])(
+  "recovery enforces a %s check timeout saved with the check's process",
+  async (_name, timeoutMs) => {
+    const f = await checkedEngine({});
+    const marks = join(f.root, ".git");
+    await put(f.root, {
+      "checks/hang.yaml": `command: touch '${marks}/check-running'; sleep 30\norder: 1\ntimeoutMs: ${timeoutMs}\n`,
+    });
+    f.git("add", "-A");
+    f.git("commit", "-qm", "hanging check");
+    await f.tick("start");
+    const worktree = join(marks, "factory/worktrees/A");
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", worktree, ...args], {
+        encoding: "utf8",
+      }).trim();
+    await writeFile(join(worktree, "src/keep.ts"), "export {}; //\n");
+    git("commit", "-qam", "candidate");
+    const directory = f.factory.directory;
+    await writeFile(
+      join(directory, "A.report.json"),
+      JSON.stringify({
+        attempt: 1,
+        kind: "candidate",
+        revision: git("rev-parse", "HEAD"),
+      }),
+    );
+    const runner = join(marks, "coordinator.ts");
+    await writeFile(
+      runner,
+      `import {createFactory} from ${JSON.stringify(join(import.meta.dir, "native.ts"))};
+import {openStore} from ${JSON.stringify(join(import.meta.dir, "bookkeeping.fixture.ts"))};
+await createFactory(${JSON.stringify(f.root)}, {
+  async create() { throw new Error("Must not create"); },
+  async send() {}, async state() { return "idle"; }, watch() {}
+}, openStore).tick("reconcile", "T-owner");`,
+    );
+    const child = spawn("bun", [runner], { stdio: "ignore" });
+    for (let i = 0; i < 2000 && !existsSync(join(marks, "check-running")); i++)
+      await Bun.sleep(5);
+    const exited = new Promise((resolve) => child.once("exit", resolve));
+    child.kill("SIGKILL");
+    await exited;
+    const held = factoryStatus(directory).runs.A;
+    if (held?.kind !== "running" || !held.gate)
+      throw new Error("Expected a saved gate marker");
+    const { at, pid, deadline } = held.gate;
+    expect(deadline).toBe(at + timeoutMs);
+    const alive = () =>
+      spawnSync("bash", ["-c", `kill -0 -- -${pid}`]).status === 0;
+    const restart = (clock: number) =>
+      createFactory(f.root, f.host, openStore, () => clock).tick(
+        "reconcile",
+        "T-owner",
+      );
+    try {
+      // Just before its own deadline the check keeps running, also past the default 600000 ms
+      // for the longer timeout.
+      await restart(deadline! - 1);
+      expect(alive()).toBe(true);
+      expect(factoryStatus(directory).runs.A).toMatchObject({
+        gate: { pid, deadline },
+      });
+      await restart(deadline! + 1);
+      const stopped = spawnSync("bash", [
+        "-c",
+        `for i in {1..500}; do kill -0 -- -${pid} 2>/dev/null || exit 0; sleep 0.01; done; exit 1`,
+      ]);
+      expect(stopped.status).toBe(0);
+      expect(
+        (factoryEvents(directory, 0, 500) ?? [])
+          .filter((event) => event.action === "gate-killed")
+          .map((event) => event.detail),
+      ).toEqual(["1"]);
+    } finally {
+      spawnSync("bash", ["-c", `kill -9 -- -${pid} 2>/dev/null`]);
+    }
+  },
+);

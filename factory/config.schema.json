@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Factory config directory v1",
-  "description": "Per-file settings under factory/config/. The loader composes them into the flat object that definition.schema.json describes. Each file's setting names must be listed here.",
+  "description": "Per-file settings under factory/config/. The loader composes them into the flat object that definition.schema.json describes. Each file's setting names must be listed here. factory.yaml needs verify exactly when checks/ is absent.",
   "$defs": {
     "factory.yaml": {
       "type": "object",
@@ -12,7 +12,6 @@
         "prd",
         "tickets",
         "scope",
-        "verify",
         "permissions"
       ],
       "properties": {
@@ -107,6 +106,17 @@
         "setupTimeoutMs": {
           "$ref": "definition.schema.json#/properties/setupTimeoutMs"
         }
+      }
+    },
+    "checks/<name>.yaml": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "order"],
+      "properties": {
+        "command": { "type": "string", "minLength": 1 },
+        "required": { "type": "boolean", "default": true },
+        "timeoutMs": { "type": "integer", "minimum": 1, "default": 600000 },
+        "order": { "type": "integer", "minimum": 1 }
       }
     },
     "agents/observer/agent.md": {

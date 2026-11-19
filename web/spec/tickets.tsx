@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import {
+  Fragment,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
 import {
@@ -46,7 +52,6 @@ type Choose = (id: string | null) => void;
 
 // The kit's orange hue, pulled inside sRGB: its own 0.31 chroma clips to pure red on screen.
 const KEY = { l: 0.67, c: 0.18, h: 48 };
-const CHECKS = ["test", "lint", "typecheck", "format", "fallow", "diff-check"];
 const PAGE = 4; // COMING rows per page
 const LOG = 50; // notifications kept for the list
 const RULE_Y = 535; // just above the ACTIVE rule in web/index.html
@@ -80,6 +85,7 @@ const NONE: Ticket = {
   parked: false,
   rejections: [],
   lifecycle: "",
+  checks: [],
 };
 const COLUMNS: Column<Ticket>[] = [
   { key: "id", label: "Ticket", width: "250px", render: (row) => row.id },
@@ -212,6 +218,20 @@ function Reason({ text }: { text: string }) {
   );
 }
 
+// The last gate's recorded checks. The arrow sits outside each chip, so a failed chip's underline
+// stays off it.
+function Checks({ checks }: { checks: Ticket["checks"] }) {
+  if (!checks.length) return <>no per-check results recorded</>;
+  return checks.map((check, i) => (
+    <Fragment key={check.name}>
+      {i ? " → " : ""}
+      <i data-check={check.status} data-advisory={!check.required || undefined}>
+        {check.label}
+      </i>
+    </Fragment>
+  ));
+}
+
 // The gray LCD: what the feed records about one ticket, beside the gate's fixed rules.
 function Sheet({ ticket }: { ticket: Ticket }) {
   return (
@@ -227,18 +247,13 @@ function Sheet({ ticket }: { ticket: Ticket }) {
           ))}
         </div>
         <div data-on={ticket.status === "idle" || undefined}>
-          <dt>Gate · 10 min cap</dt>
+          <dt>Gate · each check under its own cap</dt>
           <dd>
             <span>1</span>candidate from report.json: revision = HEAD, tree
             clean, every path in scope
           </dd>
           <dd data-checks>
-            <span>2</span>verify:{" "}
-            {CHECKS.map((check, i) => (
-              <i key={check} style={line(i)}>
-                {check}
-              </i>
-            ))}
+            <span>2</span>verify: <Checks checks={ticket.checks} />
           </dd>
           <dd>
             <span>3</span>unchanged: HEAD still the candidate, tree still clean
