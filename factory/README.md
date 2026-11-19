@@ -269,8 +269,9 @@ drift and unknown-outcome handling apply unchanged: an unrelated schedule on the
 preserved and recorded as a problem, an unconfirmed change is recorded `unknown`, and the
 override persists either way. While an automation is enabled the schedule is not anchored to a
 pending provider reset, so automations keep waking; a continuation is still gated by its own
-reset time at the first wake after it. A read-back that still shows the last confirmed reset
-anchor does not confirm the change, even when the period is unchanged; the monitor stays `unknown`.
+reset time at the first wake after it. A read-back whose start is still in the future, whether
+the anchor was confirmed or not, does not confirm the change, even when the period is unchanged;
+the monitor stays `unknown`.
 
 An automation is due when its latest scheduled minute at or before the wake is not before the time
 it was armed (loaded enabled, or switched on) and is later than its last run. Missed wakes
@@ -780,10 +781,12 @@ schedule or notification calls.
   The object also contained `agentMode`, `reasoningEffort`, `disabledReason`, `nextRunAt`,
   `lastRunAt`, `lastRunError`, `createdAt` and `updatedAt`. There were no top-level `schedule`
   or `run_mode` fields. Compare the parsed RRULE frequency and interval in `trigger.schedule`,
-  `runMode` and `enabled`. Ignore unknown metadata and the platform anchor for the ordinary rule.
-  For a provider-reset wake, also confirm the requested anchor by instant, accepting UTC or TZID
-  normalization. A healthy owned rule without that anchor is an unapplied change to retry, not
-  configuration drift. Fingerprint alone determines ownership, even when those settings drift.
+  `runMode` and `enabled`. Ignore unknown metadata and, for the ordinary rule, a platform anchor
+  whose start is not in the future. A start still ahead delays every wake, confirmed or not, and
+  is an unapplied change to retry, not configuration drift. For a provider-reset wake, also
+  confirm the requested anchor by instant, accepting UTC or TZID normalization, with the same
+  retry rule when it is missing. Fingerprint alone determines ownership, even when those settings
+  drift.
 
 - `clear_schedule` returned `{"deleted":true}`; the next `get_schedule` returned `null`.
 

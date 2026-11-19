@@ -136,31 +136,54 @@ function recurrenceMinutes(value: unknown) {
     : undefined;
 }
 
-function matchingAnchor(schedule: string, wakeAt: number | undefined) {
-  if (wakeAt === undefined) return true;
+// The instant as a compact wall clock in `zone`, comparable to a DTSTART line's digits.
+function wallClock(zone: string, at: number) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: zone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    })
+      .formatToParts(at)
+      .map(({ type, value }) => [type, value]),
+  );
+  return `${parts.year}${parts.month}${parts.day}T${parts.hour}${parts.minute}${parts.second}`;
+}
+
+// The UTC instant as a DTSTART line's digits.
+function utcClock(at: number) {
+  return new Date(at).toISOString().replace(/[-:]|\.\d{3}Z$/g, "");
+}
+
+function matchingAnchor(schedule: string, wakeAt: number) {
   const lines = schedule.split(/\r?\n/);
   if (lines.includes(anchor(wakeAt))) return true;
   const zoned = /^DTSTART;TZID=([^:\r\n]+):(\d{8}T\d{6})\r?$/m.exec(schedule);
   if (!zoned) return false;
   try {
-    const parts = Object.fromEntries(
-      new Intl.DateTimeFormat("en-US", {
-        timeZone: zoned[1],
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-        hourCycle: "h23",
-      })
-        .formatToParts(wakeAt)
-        .map(({ type, value }) => [type, value]),
-    );
-    return (
-      zoned[2] ===
-      `${parts.year}${parts.month}${parts.day}T${parts.hour}${parts.minute}${parts.second}`
-    );
+    return zoned[2] === wallClock(zoned[1]!, wakeAt);
+  } catch {
+    return false;
+  }
+}
+
+// Whether the registration's first wake sits ahead of `at`, so the clock would not fire when an
+// enabled automation or the watchdog itself needs it. A minute's grace covers a provider that
+// rounds a fresh unanchored start up to the next minute; only a deliberate anchor sits further
+// out. String comparison of one zone's wall clocks is exact, with no epoch conversion.
+function delaysWake(schedule: string, at: number) {
+  const grace = at + 60_000;
+  const utc = /^DTSTART:(\d{8}T\d{6})Z\r?$/m.exec(schedule);
+  if (utc) return utc[1]! > utcClock(grace);
+  const zoned = /^DTSTART;TZID=([^:\r\n]+):(\d{8}T\d{6})\r?$/m.exec(schedule);
+  if (!zoned) return false;
+  try {
+    return zoned[2]! > wallClock(zoned[1]!, grace);
   } catch {
     return false;
   }
@@ -174,18 +197,20 @@ function ownedMinutes(current: Record<string, unknown>) {
     : undefined;
 }
 
-// Whether the registration's anchor is the wanted one. Without a wanted anchor, the last confirmed
-// one still in the registration means a change that never applied.
-function anchored(schedule: string, wakeAt?: number, staleWake?: unknown) {
-  if (wakeAt === undefined && typeof staleWake === "number")
-    return !matchingAnchor(schedule, staleWake);
-  return matchingAnchor(schedule, wakeAt);
+// Whether the registration wakes as wanted. Without a wanted anchor, any start still in the
+// future delays the clock, confirmed or not: an applied anchor whose confirmation was lost is
+// just as delaying as a stale one, so judge the actual registration, not the recorded intent.
+function anchored(schedule: string, wakeAt: number | undefined, at: number) {
+  return wakeAt === undefined
+    ? !delaysWake(schedule, at)
+    : matchingAnchor(schedule, wakeAt);
 }
 
 function registration(
   current: Record<string, unknown> | null,
   expected: Record<string, unknown>,
-  wakeAt?: number,
+  wakeAt: number | undefined,
+  at: number,
 ) {
   if (current === null) return "missing";
   const marker = String(expected.fingerprint);
@@ -200,7 +225,7 @@ function registration(
   if (minutes === undefined) return "drifted";
   // Another period is this factory's own registration to retime, like a stale anchor.
   return minutes === Number(expected.interval ?? watchdogMinutes) &&
-    anchored(trigger!.schedule as string, wakeAt, expected.staleWake)
+    anchored(trigger!.schedule as string, wakeAt, at)
     ? "owned"
     : "unanchored";
 }
@@ -247,6 +272,7 @@ async function changeRegistration(
   wanted: boolean,
   wakeAt: number | undefined,
   target: ThreadID | undefined,
+  at: number,
 ) {
   // Omitting the thread keeps the owner's own registration call exactly as observed.
   const thread = target ? { thread: target } : {};
@@ -273,7 +299,7 @@ async function changeRegistration(
     )
     .catch(() => undefined);
   // A lost acknowledgment is not a failed effect. Inspect before deciding anything else.
-  return registration(await readSchedule(tools, target), expected, wakeAt);
+  return registration(await readSchedule(tools, target), expected, wakeAt, at);
 }
 
 async function sendNotification(
@@ -330,7 +356,13 @@ export async function removePreviousSchedule(
   fingerprint: string,
 ) {
   const expected = { fingerprint };
-  const previous = registration(await readSchedule(tools, thread), expected);
+  // The anchor verdict is irrelevant here: anything but missing or conflict gets cleared.
+  const previous = registration(
+    await readSchedule(tools, thread),
+    expected,
+    undefined,
+    Date.now(),
+  );
   if (previous === "missing" || previous === "conflict") return;
   let problem: string | undefined;
   try {
@@ -338,7 +370,12 @@ export async function removePreviousSchedule(
   } catch (error) {
     problem = String(error);
   }
-  const current = registration(await readSchedule(tools, thread), expected);
+  const current = registration(
+    await readSchedule(tools, thread),
+    expected,
+    undefined,
+    Date.now(),
+  );
   if (problem || (current !== "missing" && current !== "conflict"))
     throw new WatchdogUnavailable(
       ["Previous owner's watchdog clear is unconfirmed", problem]
@@ -465,7 +502,6 @@ export async function reconcileSchedule(
     title,
     prompt,
     interval: clockMinutes(automations),
-    staleWake: monitor.wakeAt,
   };
   const settled = wanted ? "installed" : "cleared";
   const resets = Object.values(state.runs).flatMap((run) => {
@@ -487,6 +523,7 @@ export async function reconcileSchedule(
       await readSchedule(tools, observer),
       expected,
       wakeAt,
+      at,
     );
     if (current === "conflict" && wanted) {
       monitor.schedule = "conflict";
@@ -510,7 +547,7 @@ export async function reconcileSchedule(
     // SQLite intent is not a remote receipt. Always inspect, even after a successful call.
     if (
       !satisfied(
-        await changeRegistration(tools, expected, wanted, wakeAt, observer),
+        await changeRegistration(tools, expected, wanted, wakeAt, observer, at),
         wanted,
       )
     )

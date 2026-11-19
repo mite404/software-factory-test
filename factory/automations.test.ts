@@ -487,6 +487,172 @@ test("a failed schedule change that leaves the old provider-reset anchor stays u
   expect(sets).toBe(before + 1);
 });
 
+test("an applied but unconfirmed reset anchor never holds back an enabled automation", async () => {
+  const time = at(12, 0);
+  const fixture = watchdogFixture();
+  let loseReadback = false;
+  let sets = 0;
+  const tools = {
+    async call(name: string, input: Record<string, unknown>) {
+      if (name === "amp.get_schedule" && loseReadback && sets > 0) {
+        loseReadback = false;
+        throw new Error("Lost read-back");
+      }
+      if (name === "amp.set_schedule") sets++;
+      return fixture.tools.call(name, input);
+    },
+  };
+  const state: State = {
+    enabled: true,
+    owner: "T-owner",
+    runs: {
+      A: {
+        kind: "running",
+        base: "abc",
+        worktree: "/TEST/worktree",
+        thread: "T-worker",
+        attempt: 1,
+        delivery: "sent",
+        incident: {
+          id: "limit",
+          ticket: "A",
+          owner: "T-owner",
+          base: "abc",
+          attempt: 1,
+          reason: "provider-limit",
+          recovery: "wait",
+          delivery: "sent",
+          providerLimit: {
+            thread: "T-worker",
+            message: "Private",
+            observedAt: time,
+            resetAt: at(19, 0),
+          },
+        },
+      },
+    },
+  };
+  const sync = () =>
+    reconcileSchedule(
+      "/TEST/project",
+      "/TEST/git",
+      state,
+      [{ id: "A", brief: "Private", after: [] }],
+      tools,
+      () => {},
+      true,
+      "T-owner",
+      time,
+    );
+  const schedule = () =>
+    JSON.stringify(fixture.schedules.get("T-owner")?.trigger ?? "");
+  // The reset anchor lands remotely but its read-back fails, so nothing confirms it.
+  loseReadback = true;
+  expect(await sync().catch(String)).toMatch(/inspection failed/);
+  expect(state.monitor?.schedule).toBe("unknown");
+  expect(state.monitor?.wakeAt).toBeUndefined();
+  expect(schedule()).toContain("DTSTART:20261119T190100Z");
+  // A daily automation keeps the 30-minute period; the unconfirmed anchor must not hold it back.
+  state.automations = {
+    daily: {
+      schedule: "0 13 * * *",
+      prompt: "Check.",
+      authored: true,
+      armedAt: time,
+    },
+  };
+  const before = sets;
+  await sync();
+  expect(sets).toBe(before + 1);
+  expect(state.monitor?.schedule).toBe("installed");
+  expect(state.monitor?.wakeAt).toBeUndefined();
+  expect(schedule()).not.toContain("DTSTART:20261119T190100Z");
+  await sync();
+  expect(sets).toBe(before + 1);
+});
+
+test("a pending anchor that was never confirmed cannot hide behind the last confirmed one", async () => {
+  const time = at(12, 0);
+  const fixture = watchdogFixture();
+  let sets = 0;
+  const tools = {
+    async call(name: string, input: Record<string, unknown>) {
+      if (name === "amp.set_schedule") sets++;
+      return fixture.tools.call(name, input);
+    },
+  };
+  const state: State = {
+    enabled: true,
+    owner: "T-owner",
+    runs: {
+      A: {
+        kind: "running",
+        base: "abc",
+        worktree: "/TEST/worktree",
+        thread: "T-worker",
+        attempt: 1,
+        delivery: "sent",
+        incident: {
+          id: "limit",
+          ticket: "A",
+          owner: "T-owner",
+          base: "abc",
+          attempt: 1,
+          reason: "provider-limit",
+          recovery: "wait",
+          delivery: "sent",
+          providerLimit: {
+            thread: "T-worker",
+            message: "Private",
+            observedAt: time,
+            resetAt: at(19, 0),
+          },
+        },
+      },
+    },
+  };
+  const sync = () =>
+    reconcileSchedule(
+      "/TEST/project",
+      "/TEST/git",
+      state,
+      [{ id: "A", brief: "Private", after: [] }],
+      tools,
+      () => {},
+      true,
+      "T-owner",
+      time,
+    );
+  const schedule = () =>
+    JSON.stringify(fixture.schedules.get("T-owner")?.trigger ?? "");
+  await sync();
+  expect(state.monitor?.wakeAt).toBe(at(19, 1));
+  expect(schedule()).toContain("DTSTART:20261119T190100Z");
+  // A retime to a later reset landed remotely but was never confirmed: the monitor still records
+  // 19:01 while the registration wakes at 20:01 (read back in normalized TZID form, 15:01 EST).
+  fixture.schedules.get("T-owner")!.trigger = {
+    provider: "schedule",
+    schedule:
+      "DTSTART;TZID=America/New_York:20261119T150100\r\nRRULE:FREQ=MINUTELY;INTERVAL=30",
+  };
+  state.automations = {
+    daily: {
+      schedule: "0 13 * * *",
+      prompt: "Check.",
+      authored: true,
+      armedAt: time,
+    },
+  };
+  const before = sets;
+  await sync();
+  expect(sets).toBe(before + 1);
+  expect(state.monitor?.schedule).toBe("installed");
+  expect(state.monitor?.wakeAt).toBeUndefined();
+  expect(schedule()).not.toContain("20261119T150100");
+  await sync();
+  expect(sets).toBe(before + 1);
+});
+
 test("accepting a definition and its automations is one write: a failure leaves the old digest with the old automations, on reload and on first start", async () => {
   const f = await engine({
     pulse: automationFile("*/5 * * * *", true, "Old."),

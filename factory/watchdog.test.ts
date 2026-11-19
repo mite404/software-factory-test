@@ -102,7 +102,7 @@ test("owned schedule converges after lost create/clear acknowledgments and prese
     await sync();
     expect(actual).toMatchObject({
       trigger: {
-        schedule: "DTSTART:20261114T143900Z\nRRULE:FREQ=MINUTELY;INTERVAL=30",
+        schedule: "DTSTART:19700101T000000Z\nRRULE:FREQ=MINUTELY;INTERVAL=30",
       },
       runMode: "existing",
       enabled: true,
@@ -388,7 +388,7 @@ test.each([false, true])(
     expect(state.monitor?.wakeAt).toBeUndefined();
     expect(await fixture.tools.call("amp.get_schedule", {})).toMatchObject({
       trigger: {
-        schedule: "DTSTART:20261114T143900Z\nRRULE:FREQ=MINUTELY;INTERVAL=30",
+        schedule: "DTSTART:19700101T000000Z\nRRULE:FREQ=MINUTELY;INTERVAL=30",
       },
     });
   },

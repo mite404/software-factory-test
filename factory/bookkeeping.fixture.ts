@@ -62,7 +62,7 @@ export function watchdogFixture(
               provider: "schedule",
               schedule: String(input.schedule).startsWith("DTSTART:")
                 ? input.schedule
-                : `DTSTART:20261114T143900Z\n${String(input.schedule)}`,
+                : `DTSTART:19700101T000000Z\n${String(input.schedule)}`,
               scheduleLabel: input.schedule_label,
             },
             runMode: input.run_mode,
