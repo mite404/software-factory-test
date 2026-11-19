@@ -134,8 +134,8 @@ A baseline failure goes back to the Foreman; it does not widen the worker's scop
 
 ## Done when
 
-- [ ] A declared automation runs on schedule through the factory's one Amp schedule.
-- [ ] The Foreman lists, enables, disables and runs automations with control calls only.
-- [ ] Missed wakes produce one run, and an unknown send is never repeated automatically.
-- [ ] Non-owner calls are refused and no automation touches a ticket's run.
-- [ ] Full gates, guard and a fresh cold review pass on the accepted revision.
+- [x] A declared automation runs on schedule through the factory's one Amp schedule.
+- [x] The Foreman lists, enables, disables and runs automations with control calls only.
+- [x] Missed wakes produce one run, and an unknown send is never repeated automatically.
+- [x] Non-owner calls are refused and no automation touches a ticket's run.
+- [x] Full gates, guard and a fresh cold review pass on the accepted revision.
