@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import type { Automation } from "./config";
+import { validVerificationCapability, type Automation } from "./config";
 import { validCron } from "./cron";
 import { validReview, type Review } from "./review";
 import { validExecutor, type Executor } from "./executor";
@@ -1435,12 +1435,14 @@ function validStageFacts(run: Record<string, unknown>): boolean {
 
 const checkName = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-function exactKeys(value: unknown, keys: string[]) {
+function exactKeys(value: unknown, keys: string[], optional: string[] = []) {
   return (
     !!value &&
     typeof value === "object" &&
     !Array.isArray(value) &&
-    Object.keys(value).length === keys.length &&
+    Object.keys(value).every(
+      (key) => keys.includes(key) || optional.includes(key),
+    ) &&
     keys.every((key) => Object.hasOwn(value, key))
   );
 }
@@ -1450,13 +1452,14 @@ function namedChecks(
   value: unknown,
   keys: string[],
   valid: (item: Record<string, unknown>) => boolean,
+  optional: string[] = [],
 ) {
   if (!Array.isArray(value) || !value.length) return false;
   const items = value as Record<string, unknown>[];
   return (
     items.every(
       (item) =>
-        exactKeys(item, keys) &&
+        exactKeys(item, keys, optional) &&
         typeof item.name === "string" &&
         checkName.test(item.name) &&
         typeof item.required === "boolean" &&
@@ -1485,7 +1488,12 @@ function validPinnedChecks(value: unknown) {
     namedChecks(
       value,
       ["name", "command", "required", "timeoutMs"],
-      (item) => text(item.command) && positiveInteger(item.timeoutMs),
+      (item) =>
+        text(item.command) &&
+        positiveInteger(item.timeoutMs) &&
+        (item.capability === undefined ||
+          validVerificationCapability(item.capability)),
+      ["capability"],
     )
   );
 }

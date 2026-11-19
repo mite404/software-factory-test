@@ -3,6 +3,7 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import {
+  chmod,
   link,
   mkdir,
   mkdtemp,
@@ -17,6 +18,7 @@ import { dirname, join } from "node:path";
 import { openStore, watchdogFixture } from "./bookkeeping.fixture";
 import { digestConfigFiles, readConfigFiles } from "./config";
 import {
+  checkVerificationTools,
   configuration,
   createFactory,
   effectiveConfiguration,
@@ -1037,6 +1039,289 @@ async function checkedEngine(checks: Record<string, string>) {
   };
   return { ...f, sent };
 }
+
+async function installedTool(name: string) {
+  const root = await mkdtemp(join(tmpdir(), "factory-tool-"));
+  roots.push(root);
+  const tool = join(root, name);
+  const count = join(root, "invocations");
+  await writeFile(count, "");
+  await writeFile(
+    tool,
+    `#!/bin/sh
+case "$1" in
+  --version) echo version >> '${count}'; echo '${name} 1.7' ;;
+  run) echo check >> '${count}'; echo 'verified ${name}' ;;
+  *) exit 9 ;;
+esac
+`,
+  );
+  await chmod(tool, 0o755);
+  const command = `'${tool}' run`;
+  const capability = {
+    tool,
+    versionArgs: ["--version"],
+    coverage: [`${name} contracts`],
+  };
+  return {
+    tool,
+    count,
+    command,
+    capability,
+    check: Bun.YAML.stringify({ command, order: 1, capability }),
+  };
+}
+
+test("declared capabilities reuse two installed tools and bind private results without observation reruns", async () => {
+  for (const name of ["action-checks", "verification-cli"]) {
+    const tool = await installedTool(name);
+    const f = await checkedEngine({ local: tool.check });
+    const result = await submit(f, "src/keep.ts");
+    const done = result.runs.A;
+    if (done?.kind !== "done") throw new Error("Expected accepted candidate");
+    const gate = factoryEvidence(f.factory.directory, "A")!.find(
+      (row) => row.kind === "gate",
+    )!;
+    expect(gate).toMatchObject({
+      revision: done.revision,
+      outcome: "gate-passed",
+    });
+    expect(
+      JSON.parse(evidenceContent(f.factory.directory, "A", gate.sha256)).checks,
+    ).toMatchObject([
+      {
+        name: "local",
+        command: tool.command,
+        required: true,
+        status: "pass",
+        revision: done.revision,
+        capability: {
+          ...tool.capability,
+          executable: tool.tool,
+          version: `${name} 1.7`,
+        },
+      },
+    ]);
+    expect(
+      factoryDefinition(f.factory.directory, done.definition)?.checks?.[0]
+        ?.capability,
+    ).toEqual(tool.capability);
+    const reopened = createFactory(f.root, f.host, openStore);
+    await reopened.tick("status");
+    await reopened.tick(
+      "reconcile",
+      "T-owner",
+      f.host.state,
+      undefined,
+      f.tools,
+    );
+    await effectiveDefinition(f.root);
+    const server = startDashboard({ root: f.root, port: 0 });
+    try {
+      for (const path of [
+        "/api/status",
+        "/api/events",
+        "/api/evidence?ticket=A",
+        "/api/definition",
+      ]) {
+        const response = await fetch(`http://localhost:${server.port}${path}`);
+        expect(response.status).toBe(200);
+        expect(await response.text()).not.toContain(tool.tool);
+      }
+    } finally {
+      await server.stop(true);
+    }
+    expect(await readFile(tool.count, "utf8")).toBe("version\ncheck\n");
+  }
+});
+
+test("an executable with an empty, failing or timed-out version probe never runs its check", async () => {
+  for (const probe of ["exit 0", "echo unconfirmed; exit 3", "sleep 5"]) {
+    const tool = await installedTool("unconfirmed");
+    await writeFile(
+      tool.tool,
+      `#!/bin/sh
+if [ "$1" = --version ]; then ${probe}; fi
+echo check >> '${tool.count}'
+`,
+    );
+    const f = await checkedEngine({
+      local: Bun.YAML.stringify({
+        command: tool.command,
+        order: 1,
+        timeoutMs: 1000,
+        capability: tool.capability,
+      }),
+    });
+    expect((await submit(f, "src/keep.ts")).runs.A).toMatchObject({
+      kind: "running",
+      attempt: 2,
+    });
+    expect(await readFile(tool.count, "utf8")).toBe("");
+    const gate = factoryEvidence(f.factory.directory, "A")!.find(
+      (row) => row.kind === "gate",
+    )!;
+    expect(gate.outcome).toBe("gate-failed");
+    expect(
+      JSON.parse(evidenceContent(f.factory.directory, "A", gate.sha256))
+        .checks[0],
+    ).toMatchObject({ capability: { executable: tool.tool, version: null } });
+  }
+});
+
+test("a missing required capability rejects despite a green advisory, without running the missing check", async () => {
+  const required = await installedTool("formal-check");
+  const advisory = await installedTool("ci-watch");
+  const f = await checkedEngine({
+    required: required.check,
+    advisory: Bun.YAML.stringify({
+      command: advisory.command,
+      order: 2,
+      required: false,
+      capability: advisory.capability,
+    }),
+  });
+  await rm(required.tool);
+  const config = await configuration(f.root);
+  expect(
+    await refused(checkVerificationTools(f.root, config.checks)),
+  ).toContain("Verification capability required");
+  const run = (await submit(f, "src/keep.ts")).runs.A;
+  expect(run).toMatchObject({
+    kind: "running",
+    attempt: 2,
+    checks: {
+      results: [
+        { name: "required", required: true, status: "fail" },
+        { name: "advisory", required: false, status: "pass" },
+      ],
+    },
+  });
+  expect(f.sent.at(-1)).toContain(
+    "Capability unavailable or version unconfirmed",
+  );
+  expect(f.sent.at(-1)).not.toContain("Gate failed twice");
+  expect(await readFile(required.count, "utf8")).toBe("");
+  expect(await readFile(advisory.count, "utf8")).toBe("version\ncheck\n");
+  const gate = factoryEvidence(f.factory.directory, "A")!.find(
+    (row) => row.kind === "gate",
+  )!;
+  expect(gate.outcome).toBe("gate-failed");
+  expect(
+    JSON.parse(evidenceContent(f.factory.directory, "A", gate.sha256))
+      .checks[0],
+  ).toMatchObject({
+    command: required.command,
+    revision: gate.revision,
+    capability: {
+      tool: required.tool,
+      executable: null,
+      version: null,
+      coverage: ["formal-check contracts"],
+    },
+  });
+});
+
+test("an unavailable advisory capability cannot reject a passing mandatory tool", async () => {
+  const required = await installedTool("local-check");
+  const advisory = await installedTool("optional-check");
+  const f = await checkedEngine({
+    required: required.check,
+    advisory: Bun.YAML.stringify({
+      command: advisory.command,
+      order: 2,
+      required: false,
+      capability: advisory.capability,
+    }),
+  });
+  await rm(advisory.tool);
+  await checkVerificationTools(f.root, (await configuration(f.root)).checks);
+  expect((await submit(f, "src/keep.ts")).runs.A).toMatchObject({
+    kind: "done",
+    checks: {
+      results: [
+        { name: "required", status: "pass" },
+        { name: "advisory", status: "fail" },
+      ],
+    },
+  });
+  expect(await readFile(required.count, "utf8")).toBe(
+    "version\nversion\ncheck\n",
+  );
+  expect(await readFile(advisory.count, "utf8")).toBe("");
+});
+
+test("capability keys and incomplete contracts are refused at definition load", async () => {
+  const f = await repository();
+  const valid = {
+    tool: "some-tool",
+    versionArgs: ["--version"],
+    coverage: ["contracts"],
+  };
+  for (const capability of [
+    { ...valid, unknownCapability: true },
+    { ...valid, tool: " " },
+    { ...valid, coverage: [] },
+    { ...valid, versionArgs: [] },
+    { tool: "some-tool", coverage: ["contracts"] },
+  ]) {
+    await put(
+      f.root,
+      checked({
+        test: Bun.YAML.stringify({ command: "true", order: 1, capability }),
+      }),
+    );
+    expect(await refused(configuration(f.root))).toContain(
+      "checks/test.yaml: invalid capability",
+    );
+  }
+});
+
+test("a stale passing capability gate cannot accept a rebased candidate after its required tool disappears", async () => {
+  const tool = await installedTool("revision-check");
+  const f = await checkedEngine({ local: tool.check });
+  await put(f.root, { "agents/reviewer/agent.md": "---\n---\n" });
+  f.git("add", "-A");
+  f.git("commit", "-qm", "review on");
+  await submit(f, "src/keep.ts");
+  await f.tick("reconcile");
+  const run = (await f.tick("reconcile")).runs.A;
+  if (run?.kind !== "running" || !run.review)
+    throw new Error("Expected a sent review");
+  const review = run.review;
+  await writeFile(join(f.root, "src/independent.ts"), "export {};\n");
+  f.git("add", "src/");
+  f.git("commit", "-qm", "advance target");
+  await rm(tool.tool);
+  await writeFile(
+    review.report,
+    JSON.stringify({
+      ticket: "A",
+      attempt: 1,
+      revision: review.revision,
+      base: review.base,
+      stage: "post-graft",
+      kind: "pass",
+      findings: [],
+    }),
+  );
+  const changed = (await f.tick("reconcile")).runs.A;
+  expect(changed).toMatchObject({
+    kind: "running",
+    attempt: 2,
+    checks: { results: [{ name: "local", status: "fail" }] },
+  });
+  const gates = factoryEvidence(f.factory.directory, "A")!.filter(
+    (row) => row.kind === "gate",
+  );
+  expect(gates.map((row) => row.outcome)).toEqual([
+    "gate-passed",
+    "gate-failed",
+  ]);
+  expect(gates[0]!.revision).toBe(review.revision);
+  expect(gates[1]!.revision).not.toBe(review.revision);
+  expect(await readFile(tool.count, "utf8")).toBe("version\ncheck\n");
+});
 
 test("every check runs after earlier failures, and one rejection names each failure with its own tail", async () => {
   const f = await checkedEngine({

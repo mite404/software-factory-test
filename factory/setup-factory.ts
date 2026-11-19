@@ -17,6 +17,7 @@ import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual, parseArgs } from "node:util";
 import {
+  checkVerificationTools,
   configuration,
   effectiveDefinition,
   lightRole,
@@ -25,7 +26,7 @@ import {
   parseSetup,
   parseWorkerEffort,
 } from "./native";
-import { hasConfigDefinition } from "./config";
+import { hasConfigDefinition, type Check } from "./config";
 import { reviewerModel } from "./persistence";
 
 function discoverStore() {
@@ -49,8 +50,13 @@ function resolveStore(path?: string) {
   return store;
 }
 
-async function requireDashboard(root: string, check: boolean) {
+async function requireInstallation(
+  root: string,
+  check: boolean,
+  checks?: Check[],
+) {
   if (!check) return;
+  await checkVerificationTools(root, checks);
   for (const file of dashboardFiles)
     await access(join(root, dashboardDir, file));
   if ((await servicesAppend(root)) !== "")
@@ -70,9 +76,9 @@ function hasDefinition(root: string) {
 
 async function checkOrReuse(root: string, pluginPath: string, check: boolean) {
   if (!check && !hasDefinition(root)) return false;
-  await configuration(root);
+  const config = await configuration(root);
   await access(pluginPath);
-  await requireDashboard(root, check);
+  await requireInstallation(root, check, config.checks);
   process.stdout.write(
     check
       ? "SETUP OK (execution remains separately controlled)\n"
