@@ -131,6 +131,22 @@
           "$ref": "definition.schema.json#/properties/observer/properties/effort"
         }
       }
+    },
+    "automations/<name>/automation.md": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schedule"],
+      "properties": {
+        "schedule": {
+          "type": "string",
+          "description": "Five-field UTC cron: minute hour day-of-month month day-of-week. Quote it in YAML."
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Authored default; the control override wins until the next reload changes this value."
+        }
+      }
     }
   }
 }

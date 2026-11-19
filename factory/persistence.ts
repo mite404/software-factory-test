@@ -9,6 +9,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import type { Automation } from "./config";
+import { validCron } from "./cron";
 import { validReview, type Review } from "./review";
 import { validExecutor, type Executor } from "./executor";
 import { validDeliveryIntent, type DeliveryIntent } from "./delivery";
@@ -1008,6 +1010,24 @@ export function runStage(run: Run | undefined, intake?: Task["intake"]) {
   };
 }
 
+/** One loaded automation: the authored schedule and prompt, the authored default and the control
+ * override over it, when it was last armed, and its last send. `unknown` is written before the
+ * send, so a crash or a lost reply leaves it and the clock never repeats that send. */
+export type AutomationRecord = {
+  schedule: string;
+  prompt: string;
+  authored: boolean;
+  override?: boolean;
+  armedAt: number;
+  lastRunAt?: number;
+  lastOutcome?: "sent" | "unknown";
+};
+
+/** Whether the control override, else the authored default, turns the automation on. */
+export function automationEnabled(record: AutomationRecord) {
+  return record.override ?? record.authored;
+}
+
 export type State = {
   enabled: boolean;
   owner?: ThreadID;
@@ -1032,6 +1052,8 @@ export type State = {
     /** Removed observer threads; they keep no control right of any kind. */
     retiredObservers?: ThreadID[];
   };
+  /** Per-automation clock state, keyed by name; set from the loaded definition on reload. */
+  automations?: Record<string, AutomationRecord>;
   /** Last inspected registration and reserved notification effects; not a platform health guarantee. */
   monitor?: {
     fingerprint: string;
@@ -1798,6 +1820,32 @@ function validateMonitor(value: unknown) {
   }
 }
 
+function validAutomationRun(item: Record<string, unknown>) {
+  return (
+    (item.override === undefined || typeof item.override === "boolean") &&
+    (item.lastRunAt === undefined || timestamp(item.lastRunAt)) &&
+    ([undefined, "sent", "unknown"] as unknown[]).includes(item.lastOutcome)
+  );
+}
+
+function validAutomation(item: Record<string, unknown>) {
+  return (
+    typeof item.schedule === "string" &&
+    validCron(item.schedule) &&
+    text(item.prompt) &&
+    timestamp(item.armedAt) &&
+    typeof item.authored === "boolean" &&
+    validAutomationRun(item)
+  );
+}
+
+function validateAutomations(value: unknown) {
+  if (value === undefined) return;
+  for (const entry of Object.values(record(value)))
+    if (!validAutomation(record(entry)))
+      throw new Error("Invalid factory automations");
+}
+
 function validateForeman(value: unknown) {
   if (value !== undefined) {
     const foreman = record(value);
@@ -1853,6 +1901,7 @@ function stateRecord(value: unknown): State {
     throw new Error("Invalid factory state");
   validateForeman(state.foreman);
   validateMonitor(state.monitor);
+  validateAutomations(state.automations);
   for (const [id, value] of Object.entries(record(state.runs)))
     validateRun(id, value);
   return value as State;
@@ -1909,6 +1958,24 @@ function database(directory: string, readonly: boolean) {
   }
 }
 
+// The `automations` field of the state, or nothing before the first load.
+function readAutomations(db: Database) {
+  const row = db
+    .query(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'automations'",
+    )
+    .get()
+    ? db
+        .query<{ data: string }, []>(
+          "SELECT data FROM automations WHERE id = 1",
+        )
+        .get()
+    : null;
+  return row
+    ? { automations: JSON.parse(row.data) as State["automations"] }
+    : {};
+}
+
 function readState(db: Database): State {
   const coordinator = db
     .query<{ enabled: number; owner: ThreadID | null }, []>(
@@ -1950,7 +2017,55 @@ function readState(db: Database): State {
     runs,
     ...(monitor ? { monitor: JSON.parse(monitor.data) } : {}),
     ...(foreman ? { foreman: JSON.parse(foreman.data) } : {}),
+    ...readAutomations(db),
   });
+}
+
+// One declared automation over what was loaded before: the override survives only while the
+// authored default is the one it was set over, and a newly enabled one is armed at `at`.
+function mergedAutomation(
+  declared: Automation,
+  prev: AutomationRecord | undefined,
+  at: number,
+): AutomationRecord {
+  const { schedule, prompt, enabled } = declared;
+  const override = prev?.authored === enabled ? prev.override : undefined;
+  const turnsOn = (override ?? enabled) && !(prev && automationEnabled(prev));
+  return {
+    ...prev,
+    schedule,
+    prompt,
+    authored: enabled,
+    override,
+    armedAt: turnsOn ? at : (prev?.armedAt ?? at),
+  };
+}
+
+/** The automations a definition's `declared` list yields over those already `before`, as
+ * `definition(…, load)` saves them: overrides and last runs kept, a newly enabled one armed at `at`. */
+export function mergedAutomations(
+  declared: Automation[],
+  before: Record<string, AutomationRecord>,
+  at: number,
+) {
+  return Object.fromEntries(
+    declared.map((automation) => [
+      automation.name,
+      mergedAutomation(automation, before[automation.name], at),
+    ]),
+  );
+}
+
+function saveAutomations(
+  db: Database,
+  automations: Record<string, AutomationRecord>,
+) {
+  db.run(
+    "CREATE TABLE IF NOT EXISTS automations (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL)",
+  );
+  db.query("INSERT OR REPLACE INTO automations (id, data) VALUES (1, ?)").run(
+    JSON.stringify(automations),
+  );
 }
 
 function saveState(db: Database, state: State) {
@@ -1970,6 +2085,7 @@ function saveState(db: Database, state: State) {
       JSON.stringify(state.foreman),
     );
   }
+  if (state.automations) saveAutomations(db, state.automations);
   if (state.monitor) {
     db.run(
       "CREATE TABLE IF NOT EXISTS monitor (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL)",
@@ -2232,8 +2348,22 @@ export function openPersistence(
     })();
     return {
       state,
-      /** Save a validated immutable definition, optionally accepting it for future dispatch. @throws On storage failure. */
-      definition(pin: DefinitionPin, load = false) {
+      /** Save a validated immutable definition. Accepting it for future dispatch (`load`) also
+       * replaces the loaded automations with `declared`, in the same transaction: each one keeps its
+       * override while its authored default is unchanged, and its last run; one that turns on is
+       * armed now, so the clock never fires for a time before it was on. An interruption leaves
+       * the old definition with the old automations or the new with the new, never a mix.
+       * @throws On storage failure.
+       */
+      definition(
+        pin: DefinitionPin,
+        load = false,
+        declared: Automation[] = [],
+      ) {
+        const merged =
+          load && (declared.length || state.automations)
+            ? mergedAutomations(declared, state.automations ?? {}, now())
+            : undefined;
         db.transaction(() => {
           db.query(
             "INSERT OR IGNORE INTO definitions (digest, data) VALUES (?, ?)",
@@ -2242,7 +2372,9 @@ export function openPersistence(
             db.query(
               "INSERT OR REPLACE INTO loaded_definition (id, digest) VALUES (1, ?)",
             ).run(pin.digest);
+          if (merged) saveAutomations(db, merged);
         })();
+        if (merged) state.automations = merged;
       },
       /** Release only brief refusals for rechecking, retaining admitted intake. @throws On storage failure. */
       reloadBriefs() {

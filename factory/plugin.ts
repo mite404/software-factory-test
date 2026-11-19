@@ -42,6 +42,13 @@ const controlActions = [
   "record-insight",
 ] as const;
 
+const automationActions = [
+  "automations",
+  "automation-enable",
+  "automation-disable",
+  "automation-run",
+] as const;
+
 function matchingDeliveries(page: ThreadMessage[], message: string) {
   const marker = message.slice(0, message.indexOf("\n"));
   let matches = 0;
@@ -478,10 +485,18 @@ export default function registerFactory(
           observe(id, ctx.tools),
         ),
     ],
+    ...automationActions.map(
+      (action) =>
+        [
+          action,
+          (input: Record<string, unknown>, ctx: PluginToolContext) =>
+            factory.automation(action, input.name, ctx.thread.id, ctx.tools),
+        ] as const,
+    ),
   ]);
   amp.registerTool({
     name: `factory_control_${suffix}`,
-    description: `Control the factory in ${root}. status is read-only and does not deliver notices or register schedules. status-summary is a small read-only per-run summary (kind, lane, attempt, stage, last progress, incident, review delivery, pending alerts) with no briefs, paths or thread content. status-summary also lists owner work due now with stable IDs. register-observer lets the connected owner create one observer thread (Claude Haiku at high effort) that receives watchdog wakes and suspicion nudges; the observer may call only reconcile and status-summary, and every other action refuses it. remove-observer clears its schedule and moves wakes back to the owner. reload validates the authored definition for future runs without executing commands or changing active pins; a connected owner also recovers its watchdog registration. message-foreman delivers message text from a registered worker or reviewer to the owning Foreman without granting control; delivery errors have unknown outcomes, so do not retry blindly. start requires explicit user authorization, permissions.execute=true and connected owner tools; it confirms its owned watchdog before dispatch and refuses unrelated schedules or second roots. pause persists a local stop before any remote check, including from non-owner threads that are neither workers, reviewers nor former Foremen; only the owner's connected turn clears its watchdog. reconcile observes persisted work, recovers its watchdog and delivers durable alerts only in the connected owner context, without granting permissions. Unknown alert sends are held, not retried. retry-setup explicitly reruns parked preparation in the same worktree before creating a worker. resume requires the owning Foreman, a blocked or parked ticket, its exact current incident ID from status, and a decision explaining the next repair; it queues the same worker without starting a paused factory or accepting code. Rejection at attempt four or later parks the ticket and alerts the operator while independent work continues. Duplicate or stale notices never authorize another checkpoint. retry-create requires the owning Foreman, a ticket parked in creating or a running ticket whose reviewer creation is parked, its exact current incident ID and a decision recording that no thread was created; it repeats that one worker or reviewer creation in place, a reviewer only over its unchanged staged candidate, and never falls back to another executor. Runner and Orb threads are created after the tool call returns, so the returned status can still show creating; call status again. backup publishes private SQLite state and requires explicit user authorization and permissions.backup=true.`,
+    description: `Control the factory in ${root}. status is read-only and does not deliver notices or register schedules. status-summary is a small read-only per-run summary (kind, lane, attempt, stage, last progress, incident, review delivery, pending alerts) with no briefs, paths or thread content. status-summary also lists owner work due now with stable IDs. register-observer lets the connected owner create one observer thread (Claude Haiku at high effort) that receives watchdog wakes and suspicion nudges; the observer may call only reconcile and status-summary, and every other action refuses it. remove-observer clears its schedule and moves wakes back to the owner. reload validates the authored definition for future runs without executing commands or changing active pins; a connected owner also recovers its watchdog registration. message-foreman delivers message text from a registered worker or reviewer to the owning Foreman without granting control; delivery errors have unknown outcomes, so do not retry blindly. start requires explicit user authorization, permissions.execute=true and connected owner tools; it confirms its owned watchdog before dispatch and refuses unrelated schedules or second roots. pause persists a local stop before any remote check, including from non-owner threads that are neither workers, reviewers nor former Foremen; only the owner's connected turn clears its watchdog. reconcile observes persisted work, recovers its watchdog and delivers durable alerts only in the connected owner context, without granting permissions. Unknown alert sends are held, not retried. retry-setup explicitly reruns parked preparation in the same worktree before creating a worker. resume requires the owning Foreman, a blocked or parked ticket, its exact current incident ID from status, and a decision explaining the next repair; it queues the same worker without starting a paused factory or accepting code. Rejection at attempt four or later parks the ticket and alerts the operator while independent work continues. Duplicate or stale notices never authorize another checkpoint. retry-create requires the owning Foreman, a ticket parked in creating or a running ticket whose reviewer creation is parked, its exact current incident ID and a decision recording that no thread was created; it repeats that one worker or reviewer creation in place, a reviewer only over its unchanged staged candidate, and never falls back to another executor. Runner and Orb threads are created after the tool call returns, so the returned status can still show creating; call status again. automations, automation-enable, automation-disable and automation-run are owner-only controls for the prompts declared under factory/config/automations/ and loaded by reload. They share the factory's one Amp schedule, whose period shortens to the shortest enabled automation and never exceeds 30 minutes; each wake sends a due automation's prompt to the owner once, however many wakes were missed, and a send with an unknown outcome is recorded and never retried. enable and disable need connected owner tools; run sends once even when disabled. None of them admits, starts, resumes or dispatches work, and a file edit changes nothing until reload. backup publishes private SQLite state and requires explicit user authorization and permissions.backup=true.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -526,6 +541,12 @@ export default function registerFactory(
             "For explicit same-orb handoff from the exact current owner. Requires a decision and connected tools; running or unknown owners, workers and reviewers are refused. Unconfirmed old-watchdog cleanup is recorded and retried without blocking new-owner monitoring or later guarded handoffs. Runs and execution permission do not change. The result includes durable Foreman notes.",
         },
         incident: { type: "string", minLength: 1 },
+        name: {
+          type: "string",
+          minLength: 1,
+          description:
+            "Automation name (its directory under factory/config/automations/) for owner-only automation-enable, automation-disable or automation-run.",
+        },
         message: {
           type: "string",
           minLength: 1,

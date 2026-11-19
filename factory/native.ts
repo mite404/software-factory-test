@@ -5,6 +5,8 @@ import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { lstat, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import {
+  automationsOf,
+  type Automation,
   composeDefinition,
   digestConfigFiles,
   configRootExists,
@@ -23,6 +25,7 @@ import type { DeliveryIntent } from "./delivery";
 import {
   deliverAlerts,
   dueAlerts,
+  dueAutomations,
   reconcileSchedule,
   removePreviousSchedule,
   watchdogFingerprint,
@@ -72,6 +75,9 @@ import {
   type Watchdog,
   type WatchdogPolicy,
   type ProviderLimit,
+  automationEnabled,
+  mergedAutomations,
+  type AutomationRecord,
 } from "./persistence";
 
 type ConnectedTools = PluginTools & { isConnected?(): boolean };
@@ -513,7 +519,11 @@ export async function configuration(root: string) {
         throw new Error(`${configDirectory}: ${error.message}`);
       },
     );
-    return { ...config, digest: digestConfigFiles(files, config.instructions) };
+    return {
+      ...config,
+      automations: automationsOf(files),
+      digest: digestConfigFiles(files, config.instructions),
+    };
   }
   const source = localPath(root, flat[0] ?? ".factory.json");
   const content = await readFile(source, "utf8");
@@ -526,7 +536,7 @@ export async function configuration(root: string) {
     .update("\0")
     .update(config.instructions)
     .digest("hex");
-  return { ...config, digest };
+  return { ...config, automations: [], digest };
 }
 
 /** Write the `factory/config/` directory from the flat definition and remove the flat file.
@@ -1885,6 +1895,82 @@ function stopNotice(ticket: string, run: Run, notice: StopIncident) {
   return `Factory stop ${notice.id}. Ticket ${ticket}, attempt ${notice.attempt}, base ${notice.base}. ${stageText(run)} Reason: ${notice.reason}.${notice.cause ? ` Causing ${notice.cause.role} thread: ${notice.cause.thread}.` : ""} Recovery: ${notice.recovery}. Read current factory status and private evidence before deciding. ${notice.recovery === "wait" ? "Connected owner reconciliation reserves one continuation to the same thread after the provider reset. Do not send a separate continuation or retry an uncertain send. Paused factories stay paused." : notice.recovery === "resume" ? `Only the owning Foreman may resume with ticket ${ticket}, incident ${notice.id}, and ${runStage(run).stage === "parked" ? "the operator's decision. Attempt cap reached; do not automatically resume" : "a diagnosis decision"}. A paused factory stays paused.` : "Inspect and resolve this stop; this notice does not authorize resume or grant permission."}`;
 }
 
+// Only a wake by the owner or its registered observer, with execution granted, may run the clock.
+function clockMayRun(
+  state: State,
+  caller: ThreadID | undefined,
+  execute: boolean,
+) {
+  return (
+    state.enabled &&
+    execute &&
+    caller !== undefined &&
+    state.owner !== undefined &&
+    [state.owner, state.foreman?.observer?.thread].includes(caller)
+  );
+}
+
+// The public list: no prompt text, only what the Foreman needs to choose an action.
+function automationRows(state: State) {
+  return Object.entries(state.automations ?? {}).map(([name, record]) => ({
+    name,
+    schedule: record.schedule,
+    enabled: automationEnabled(record),
+    lastRunAt: record.lastRunAt ?? null,
+    lastOutcome: record.lastOutcome ?? null,
+  }));
+}
+
+// Set the control override. Switching an automation on arms it at `at`, so the clock never sends
+// for a time before it was on. Returns whether anything changed.
+function switchAutomation(record: AutomationRecord, on: boolean, at: number) {
+  if (record.override === on) return false;
+  if (on && !automationEnabled(record)) record.armedAt = at;
+  record.override = on;
+  return true;
+}
+
+// The automations the clock is fitted to: the saved ones, or on a first start those it will accept.
+function firstStartAutomations(
+  action: string,
+  state: State,
+  declared: Automation[],
+  accepted: boolean,
+  at: number,
+) {
+  return action === "start" && declared.length && !accepted
+    ? mergedAutomations(declared, state.automations ?? {}, at)
+    : state.automations;
+}
+
+/** The one path that sends an automation, for the clock and for `automation-run`. The attempt is
+ * recorded `unknown` before the send and `sent` after it, so a crash or a lost reply is never
+ * resent. It only sends text; it never admits, starts, resumes or dispatches work.
+ * @returns Whether the send reported success.
+ * @throws On failed persistence.
+ */
+async function sendAutomation(
+  state: State,
+  name: string,
+  at: number,
+  send: (message: string) => Promise<void>,
+  save: (action: string, detail: string) => void,
+) {
+  const record = state.automations![name]!;
+  record.lastRunAt = at;
+  record.lastOutcome = "unknown";
+  save("automation-sending", name);
+  try {
+    await send(`Factory automation ${name}\n${record.prompt}`);
+  } catch (error) {
+    save("automation-send-unknown", `${name}: ${String(error)}`);
+    return false;
+  }
+  record.lastOutcome = "sent";
+  save("automation-sent", name);
+  return true;
+}
+
 /** Create the sequential dispatcher. Unknown remote effects are parked, never retried blindly. */
 export function createFactory(
   root: string,
@@ -2069,6 +2155,7 @@ export function createFactory(
             ),
           config.execute,
         );
+        await sendDueAutomations();
         for (const [ticket, run] of Object.entries(state.runs)) {
           const notice = run.incident;
           if (!notice || !state.owner) continue;
@@ -2095,6 +2182,22 @@ export function createFactory(
           }
         }
       };
+      // The clock: only a wake from the owner or its observer sends, and only text to the owner.
+      async function sendDueAutomations() {
+        if (
+          action !== "reconcile" ||
+          !clockMayRun(state, owner, config.execute)
+        )
+          return;
+        for (const name of dueAutomations(state, now()))
+          await sendAutomation(
+            state,
+            name,
+            now(),
+            (message) => host.send(state.owner!, message),
+            (action, detail) => commit("factory", action, detail),
+          );
+      }
       async function reconcileWatchdog() {
         if (!state.enabled || !config.execute || !state.owner) return;
         for (const [ticket, run] of Object.entries(state.runs)) {
@@ -2182,6 +2285,7 @@ export function createFactory(
             config.execute,
             owner,
             now(),
+            pendingAutomations,
           );
           if (startAdmission) state.owner ??= owner;
         } catch (error) {
@@ -2206,6 +2310,15 @@ export function createFactory(
         }
       }
       stateCache = state;
+      // A first start admits its clock with the automations it is about to accept, so an enabled
+      // one is held to the same schedule check as work. Nothing is saved before that acceptance.
+      const pendingAutomations = firstStartAutomations(
+        action,
+        state,
+        config.automations,
+        !!factoryDefinition(directory),
+        now(),
+      );
       await installMonitoring(action === "start");
       async function adoptLegacyCheckpoints() {
         for (const task of queue) {
@@ -2231,7 +2344,11 @@ export function createFactory(
           factoryDefinition(directory)
         )
           return;
-        persistence!.definition(definitionPin(config), true);
+        persistence!.definition(
+          definitionPin(config),
+          true,
+          config.automations,
+        );
       }
       acceptInitialDefinition();
       async function preflightCheckpoint(
@@ -3555,13 +3672,11 @@ export function createFactory(
     }
   }
 
-  async function saveRecord(
+  async function saveRecord<T>(
     action: string,
     owner: ThreadID | undefined,
-    record: (
-      persistence: ReturnType<typeof openPersistence>,
-    ) => State | Promise<State>,
-  ) {
+    record: (persistence: ReturnType<typeof openPersistence>) => T | Promise<T>,
+  ): Promise<T> {
     const initial = factoryStatus(directory);
     assertControlCaller(initial, owner, action);
     if (action !== "handoff") assertOwner(initial, owner);
@@ -3739,6 +3854,66 @@ export function createFactory(
       notice.notifiedAt = now();
       persistence.commit(state, ticket, "notice-sent", notice.id);
     }
+  }
+
+  /** List the loaded automations, or switch one on or off and refit the clock, or send one now.
+   * Owner only. None of these admits, starts, resumes or dispatches work; run sends text once, enabled or
+   * not. An enable or disable without connected owner tools changes nothing.
+   * @throws On an ineligible caller, an unknown name, a send with an unknown outcome or failed
+   * persistence.
+   */
+  function automation(
+    change:
+      | "automations"
+      | "automation-enable"
+      | "automation-disable"
+      | "automation-run",
+    name: unknown,
+    owner?: ThreadID,
+    tools?: ConnectedTools,
+  ) {
+    const result = pending
+      .catch(() => {})
+      .then(() =>
+        saveRecord(change, owner, async (persistence) => {
+          const state = persistence.state;
+          const rows = () => automationRows(state);
+          if (change === "automations") return rows();
+          const id = text(name);
+          const record = Object.hasOwn(state.automations ?? {}, id)
+            ? state.automations![id]!
+            : undefined;
+          if (!record) throw new Error(`Unknown automation ${id}`);
+          const save = (action: string, detail: string) =>
+            persistence.commit(state, "factory", action, detail);
+          if (change === "automation-run") {
+            if (
+              !(await sendAutomation(
+                state,
+                id,
+                now(),
+                (message) => host.send(state.owner!, message),
+                save,
+              ))
+            )
+              throw new Error(
+                `Automation ${id} send outcome unknown; it is recorded and not retried`,
+              );
+            return rows();
+          }
+          tools = currentTools(tools);
+          if (!tools)
+            throw new Error(
+              "Enabling or disabling an automation requires connected owner tools",
+            );
+          if (switchAutomation(record, change === "automation-enable", now()))
+            save(change, id);
+          await moveWatchdog(persistence, owner!, tools);
+          return rows();
+        }),
+      );
+    pending = result;
+    return result;
   }
 
   /** Record an owner's verified merge without lifecycle or watchdog effects. @throws On invalid evidence, conflicts, or failed I/O. */
@@ -3920,7 +4095,7 @@ export function createFactory(
           persistence.admit(text(selectedTicket));
           return persistence.state;
         }
-        persistence.definition(definitionPin(next), true);
+        persistence.definition(definitionPin(next), true, next.automations);
         if (owner && persistence.state.owner === owner)
           persistence.reloadBriefs();
         persistence.event("factory", "reloaded", next.digest);
@@ -4016,6 +4191,7 @@ export function createFactory(
   }
   return {
     tick,
+    automation,
     recordMerge,
     recordLanding,
     note,

@@ -2408,7 +2408,7 @@ test.each([
       expect((await control("status")).runs.A.incident.id).toBe(id);
       expect(await fixture.tools.call("amp.get_schedule", {})).toMatchObject({
         trigger: {
-          schedule: "DTSTART:20261114T143900Z\nRRULE:FREQ=MINUTELY;INTERVAL=30",
+          schedule: "DTSTART:19700101T000000Z\nRRULE:FREQ=MINUTELY;INTERVAL=30",
         },
       });
       local = status = "running";
@@ -2450,7 +2450,7 @@ test.each([
         expect(await fixture.tools.call("amp.get_schedule", {})).toMatchObject({
           trigger: {
             schedule:
-              "DTSTART:20261114T143900Z\nRRULE:FREQ=MINUTELY;INTERVAL=30",
+              "DTSTART:19700101T000000Z\nRRULE:FREQ=MINUTELY;INTERVAL=30",
           },
         });
       }
