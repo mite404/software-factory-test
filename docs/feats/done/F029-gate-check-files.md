@@ -127,9 +127,9 @@ A baseline failure goes back to the Foreman; it does not widen the worker's scop
 
 ## Done when
 
-- [ ] Every check runs and is recorded even after an earlier one fails.
-- [ ] Only required checks decide acceptance; advisory failures are kept in evidence, not rejected.
-- [ ] The worker gets each failed check's own output in one rejection.
-- [ ] The dashboard chips show real per-check results.
-- [ ] A project with only `verify` gates exactly as before.
-- [ ] Full gates, guard and a fresh cold review pass on the accepted revision.
+- [x] Every check runs and is recorded even after an earlier one fails.
+- [x] Only required checks decide acceptance; advisory failures are kept in evidence, not rejected.
+- [x] The worker gets each failed check's own output in one rejection.
+- [x] The dashboard chips show real per-check results.
+- [x] A project with only `verify` gates exactly as before.
+- [x] Full gates, guard and a fresh cold review pass on the accepted revision.
