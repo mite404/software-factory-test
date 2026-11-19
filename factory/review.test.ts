@@ -224,7 +224,7 @@ test.each([
       await f.verdict();
       f.observe({
         kind: "provider-limit",
-        limit: { message: "Fable usage limit", observedAt: Date.now() },
+        limit: { message: "Kimi usage limit", observedAt: Date.now() },
       });
       await f.tick();
       const fallback = await f.review();
@@ -237,9 +237,9 @@ test.each([
         thread: "T-3",
         delivery: "sent",
         fallback: {
-          model: "anthropic/claude-fable-5-2",
+          model: "moonshotai/kimi-k3",
           thread: "T-2",
-          reason: "Fable usage limit",
+          reason: "Kimi usage limit",
         },
       });
       expect(fallback.report).not.toBe(original.report);
@@ -258,7 +258,7 @@ test.each([
           executor: "local",
         },
         {
-          model: "anthropic/claude-fable-5-2",
+          model: "moonshotai/kimi-k3",
           effort: "high",
           role: "reviewer",
           executor: "local",
@@ -276,7 +276,7 @@ test.each([
       );
       expect(message).toContain(fallback.report);
       expect(message).not.toContain("CANARY-WORKER-RATIONALE");
-      expect(message).not.toContain("Fable usage limit");
+      expect(message).not.toContain("Kimi usage limit");
       f.observe({
         kind: "provider-limit",
         limit: { message: "Fallback usage limit", observedAt: Date.now() },
@@ -335,7 +335,7 @@ test.each([undefined, { mode: "wait" } as const])(
         kind: "running",
         thread: "T-1",
         workerModel: "openai/gpt-6.1-sol",
-        review: { thread: "T-2", model: "anthropic/claude-fable-5-2" },
+        review: { thread: "T-2", model: "moonshotai/kimi-k3" },
         incident: {
           reason: "provider-limit",
           recovery: "wait",
@@ -385,7 +385,7 @@ test.each([
       expect((await f.review()).model).toBe(
         policy?.mode === "fallback"
           ? "anthropic/claude-sonnet-4-6"
-          : "anthropic/claude-fable-5-2",
+          : "moonshotai/kimi-k3",
       );
       expect(f.settings).toHaveLength(policy?.mode === "fallback" ? 3 : 2);
     } finally {
@@ -442,7 +442,7 @@ test("cold review skill stays subordinate to the factory verdict contract", () =
     base: "integration-base",
     stage: "post-graft",
     worktree: "/staged/worktree",
-    model: "anthropic/claude-fable-5-2",
+    model: "moonshotai/kimi-k3",
     report: "/private/review.json",
     log: "/private/gate.log",
     command: "bun test",
@@ -576,7 +576,7 @@ test("review requirements keep the dispatched brief across queue edits and reloa
 });
 
 test.each([
-  ["openai/gpt-6.1-sol", "anthropic/claude-fable-5-2"],
+  ["openai/gpt-6.1-sol", "moonshotai/kimi-k3"],
   ["anthropic/claude-opus-5-5", "openai/gpt-6-astra"],
 ] as const)(
   "cold post-graft review returns issues to %s owner",

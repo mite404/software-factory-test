@@ -604,7 +604,7 @@ test("a rebased candidate is reviewed at the rebased revision by its saved worke
       target,
     );
     expect((await f.gates()).at(-1)).toBe(rebased.review.revision);
-    expect(review.review.model).toBe("anthropic/claude-fable-5-2");
+    expect(review.review.model).toBe("moonshotai/kimi-k3");
   } finally {
     await f.close();
   }

@@ -62,7 +62,7 @@ Written up but set aside; not dispatched until the operator asks for it.
 | --- | --- | --- |
 | [F036-context-window-reminders](feats/worker-budgets/F036-context-window-reminders.md) | Context-window reminders with an operator-chosen handoff | 0/5 |
 
-## Done (39)
+## Done (40)
 
 | Ticket | Outcome | Done when |
 | --- | --- | --- |
@@ -105,3 +105,4 @@ Written up but set aside; not dispatched until the operator asks for it.
 | [F025-config-directory](feats/done/F025-config-directory.md) | Factory settings live in one file per concern | 7/7 |
 | [F029-gate-check-files](feats/done/F029-gate-check-files.md) | The gate reports every check on its own | 6/6 |
 | [F026-factory-automations](feats/done/F026-factory-automations.md) | Automations switch on, off and run on demand | 5/5 |
+| [F038-kimi-k3-reviewers](feats/done/F038-kimi-k3-reviewers.md) |  | 6/6 |

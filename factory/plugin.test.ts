@@ -1681,7 +1681,7 @@ test.each([
         expect(ledger).toEqual([]);
         expect(await readFile(join(root, "src/value"), "utf8")).toBe("old");
         expect(models[1]).toMatchObject({
-          model: "anthropic/claude-fable-5-2",
+          model: "moonshotai/kimi-k3",
           reasoningEffort: "high",
         });
         expect(models[1]?.instructions).toContain("Do not implement");

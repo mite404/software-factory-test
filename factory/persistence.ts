@@ -30,8 +30,9 @@ const modelFamilies = new Map<string, string>([
   ["zhipuai", "zhipuai"],
 ]);
 const defaultReviewerModels = new Map<string, `${string}/${string}`>([
-  ["openai", "anthropic/claude-fable-5-2"],
+  ["openai", "moonshotai/kimi-k3"],
   ["anthropic", "openai/gpt-6-astra"],
+  ["moonshotai", "openai/gpt-6-astra"],
 ]);
 
 export type ThreadID = `T-${string}`;
@@ -1276,7 +1277,7 @@ export function reviewerModel(worker: string): `${string}/${string}` {
   const model = defaultReviewerModels.get(modelFamily(worker) ?? "");
   if (!model)
     throw new Error(
-      "Review requires an OpenAI or Anthropic implementation worker",
+      "Review requires an OpenAI, Anthropic, or Moonshot AI implementation worker",
     );
   return model;
 }

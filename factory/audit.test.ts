@@ -308,7 +308,7 @@ test("weekly audit collects every in-range finding once, pages events, bounds ga
     files: [{ file: "factory/native.ts", count: 3 }],
   });
   expect(result.brief).toContain(result.ledger);
-  expect(result.brief).toContain("anthropic/claude-fable-5-2");
+  expect(result.brief).toContain("moonshotai/kimi-k3");
   expect((await stat(result.ledger)).mode & 0o777).toBe(0o600);
   for (let i = 0; i < sources.length; i++)
     expect(await readFile(join(directory, sources[i]!))).toEqual(before[i]!);

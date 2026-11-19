@@ -1719,8 +1719,9 @@ test("invalid limit policies fail before worker creation", async () => {
 });
 
 test.each([
-  ["openai/gpt-6.1-sol", "anthropic/claude-fable-5-2"],
+  ["openai/gpt-6.1-sol", "moonshotai/kimi-k3"],
   ["anthropic/claude-fable-5-2", "openai/gpt-6-astra"],
+  ["moonshotai/kimi-k3", "openai/gpt-6-astra"],
   ["openai/gpt-6.1-sol", "openrouter/openai/gpt-6-astra"],
   ["anthropic/claude-fable-5-2", "amp/claude-fable-5-2"],
   ["anthropic/claude-fable-5-2", "fireworks-ai/claude-fable-5-2"],
