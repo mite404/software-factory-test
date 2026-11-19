@@ -13,6 +13,7 @@ import {
 import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import configSchema from "./config.schema.json";
+import { validCron } from "./cron";
 
 /** The repository-relative directory that holds one file per agent, runner and the shared settings. */
 export const configDirectory = "factory/config";
@@ -30,10 +31,19 @@ export type Check = {
 /** The timeout of a check that sets none, and of the flat `verify` command. */
 export const defaultCheckTimeoutMs = 600_000;
 
+/** One authored automation: a prompt the Foreman thread receives on a UTC cron schedule. */
+export type Automation = {
+  name: string;
+  schedule: string;
+  enabled: boolean;
+  prompt: string;
+};
+
 const schemas: Record<string, { properties: object; required?: string[] }> =
   configSchema.$defs;
 const runnerTemplate = "runners/<name>.yaml";
 const checkTemplate = "checks/<name>.yaml";
+const automationTemplate = "automations/<name>/automation.md";
 // Any first non-blank line starting with `---` claims front matter; only the strict form parses
 // (either line ending, optional BOM, trailing spaces), so a near miss is refused, not read as bare.
 const opensFrontMatter = /^\uFEFF?\s*---/;
@@ -42,6 +52,9 @@ const frontMatter =
 const runnerName = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const runnerFile = /^runners\/([A-Za-z0-9][A-Za-z0-9._-]*)\.yaml$/;
 const checkPath = /^checks\/([A-Za-z0-9][A-Za-z0-9._-]*)\.yaml$/;
+const automationDirectory = /^automations\/[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const automationFile =
+  /^automations\/([A-Za-z0-9][A-Za-z0-9._-]*)\/automation\.md$/;
 const foreman = "agents/foreman/agent.md";
 const implementer = "agents/implementer/agent.md";
 const light = "agents/light-implementer/agent.md";
@@ -52,19 +65,39 @@ const localRunner = "local";
 // Scratch for migration, beside the directory so a link stays on one filesystem.
 const scratchPrefix = ".config-migrating";
 
-// Every directory the layout allows, derived from its files: agents, each agent and runners.
+// Every directory the layout allows, derived from its files: agents, each agent, runners and
+// automations; a template's <name> part is matched by pattern, never listed.
 const layoutDirectories = new Set(
   Object.keys(schemas).flatMap((path) => {
-    const parts = path.split("/").slice(0, -1);
+    const parts = path
+      .split("/")
+      .slice(0, -1)
+      .filter((part) => !part.includes("<"));
     return parts.map((_, i) => parts.slice(0, i + 1).join("/"));
   }),
 );
+
+// A directory the layout allows: a fixed one, or one automation's own.
+function inLayout(directory: string) {
+  return (
+    layoutDirectories.has(directory) || automationDirectory.test(directory)
+  );
+}
+
+function requireAutomationFile(directory: string, files: Files) {
+  if (
+    automationDirectory.test(directory) &&
+    !files.has(`${directory}/automation.md`)
+  )
+    fail(directory, "has no automation.md");
+}
 
 // The one place a path becomes its schema; the template key itself is never a file.
 function schemaFor(path: string) {
   if (runnerFile.test(path)) return schemas[runnerTemplate];
   if (checkPath.test(path)) return schemas[checkTemplate];
-  return ![runnerTemplate, checkTemplate].includes(path) &&
+  if (automationFile.test(path)) return schemas[automationTemplate];
+  return ![runnerTemplate, checkTemplate, automationTemplate].includes(path) &&
     Object.hasOwn(schemas, path)
     ? schemas[path]
     : undefined;
@@ -166,6 +199,12 @@ export async function refuseUnfinishedConfig(root: string) {
         path,
         "is not allowed beside a flat definition without factory.yaml; finish explicit --migrate or remove it",
       );
+  // An empty automations/ yields no file above, so its presence is refused here.
+  if (existsSync(join(root, configDirectory, "automations")))
+    fail(
+      "automations",
+      "is not allowed beside a flat definition without factory.yaml; finish explicit --migrate or remove it",
+    );
 }
 
 /** Whether `factory/config/factory.yaml` exists, which is what makes the directory the definition. @throws On a linked config root. */
@@ -184,7 +223,7 @@ export async function readConfigFiles(root: string): Promise<Files> {
   configRootExists(root);
   const files: Files = new Map();
   const walk = async (directory: string) => {
-    if (directory && !layoutDirectories.has(directory))
+    if (directory && !inLayout(directory))
       fail(directory, "is not part of the config layout");
     const entries = await readdir(join(root, configDirectory, directory), {
       withFileTypes: true,
@@ -199,6 +238,7 @@ export async function readConfigFiles(root: string): Promise<Files> {
         files.set(path, await readFile(join(root, configDirectory, path)));
       else fail(path, "must be a regular file");
     }
+    requireAutomationFile(directory, files);
   };
   await walk("");
   return files;
@@ -221,6 +261,30 @@ function checkFile(path: string, file: ReturnType<typeof parseFile>) {
     if (file.data[key] === undefined) fail(path, `${key} is required`);
   if (path.startsWith("agents/") && path !== foreman && file.body.trim())
     fail(path, "instructions are not read yet; leave the body empty");
+}
+
+/** The automations the directory declares, in path order, with their values checked.
+ * Every automation file is validated here, so a file that reload would skip or misread is refused
+ * by name. Run after `composeDefinition`, which refuses unknown settings and a missing schedule.
+ * @throws With the offending file's path on a bad schedule, a non-boolean `enabled` or an empty body.
+ */
+export function automationsOf(files: Files): Automation[] {
+  const sorted = [...files].sort(([a], [b]) => (a < b ? -1 : 1));
+  return sorted.flatMap(([path, bytes]) => {
+    const name = automationFile.exec(path)?.[1];
+    if (name === undefined) return [];
+    const { data, body } = parseFile(path, bytes);
+    const { schedule, enabled = false } = data;
+    if (typeof schedule !== "string" || !validCron(schedule))
+      fail(
+        path,
+        "schedule must be a quoted 5-field cron expression in UTC that some date satisfies",
+      );
+    if (typeof enabled !== "boolean")
+      fail(path, "enabled must be true or false");
+    if (!body.trim()) fail(path, "the prompt after the front matter is empty");
+    return [{ name, schedule: schedule.trim(), enabled, prompt: body.trim() }];
+  });
 }
 
 function runnerId(named: unknown) {

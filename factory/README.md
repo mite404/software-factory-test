@@ -136,6 +136,9 @@ factory/config/
                                 or `local` when it names none
   checks/<name>.yaml            command, order, required (default true), timeoutMs (default
                                 600000). Optional; replaces verify in factory.yaml
+  automations/<name>/automation.md
+                                front matter: schedule (5-field UTC cron), enabled (default
+                                false). Body: the prompt. See Scheduled automations
 ```
 
 ### Check files
@@ -219,6 +222,78 @@ requirements. Explicit `retry-setup` alone uses freshly validated settings for t
 preparation and its worker, without reloading future dispatch. Commit tracked definition edits
 before dispatch or retry. Pinning does not relax landing checks: a dirty or advanced root still
 blocks an active candidate whose integration base no longer matches.
+
+## Scheduled automations
+
+An automation is a prompt the owning Foreman thread receives on a UTC cron schedule, such as a
+codebase pulse or a weekly failure audit. It is one more file kind in the config directory,
+parsed by the same front-matter reader as every other Markdown file:
+
+```text
+factory/config/automations/<name>/automation.md
+  front matter: schedule  5-field cron (minute hour day-of-month month day-of-week), UTC, quoted
+                enabled   true or false; default false
+  body:         the prompt, sent as `Factory automation <name>` and then the body
+```
+
+A field is a comma list of `*`, `n`, `a-b`, `*/s` or `a-b/s`. Names such as `jan` and a step on
+a bare number are refused, as is a date no month has, such as 31 February. When both day fields
+are restricted either may match, as in Vixie cron.
+
+The loader refuses, naming the file: `automations/`, an automation directory or `automation.md`
+that is a link or not a regular file; any other file or directory inside `automations/` or an
+automation directory; an automation directory without `automation.md`; an unknown front-matter
+key; a missing, empty or invalid schedule; an `enabled` that is not a boolean; an empty body;
+malformed front matter; and `automations/`, even empty, beside a flat definition. A refusal stops
+every load and reconcile, so a file the loader cannot read is never half-applied.
+
+`reload` loads the declared automations into durable state, as it does the rest of the definition,
+in the same SQLite transaction as the accepted digest, and so does the first `start`: after an
+interruption the old digest has the old automations or the new has the new, never a mix. The
+first `start` fits the schedule to the automations it is about to accept, so an enabled one is held
+to the same check as work: an unrelated schedule or an unconfirmed set refuses the start, leaves the
+factory disabled and saves no definition or automations.
+Editing, adding or removing a file changes nothing the clock sends until `reload`, also after a
+restart. The first `start` loads them with the first accepted definition. Each automation keeps
+its authored `enabled` as a default, the control override on top of it, when it was armed and its
+last run and outcome. The override wins until a reload finds a different authored `enabled`; a
+reload with the same value keeps it. `start` and `reload` fit the schedule in the same call.
+
+There is one clock. The factory keeps its single Amp schedule and every connected owner wake,
+or observer wake when an observer is registered, checks which enabled automations are due. No
+automation has its own Amp schedule. The schedule's period is the shortest gap any enabled
+automation needs, never more than the watchdog's 30 minutes. While an automation is enabled a
+started factory holds the schedule even with no active work, and with none enabled the schedule
+follows work as before. The change goes through the watchdog reconcile, so its conflict,
+drift and unknown-outcome handling apply unchanged: an unrelated schedule on the thread is
+preserved and recorded as a problem, an unconfirmed change is recorded `unknown`, and the
+override persists either way. While an automation is enabled the schedule is not anchored to a
+pending provider reset, so automations keep waking; a continuation is still gated by its own
+reset time at the first wake after it. A read-back that still shows the last confirmed reset
+anchor does not confirm the change, even when the period is unchanged; the monitor stays `unknown`.
+
+An automation is due when its latest scheduled minute at or before the wake is not before the time
+it was armed (loaded enabled, or switched on) and is later than its last run. Missed wakes
+collapse into one run, never a burst, and a wake in the same minute sends nothing more. A paused
+factory, a wake with no owner or observer caller and `permissions.execute: false` send nothing.
+The attempt is recorded `unknown` before the send and `sent` after it, so a crash or a lost reply
+leaves `unknown` and the same time is never retried; the next scheduled time is a new run.
+
+An automation only sends text to the owner thread. It never creates a thread, admits, starts,
+resumes or dispatches work, and no run record changes.
+
+Owner-only control actions, each refused for any other caller, including workers and the observer,
+with no state change:
+
+| Action               | Input  | Effect                                                         |
+| -------------------- | ------ | -------------------------------------------------------------- |
+| `automations`        | none   | List name, schedule, enabled, last run and outcome             |
+| `automation-enable`  | `name` | Set the override on; refit the clock (needs connected tools)   |
+| `automation-disable` | `name` | Set the override off; refit the clock (needs connected tools)  |
+| `automation-run`     | `name` | Send once now, enabled or not; an unknown outcome is an error  |
+
+A repeated enable or disable writes no event but still lets the clock converge. An unknown name is
+refused.
 
 ## Durable coordinator state
 
@@ -622,7 +697,8 @@ reconciliation.
 Only curated ticket ID, attempt, alert kind and episode appear in push/email text, never private
 briefs, observed thread titles or failure reports.
 
-Authorized `start` installs one existing-thread watchdog, every 30 minutes, before dispatch. The
+Authorized `start` installs one existing-thread watchdog, every 30 minutes (shorter while an
+automation is enabled; see Scheduled automations), before dispatch. The
 stable SHA-256 fingerprint binds the software factory identity, root and Git storage directory.
 Ownership uses the fingerprint in the title or prompt, not the prompt wording or echoed settings.
 Repeated start accepts its owned, enabled registration. An owned schedule with changed recurrence,

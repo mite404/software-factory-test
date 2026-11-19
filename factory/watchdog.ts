@@ -1,8 +1,66 @@
 import type { PluginTools, ThreadID } from "@ampcode/plugin";
 import { createHash } from "node:crypto";
-import { providerResetAt, type State, type Task } from "./persistence";
+import { lastFire, shortestGapMinutes } from "./cron";
+import {
+  automationEnabled,
+  providerResetAt,
+  type State,
+  type Task,
+} from "./persistence";
 
-const recurrence = "RRULE:FREQ=MINUTELY;INTERVAL=30";
+// The longest the one clock waits: the watchdog's own period. Automations only shorten it.
+const watchdogMinutes = 30;
+
+function recurrence(minutes: number) {
+  return `RRULE:FREQ=MINUTELY;INTERVAL=${minutes}`;
+}
+
+type Automations = State["automations"];
+
+function enabledAutomations(automations: Automations) {
+  return Object.values(automations ?? {}).filter(automationEnabled);
+}
+
+// The clock runs while the factory is started and has work or an enabled automation.
+function wantsClock(state: State, queue: Task[], automations: Automations) {
+  return (
+    state.enabled &&
+    (enabledAutomations(automations).length > 0 ||
+      queue.some(
+        (task) =>
+          (task.intake !== "planned" || Object.hasOwn(state.runs, task.id)) &&
+          state.runs[task.id]?.kind !== "done",
+      ))
+  );
+}
+
+// The clock's period: the shortest any enabled automation needs, never longer than the watchdog's.
+function clockMinutes(automations: Automations) {
+  return Math.min(
+    watchdogMinutes,
+    ...enabledAutomations(automations).map((record) =>
+      shortestGapMinutes(record.schedule),
+    ),
+  );
+}
+
+/** Names of enabled automations whose latest scheduled minute at or before `at` is not before the
+ * time they were armed and is later than their last run. However many wakes were missed, that is
+ * one name once; a send that was recorded, even with an unknown outcome, is never due again.
+ */
+export function dueAutomations(state: State, at: number) {
+  return Object.entries(state.automations ?? {})
+    .filter(([, record]) => {
+      if (!automationEnabled(record)) return false;
+      const fire = lastFire(record.schedule, at);
+      return (
+        fire !== undefined &&
+        fire >= record.armedAt &&
+        (record.lastRunAt === undefined || fire > record.lastRunAt)
+      );
+    })
+    .map(([name]) => name);
+}
 
 /** Standing rules for the observer thread; its schedule prompt repeats them on every wake. */
 export const observerInstructions =
@@ -59,18 +117,23 @@ async function readSchedule(tools: PluginTools, thread?: ThreadID) {
   }
 }
 
-function matchingRecurrence(value: unknown) {
-  if (typeof value !== "string") return false;
+// The period of a plain minutely recurrence this factory could have installed (1 to 30 minutes),
+// or undefined for any other shape.
+function recurrenceMinutes(value: unknown) {
+  if (typeof value !== "string") return;
   const rules = value
     .split(/\r?\n/)
     .filter((line) => line.startsWith("RRULE:"));
-  if (rules.length !== 1) return false;
+  if (rules.length !== 1) return;
   const fields = new URLSearchParams(rules[0]!.slice(6).replaceAll(";", "&"));
-  return (
-    [...fields.keys()].length === 2 &&
+  const minutes = Number(fields.get("INTERVAL"));
+  return [...fields.keys()].length === 2 &&
     fields.get("FREQ") === "MINUTELY" &&
-    Number(fields.get("INTERVAL")) === 30
-  );
+    Number.isInteger(minutes) &&
+    minutes > 0 &&
+    minutes <= watchdogMinutes
+    ? minutes
+    : undefined;
 }
 
 function matchingAnchor(schedule: string, wakeAt: number | undefined) {
@@ -103,6 +166,22 @@ function matchingAnchor(schedule: string, wakeAt: number | undefined) {
   }
 }
 
+// The period of an enabled existing-thread registration, or undefined when its shape drifted.
+function ownedMinutes(current: Record<string, unknown>) {
+  const trigger = current.trigger as { schedule?: unknown } | undefined;
+  return current.runMode === "existing" && current.enabled === true
+    ? recurrenceMinutes(trigger?.schedule)
+    : undefined;
+}
+
+// Whether the registration's anchor is the wanted one. Without a wanted anchor, the last confirmed
+// one still in the registration means a change that never applied.
+function anchored(schedule: string, wakeAt?: number, staleWake?: unknown) {
+  if (wakeAt === undefined && typeof staleWake === "number")
+    return !matchingAnchor(schedule, staleWake);
+  return matchingAnchor(schedule, wakeAt);
+}
+
 function registration(
   current: Record<string, unknown> | null,
   expected: Record<string, unknown>,
@@ -117,13 +196,13 @@ function registration(
   )
     return "conflict";
   const trigger = current.trigger as { schedule?: unknown } | undefined;
-  return matchingRecurrence(trigger?.schedule) &&
-    current.runMode === "existing" &&
-    current.enabled === true
-    ? matchingAnchor(trigger!.schedule as string, wakeAt)
-      ? "owned"
-      : "unanchored"
-    : "drifted";
+  const minutes = ownedMinutes(current);
+  if (minutes === undefined) return "drifted";
+  // Another period is this factory's own registration to retime, like a stale anchor.
+  return minutes === Number(expected.interval ?? watchdogMinutes) &&
+    anchored(trigger!.schedule as string, wakeAt, expected.staleWake)
+    ? "owned"
+    : "unanchored";
 }
 
 function satisfied(
@@ -171,6 +250,7 @@ async function changeRegistration(
 ) {
   // Omitting the thread keeps the owner's own registration call exactly as observed.
   const thread = target ? { thread: target } : {};
+  const minutes = Number(expected.interval);
   await tools
     .call(
       wanted ? "amp.set_schedule" : "amp.clear_schedule",
@@ -180,12 +260,12 @@ async function changeRegistration(
             prompt: expected.prompt,
             schedule:
               wakeAt === undefined
-                ? recurrence
-                : `${anchor(wakeAt)}\n${recurrence}`,
+                ? recurrence(minutes)
+                : `${anchor(wakeAt)}\n${recurrence(minutes)}`,
             schedule_label:
               wakeAt === undefined
-                ? "Every 30 minutes"
-                : "Provider reset, then every 30 minutes",
+                ? `Every ${minutes} minutes`
+                : `Provider reset, then every ${minutes} minutes`,
             run_mode: "existing",
             ...thread,
           }
@@ -357,6 +437,8 @@ async function clearOwnerSchedule(
 
 /** Reconcile only this factory's existing-thread schedule under the lifecycle lock. The schedule
  * wakes the registered observer thread when there is one, and the connected owner otherwise.
+ * `automations` is the snapshot the clock is fitted to; a first start passes the one it is about
+ * to accept, before it is saved.
  * @throws On conflict, unavailable inspection, or an unconfirmed remote effect.
  */
 export async function reconcileSchedule(
@@ -369,6 +451,7 @@ export async function reconcileSchedule(
   execute = true,
   thread: ThreadID | undefined = state.owner,
   at = Date.now(),
+  automations: Automations = state.automations,
 ) {
   if (!tools) return;
   const fingerprint = watchdogFingerprint(root, directory);
@@ -376,17 +459,13 @@ export async function reconcileSchedule(
   const observer = state.foreman?.observer?.thread;
   const title = `Factory watchdog ${fingerprint}`;
   const prompt = schedulePrompt(title, root, !!observer);
-  const wanted =
-    state.enabled &&
-    queue.some(
-      (task) =>
-        (task.intake !== "planned" || Object.hasOwn(state.runs, task.id)) &&
-        state.runs[task.id]?.kind !== "done",
-    );
+  const wanted = wantsClock(state, queue, automations);
   const expected = {
     fingerprint,
     title,
     prompt,
+    interval: clockMinutes(automations),
+    staleWake: monitor.wakeAt,
   };
   const settled = wanted ? "installed" : "cleared";
   const resets = Object.values(state.runs).flatMap((run) => {
@@ -395,7 +474,12 @@ export async function reconcileSchedule(
     const due = providerResetAt(limit);
     return due > at ? [due + 60_000] : [];
   });
-  const wakeAt = resets.length ? Math.min(...resets) : undefined;
+  // An enabled automation needs wakes before any reset, so it keeps the schedule unanchored; the
+  // continuation stays gated by its own reset time at whichever wake follows it.
+  const wakeAt =
+    resets.length && !enabledAutomations(automations).length
+      ? Math.min(...resets)
+      : undefined;
   try {
     await clearPreviousOwners(state, tools, save, at);
     if (state.enabled && !execute) return;
