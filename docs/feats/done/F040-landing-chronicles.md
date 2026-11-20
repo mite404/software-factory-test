@@ -166,10 +166,10 @@ logs.
 
 ## Done when
 
-- `factory/README.md` has the `## Chronicle a landed ticket` section covering the selection
+- [x] `factory/README.md` has the `## Chronicle a landed ticket` section covering the selection
   rule, the exact boilerplate paragraph, the chronicler contract, and publish/close-out.
-- Every path, field, and file name the section asserts was verified against the source by the
-  worker's own commands, named in the report.
-- The section's lines stay within 100 columns and `bash factory/checks.sh guard` passes.
-- The exact clean candidate passes the full gate and the required cold post-graft review.
-- Changes stay within the agreed edit path; the original worker retains repair ownership.
+- [x] Every path, field, and file name the section asserts was verified against the source by
+  the worker's own commands, named in the report.
+- [x] The section's lines stay within 100 columns and `bash factory/checks.sh guard` passes.
+- [x] The exact clean candidate passes the full gate and the required cold post-graft review.
+- [x] Changes stay within the agreed edit path; the original worker retains repair ownership.

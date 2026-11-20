@@ -116,8 +116,8 @@ A baseline failure goes back to the Foreman; it does not widen the worker's scop
 
 ## Done when
 
-- [ ] The dashboard turns an automation on or off and runs it, applied on the next owner wake.
-- [ ] Unauthorized or cross-origin posts are refused and write nothing.
-- [ ] Requests apply once, and stale requests are refused with a visible reason.
-- [ ] The page shows each automation's schedule, state and last run, verified in screenshots.
-- [ ] Full gates, guard and a fresh cold review pass on the accepted revision.
+- [x] The dashboard turns an automation on or off and runs it, applied on the next owner wake.
+- [x] Unauthorized or cross-origin posts are refused and write nothing.
+- [x] Requests apply once, and stale requests are refused with a visible reason.
+- [x] The page shows each automation's schedule, state and last run, verified in screenshots.
+- [x] Full gates, guard and a fresh cold review pass on the accepted revision.
