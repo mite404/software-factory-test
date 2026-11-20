@@ -21,7 +21,7 @@ Merged, but at least one box, usually a live proof, is still open.
 | [F023-public-stop-reasons](feats/lifecycle-view/F023-public-stop-reasons.md) | A blocked or rejected ticket says why | 5/6 |
 | [v1-ticket3](feats/v1/v1-ticket3.md) | Repeat-safe repository services | 1/3 |
 
-## Not started (24)
+## Not started (23)
 
 In dispatch order.
 
@@ -30,7 +30,6 @@ In dispatch order.
 | [F028-role-credentials](feats/config-layout/F028-role-credentials.md) | Each role sees only its own credentials | 0/3 |
 | [v1-ticket12](feats/v1/v1-ticket12.md) | Permission-bound native hooks | 0/3 |
 | [scheduled-gates-ticket1](feats/scheduled-gates/scheduled-gates-ticket1.md) | Landed versus fully checked revisions | 0/4 |
-| [F022-ticket-file-sync](feats/planned-intake/F022-ticket-file-sync.md) | Saved tickets appear as planned on their own | 0/6 |
 | [v1-ticket10](feats/v1/v1-ticket10.md) | Supported executor reconnection | 0/3 |
 | [v1-ticket5](feats/v1/v1-ticket5.md) | Relevant phase lessons | 0/3 |
 | [v1-ticket6](feats/v1/v1-ticket6.md) | Snapshot evidence and phase checkpoints | 0/3 |
@@ -60,7 +59,7 @@ Written up but set aside; not dispatched until the operator asks for it.
 | --- | --- | --- |
 | [F036-context-window-reminders](feats/worker-budgets/F036-context-window-reminders.md) | Context-window reminders with an operator-chosen handoff | 0/5 |
 
-## Done (43)
+## Done (44)
 
 | Ticket | Outcome | Done when |
 | --- | --- | --- |
@@ -93,17 +92,18 @@ Written up but set aside; not dispatched until the operator asks for it.
 | [F026-factory-automations](feats/done/F026-factory-automations.md) | Automations switch on, off and run on demand | 5/5 |
 | [v1-ticket11](feats/done/v1-ticket11.md) | Required and advisory verification tools | 3/3 |
 | [F027-dashboard-controls](feats/done/F027-dashboard-controls.md) | The dashboard switches and runs automations | 5/5 |
-| [F040-landing-chronicles](feats/done/F040-landing-chronicles.md) |  | 5/5 |
+| [F040-landing-chronicles](feats/done/F040-landing-chronicles.md) | A chronicle procedure for every large landing | 5/5 |
 | [F024-serial-test-runs](feats/done/F024-serial-test-runs.md) | Test runs on one machine take turns | 5/5 |
 | [F031-landing-without-checkpoint](feats/done/F031-landing-without-checkpoint.md) | A blocked run without a checkpoint can record its landing | 5/5 |
 | [F032-landing-per-commit-proof](feats/done/F032-landing-per-commit-proof.md) | A multi-commit candidate can record its landing | 4/4 |
 | [F033-provider-error-shape](feats/done/F033-provider-error-shape.md) | A real provider limit waits instead of stopping | 4/4 |
 | [F034-reviewer-retry-create](feats/done/F034-reviewer-retry-create.md) | An interrupted reviewer creation can be retried | 5/5 |
 | [v1-ticket4](feats/done/v1-ticket4.md) | Durable private evidence records | 3/3 |
+| [F022-ticket-file-sync](feats/done/F022-ticket-file-sync.md) | Saved tickets appear as planned on their own | 6/6 |
 | [v1-ticket1](feats/done/v1-ticket1.md) | Public titles never show private briefs | 3/3 |
 | [v1-ticket2](feats/done/v1-ticket2.md) | One versioned definition that never auto-runs | 4/4 |
 | [worktree-setup-ticket1](feats/done/worktree-setup-ticket1.md) | Each worktree is ready before its worker starts | 5/5 |
 | [noninteractive-launcher-ticket1](feats/done/noninteractive-launcher-ticket1.md) | Setup and gates ignore shell startup files | 4/4 |
 | [repair-escalation-ticket1](feats/done/repair-escalation-ticket1.md) | Escalated repairs resume on the same worker | 5/5 |
 | [ticket-step-labels-ticket1](feats/done/ticket-step-labels-ticket1.md) | Dashboard shows ticket steps and target branch | 6/6 |
-| [F038-kimi-k3-reviewers](feats/done/F038-kimi-k3-reviewers.md) |  | 6/6 |
+| [F038-kimi-k3-reviewers](feats/done/F038-kimi-k3-reviewers.md) | Reviewers run on Kimi K3 for OpenAI workers | 6/6 |
