@@ -11,6 +11,8 @@
 - Depends on: planned-intake-ticket1 (done). F010-brief-fact-check later checks the brief at
   admission; this ticket does not.
 - Planned at: `fa429646343efd36414251c5f56612f1722f7b9d`, 2026-11-15. Local only.
+- Landed: outside the factory as PR #97 (merge `9febcdf`); the factory run record awaits a
+  landing proof that covers a path-adapted cherry-pick.
 
 ## Why this matters
 
@@ -138,10 +140,10 @@ A baseline failure goes back to the Foreman; it does not widen the worker's scop
 
 ## Done when
 
-- [ ] A new `F<NNN>-` ticket file appears as a planned row after one reconcile, with its step
+- [x] A new `F<NNN>-` ticket file appears as a planned row after one reconcile, with its step
       labels and outcome, and no edit to the queue file.
-- [ ] No ticket file content can admit a ticket, change an admitted row or start a worker.
-- [ ] A queue entry's brief, `after`, `size` and `risky` win over the ticket file.
-- [ ] An unreadable ticket file is listed in `status` with its reason and stops nothing.
-- [ ] Every open `F<NNN>-` ticket file has an Outcome line and shows on the live dashboard.
-- [ ] Full gates, guard and a fresh cold review pass on the accepted revision.
+- [x] No ticket file content can admit a ticket, change an admitted row or start a worker.
+- [x] A queue entry's brief, `after`, `size` and `risky` win over the ticket file.
+- [x] An unreadable ticket file is listed in `status` with its reason and stops nothing.
+- [x] Every open `F<NNN>-` ticket file has an Outcome line and shows on the live dashboard.
+- [x] Full gates, guard and a fresh cold review pass on the accepted revision.
