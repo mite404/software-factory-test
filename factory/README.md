@@ -124,7 +124,7 @@ includes the leftovers of an interrupted migration, which `--migrate` completes.
 ```text
 factory/config/
   factory.yaml                  version, capacity, mode, prd, tickets, scope, verify, permissions,
-                                backup, bookkeepingSHA256, watchdog, providerLimit
+                                ticketFiles, backup, bookkeepingSHA256, watchdog, providerLimit
   agents/foreman/agent.md       front matter: model (orchestratorModel). Body: the Foreman prompt
   agents/implementer/agent.md   front matter: model, effort, runner (workerModel, workerEffort,
                                 workerRunner). Body must be empty
@@ -358,6 +358,26 @@ admission until execution begins. Each task includes `outcome`, or `null` when n
 authored. It never falls back to the private brief. Top-level `counts` contains separate `planned`,
 `queued`, and `accepted` totals. Reads do not import or refresh records. Importing the full planned
 inventory remains a separate Foreman action after acceptance.
+
+### Ticket file sync
+
+The optional definition setting `ticketFiles` names a directory relative to the repository root,
+such as `docs/feats`. When set, `reload` and every owner `reconcile` read the ticket files below
+it and merge them into the queue before tickets are refreshed. A ticket file is a Markdown file
+named `F<NNN>-<slug>.md` whose H1 equals its name and which is not under a `done` directory. A
+ticket file with no queue entry of the same id becomes a `planned` row: its steps are the bold
+labels of the numbered list under `## Steps`, its outcome is the `- Outcome:` line under
+`## Status`, and its brief is `Implement <path>`. A queue entry of the same id wins, so the
+Foreman's brief, `after`, `size` and `risky` always come from the queue file.
+
+A synced row is always `planned`: no ticket file content can produce an admitted row, change an
+admitted row, or start a worker. Admission stays the owning Foreman's separate action. A synced
+row whose file is gone or has moved to `done` is removed, unless it is admitted or has a run;
+those rows are never changed. A ticket file that cannot be read (no Outcome line, no bold step
+labels, an H1 that differs from the name, or a duplicate id) is skipped, named with its reason in
+`status` under `skippedTickets`, and stops nothing. Only the id, step labels, outcome and path
+leave the file; Approach and other prose never reach rows, status, or the feed. When the setting
+is absent nothing is synced or swept.
 
 ### Storage and recovery
 

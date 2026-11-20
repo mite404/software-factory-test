@@ -49,6 +49,12 @@ review feedback, or an answer to a question. Find its current stage and continue
    the ticket name, path, and sections. Include observable acceptance, allowed files, verification,
    prerequisites, and permission boundaries. Do not create an external issue unless the operator
    requests one.
+   When the definition sets `ticketFiles`, every saved `F<NNN>-` ticket file below that directory
+   syncs to a planned row on `reload` and each reconcile, with steps from its `## Steps` labels
+   and outcome from its `- Outcome:` line. A queue entry of the same id wins, so keep each
+   ticket's real brief, `after`, `size` and `risky` in the queue file. A synced row is always
+   planned; only your `admit` admits it. Files that cannot be read are named with their reason in
+   status under `skippedTickets`; fix or move them to clear the list.
 4. Dispatch at most one implementation worker per lane: the main lane uses the definition's
    `workerModel` and `workerEffort`, and a light lane, when the definition sets `capacity: 2` and
    `lightWorker`, takes queue entries marked `"lane": "light"`. Mark only small, well-bounded

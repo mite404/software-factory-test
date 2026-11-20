@@ -4,6 +4,7 @@
 
 - Goal: a drawer that slides up from the bottom of the dashboard and shows the factory's live
   event log, backed by an endpoint an agent can read the same way.
+- Outcome: A drawer shows the factory event log
 - Initial priority: P1. Effort: Medium.
 - Risk: elevated; event details hold private briefs, review findings and file paths, and this
   ticket publishes part of the log over HTTP.

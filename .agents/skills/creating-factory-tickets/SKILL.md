@@ -41,8 +41,10 @@ Omit Notes only when empty. The example is not a filed ticket or proof that its 
 
 Inspect actual code and dependencies first. Keep the ticket concise, with these sections:
 
-1. Status: goal, initial priority, Small/Medium/Large effort, risk and blast-radius reason,
-   dependencies, actual planned-at revision/date. Scope size is not a duration or risk score.
+1. Status: goal, one `- Outcome:` line with the short public outcome, initial priority,
+   Small/Medium/Large effort, risk and blast-radius reason, dependencies, actual planned-at
+   revision/date. The outcome is explicitly public text; ticket file sync reads it into the
+   planned row. Scope size is not a duration or risk score.
 2. Why this matters, Current state, Approach, Scope, Steps, Test plan. Start each numbered step
    with a bold three-to-five-word task-specific label, followed by the full implementation sentence.
    Labels name the work; the sentence retains its detail and acceptance constraints.

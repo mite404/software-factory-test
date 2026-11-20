@@ -3,6 +3,7 @@
 ## Status
 
 - Goal: let a new Foreman thread in the same orb take over a factory whose owner cannot continue.
+- Outcome: A new Foreman thread can take over the factory
 - Initial priority: P1. Effort: Medium.
 - Risk: elevated; a wrong transfer gives two threads control of one queue.
 - Depends on: foreman-watchdog-ticket3 (merged). Precedes v1-ticket8, which owns exclusive

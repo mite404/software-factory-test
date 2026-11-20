@@ -4,6 +4,7 @@
 
 - Goal: resume the same worker, reviewer and Foreman without operator action once a provider usage
   limit resets.
+- Outcome: Provider-limit waits resume the same worker
 - Initial priority: P0. Effort: Medium.
 - Risk: elevated; an automatic nudge sends a message to a worker without a Foreman decision.
 - Depends on: foreman-watchdog-ticket3, F002-worker-runner-executor and the deferred runner

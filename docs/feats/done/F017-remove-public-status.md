@@ -4,6 +4,7 @@
 
 - Goal: remove the five-value public `status` from the dashboard feed once the page reads the
   named stage, so the feed has one answer to "where is this ticket".
+- Outcome: The feed answers where a ticket is once
 - Initial priority: P3. Effort: Small.
 - Risk: normal; any reader still using `status` breaks, so the type change must fail the build
   for each one.

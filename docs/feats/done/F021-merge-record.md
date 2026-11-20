@@ -4,6 +4,7 @@
 
 - Goal: the factory records, for each accepted ticket, the pull request and merge commit that
   put it on the remote main branch, and the feed publishes them.
+- Outcome: Each accepted ticket records its pull request and merge
 - Initial priority: P1. Effort: Small.
 - Risk: elevated; adds an owner-only control action and publishes a URL. A wrong record would
   point a landed ticket at the wrong change, so the factory checks the commit with Git.

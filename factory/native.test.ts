@@ -20,6 +20,7 @@ import {
   migrateDefinition,
   assertControlCaller,
   missingBriefFacts,
+  readTicketFile,
   statusSummary,
   tasks,
   type NativeHost,
@@ -2103,6 +2104,246 @@ test("planned intake survives refresh and restart without dispatch until owner a
   } finally {
     await server.stop();
   }
+});
+
+// A ticket file fixture with asymmetric steps: the second label holds a colon and an arrow, and
+// the Status and Approach sections carry private canary text that must never cross.
+function ticketFileText(h1: string, outcome: string, secondStep: string) {
+  return `# ${h1}
+
+## Status
+
+- Goal: CANARY goal text that must stay in the file.
+- Outcome: ${outcome}
+- intake: admitted
+
+## Approach
+
+CANARY approach text reaches neither status nor the feed.
+
+## Steps
+
+1. **Read ticket files**. Add the pure reader and its walker.
+2. **${secondStep}**. Prove the precedence rule both ways.
+3. **Sweep vanished rows**. Remove runless planned rows only.
+
+## Test plan
+
+- Run the full gate.
+`;
+}
+
+test("ticket file reader extracts public planning fields only", () => {
+  const path = "docs/feats/beta/F101-alone.md";
+  const content = ticketFileText(
+    "F101-alone",
+    "Saved tickets appear as planned",
+    "Merge: queue wins → file yields",
+  );
+  const read = readTicketFile(path, content);
+  expect(read).toEqual({
+    id: "F101-alone",
+    steps: [
+      "Read ticket files",
+      "Merge: queue wins → file yields",
+      "Sweep vanished rows",
+    ],
+    outcome: "Saved tickets appear as planned",
+  });
+  expect(JSON.stringify(read)).not.toContain("CANARY");
+  expect(read).not.toHaveProperty("intake");
+  expect(
+    readTicketFile(path, ticketFileText("F999-renamed", "x", "y")),
+  ).toEqual({ skip: "H1 does not match the file name" });
+  expect(
+    readTicketFile(
+      path,
+      content.replace("- Outcome: Saved tickets appear as planned\n", ""),
+    ),
+  ).toEqual({ skip: "no Outcome line under ## Status" });
+  expect(readTicketFile(path, content.replace(/\*\*/g, ""))).toEqual({
+    skip: "no bold step labels under ## Steps",
+  });
+  expect(
+    readTicketFile("docs/feats/done/F101-alone.md", content),
+  ).toBeUndefined();
+  expect(readTicketFile("docs/feats/beta/notes.md", content)).toBeUndefined();
+  expect(
+    readTicketFile("docs/feats/beta/F1011-four-digits.md", content),
+  ).toBeUndefined();
+});
+
+test("ticket files sync to planned rows on reload and reconcile, queue first", async () => {
+  const f = await preparationFixture(() => "");
+  const raw = await Bun.file(join(f.root, ".factory.json")).json();
+  raw.ticketFiles = "docs/feats";
+  await writeFile(join(f.root, ".factory.json"), JSON.stringify(raw));
+  await writeFile(
+    join(f.root, "tickets.json"),
+    JSON.stringify([
+      { id: "A", brief: "Work", after: [] },
+      {
+        id: "F100-queued",
+        brief: "Foreman private brief",
+        after: ["A"],
+        intake: "planned",
+        outcome: "Authored outcome",
+        size: "small",
+        risky: true,
+      },
+    ]),
+  );
+  const feats = join(f.root, "docs/feats");
+  await mkdir(join(feats, "alpha"), { recursive: true });
+  await mkdir(join(feats, "beta"), { recursive: true });
+  await mkdir(join(feats, "done"), { recursive: true });
+  await writeFile(
+    join(feats, "alpha/F100-queued.md"),
+    ticketFileText("F100-queued", "File outcome", "File step two"),
+  );
+  await writeFile(
+    join(feats, "beta/F101-alone.md"),
+    ticketFileText(
+      "F101-alone",
+      "Saved tickets appear as planned",
+      "Merge: queue wins → file yields",
+    ),
+  );
+  await writeFile(
+    join(feats, "beta/F102-broken.md"),
+    ticketFileText("F999-renamed", "Unread outcome", "Unread step"),
+  );
+  await writeFile(
+    join(feats, "done/F103-finished.md"),
+    ticketFileText("F103-finished", "Done outcome", "Done step"),
+  );
+  f.git("add", ".");
+  f.git("commit", "-qm", "ticket files");
+  const engine = createFactory(f.root, f.host, openStore);
+  await engine.tick("reload", "T-owner");
+  const stored = () => {
+    const storage = openPersistence(engine.directory, []);
+    const rows = Object.fromEntries(
+      storage.tickets.map((task) => [task.id, task]),
+    );
+    storage.close();
+    return rows;
+  };
+  expect(stored()["F100-queued"]).toEqual({
+    id: "F100-queued",
+    brief: "Foreman private brief",
+    after: ["A"],
+    intake: "planned",
+    outcome: "Authored outcome",
+    size: "small",
+    risky: true,
+  });
+  expect(stored()["F101-alone"]).toEqual({
+    id: "F101-alone",
+    brief: "Implement docs/feats/beta/F101-alone.md",
+    after: [],
+    intake: "planned",
+    outcome: "Saved tickets appear as planned",
+    steps: [
+      "Read ticket files",
+      "Merge: queue wins → file yields",
+      "Sweep vanished rows",
+    ],
+    file: "docs/feats/beta/F101-alone.md",
+  });
+  expect(stored()["F102-broken"]).toBeUndefined();
+  expect(stored()["F103-finished"]).toBeUndefined();
+  const status = await engine.tick("status");
+  expect(status.skippedTickets).toEqual([
+    {
+      file: "docs/feats/beta/F102-broken.md",
+      reason: "H1 does not match the file name",
+    },
+  ]);
+  expect(JSON.stringify(status)).not.toContain("CANARY");
+  expect(JSON.stringify(factoryEvents(engine.directory, 0, 500))).not.toContain(
+    "CANARY",
+  );
+  // A reconcile syncs too: a new file becomes a planned row with no queue edit.
+  await writeFile(
+    join(feats, "beta/F104-later.md"),
+    ticketFileText("F104-later", "Later outcome", "Later step"),
+  );
+  await engine.tick("reconcile", "T-owner");
+  expect(stored()["F104-later"]).toMatchObject({
+    intake: "planned",
+    outcome: "Later outcome",
+  });
+  // Deleting the file sweeps the row; the queue file's own row stays.
+  await rm(join(feats, "beta/F104-later.md"));
+  await engine.tick("reload", "T-owner");
+  expect(stored()["F104-later"]).toBeUndefined();
+  expect(stored()["F100-queued"]).toMatchObject({ id: "F100-queued" });
+  expect(f.counts()).toEqual({ creates: 0, sends: 0 });
+});
+
+test("synced rows stay planned on a started factory until the owner admits one", async () => {
+  const f = await preparationFixture(() => "");
+  const raw = await Bun.file(join(f.root, ".factory.json")).json();
+  raw.ticketFiles = "docs/feats";
+  await writeFile(join(f.root, ".factory.json"), JSON.stringify(raw));
+  await writeFile(join(f.root, "tickets.json"), JSON.stringify([]));
+  const feats = join(f.root, "docs/feats/beta");
+  await mkdir(feats, { recursive: true });
+  await writeFile(
+    join(feats, "F101-alone.md"),
+    ticketFileText(
+      "F101-alone",
+      "Saved tickets appear as planned",
+      "Merge: queue wins → file yields",
+    ),
+  );
+  f.git("add", ".");
+  f.git("commit", "-qm", "ticket files");
+  const engine = createFactory(f.root, f.host, openStore);
+  const { tools } = watchdogFixture();
+  await engine.tick("start", "T-owner", f.host.state, undefined, tools);
+  await engine.tick("reload", "T-owner", f.host.state, undefined, tools);
+  await engine.tick("reconcile", "T-owner", f.host.state, undefined, tools);
+  const row = () => {
+    const storage = openPersistence(engine.directory, []);
+    const task = storage.tickets.find((task) => task.id === "F101-alone");
+    storage.close();
+    return task;
+  };
+  // The file's authored `- intake: admitted` line produced a planned row and no worker.
+  expect(row()).toMatchObject({
+    intake: "planned",
+    file: "docs/feats/beta/F101-alone.md",
+  });
+  const state = await engine.tick("status");
+  expect(state.runs["F101-alone"]).toBeUndefined();
+  expect(JSON.stringify(state)).not.toContain("CANARY");
+  expect(JSON.stringify(factoryEvents(engine.directory, 0, 500))).not.toContain(
+    "CANARY",
+  );
+  expect(f.counts()).toEqual({ creates: 0, sends: 0 });
+  // Owner admission works on a synced row, then freezes it against any sync.
+  await engine.tick(
+    "admit",
+    "T-owner",
+    f.host.state,
+    undefined,
+    undefined,
+    "F101-alone",
+  );
+  expect(row()).toMatchObject({ intake: "admitted" });
+  const frozen = JSON.stringify(row());
+  await writeFile(
+    join(feats, "F101-alone.md"),
+    ticketFileText("F101-alone", "Changed outcome", "Changed step"),
+  );
+  await engine.tick("reload", "T-owner", f.host.state, undefined, tools);
+  expect(JSON.stringify(row())).toBe(frozen);
+  await rm(join(feats, "F101-alone.md"));
+  await engine.tick("reload", "T-owner", f.host.state, undefined, tools);
+  expect(JSON.stringify(row())).toBe(frozen);
+  expect(f.counts()).toEqual({ creates: 0, sends: 0 });
 });
 
 test("admission uses the loaded ticket path until explicit reload", async () => {

@@ -5,6 +5,7 @@
 - Goal: two narrative HTML artifacts per large or risky landing - a walkthrough with real proof
   and a changes summary with a data-flow flowchart - published by the Foreman with zero factory
   code.
+- Outcome: A chronicle procedure for every large landing
 - Initial priority: P2
 - Effort: Small
 - Risk: low; the ticket edits one documentation section. The procedure it documents touches

@@ -4,6 +4,7 @@
 
 - Goal: give every run one named stage that says where it is and who must act, including the
   four stages the factory does not record today: gating, reviewing, escalated and merged.
+- Outcome: Every run carries one named stage
 - Initial priority: P1. Effort: Medium.
 - Risk: elevated; adds two recorded facts to runs and a control action, and every status reader
   starts using the stage.

@@ -5,6 +5,7 @@
 - Goal: mark each pipeline step and each lifecycle exit with who performs it: the computer, a
   model, the Foreman or the operator. Link every model step, and every stop, to the thread that
   performed or caused it.
+- Outcome: Every step and stop names its actor and thread
 - Initial priority: P2. Effort: Medium.
 - Risk: normal; adds read-only labels and thread references to an existing table and projection.
   A stop gains one recorded field.

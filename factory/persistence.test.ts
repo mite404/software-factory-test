@@ -971,6 +971,123 @@ test("planning refresh cannot grant admission or rewrite admitted scope", async 
   ]);
 });
 
+test("sync sweeps only runless unadmitted synced rows and records each removal", async () => {
+  const f = await fixture();
+  const synced = {
+    id: "F100-vanished",
+    brief: "Implement docs/feats/x/F100-vanished.md",
+    after: [],
+    intake: "planned" as const,
+    outcome: "Public outcome",
+    steps: ["Read files"],
+    file: "docs/feats/x/F100-vanished.md",
+  };
+  const admitted = {
+    ...synced,
+    id: "F101-admitted",
+    file: "docs/feats/x/F101-admitted.md",
+  };
+  const running = {
+    ...synced,
+    id: "F102-running",
+    file: "docs/feats/x/F102-running.md",
+  };
+  let storage = openPersistence(
+    f.directory,
+    [...queue, synced, admitted, running],
+    undefined,
+    { skipped: [] },
+  );
+  storage.admit("F101-admitted");
+  storage.commit(
+    {
+      enabled: false,
+      runs: {
+        "F102-running": { kind: "creating", base: "abc", worktree: "/w" },
+      },
+    },
+    "F102-running",
+    "creating",
+    "fixture",
+  );
+  storage.close();
+  const admittedRow = () => {
+    const db = new Database(join(f.directory, "state.sqlite"), {
+      readonly: true,
+    });
+    try {
+      return db
+        .query<{ data: string }, []>(
+          "SELECT data FROM tickets WHERE id = 'F101-admitted'",
+        )
+        .get()!.data;
+    } finally {
+      db.close();
+    }
+  };
+  const frozen = admittedRow();
+  // A sync whose files are all gone, with the admitted row's fields changed.
+  storage = openPersistence(
+    f.directory,
+    [...queue, { ...admitted, outcome: "Changed outcome", steps: ["New"] }],
+    undefined,
+    { skipped: [] },
+  );
+  expect(storage.tickets.map((task) => task.id).sort()).toEqual([
+    "A",
+    "F101-admitted",
+    "F102-running",
+  ]);
+  storage.close();
+  expect(admittedRow()).toBe(frozen);
+  expect(
+    factoryEvents(f.directory, 0, 500)!.filter(
+      (event) => event.action === "removed",
+    ),
+  ).toEqual([
+    expect.objectContaining({
+      ticket: "F100-vanished",
+      detail: "docs/feats/x/F100-vanished.md",
+    }),
+  ]);
+  // Without the sync argument nothing is swept, even with an empty queue.
+  storage = openPersistence(f.directory, []);
+  expect(storage.tickets.map((task) => task.id).sort()).toEqual([
+    "A",
+    "F101-admitted",
+    "F102-running",
+  ]);
+  storage.close();
+});
+
+test("skipped ticket list persists in status and an unchanged sync writes no event", async () => {
+  const f = await fixture();
+  const skipped = [
+    {
+      file: "docs/feats/x/F103-broken.md",
+      reason: "no Outcome line under ## Status",
+    },
+  ];
+  let storage = openPersistence(f.directory, queue, undefined, { skipped });
+  storage.close();
+  expect(factoryStatus(f.directory).skippedTickets).toEqual(skipped);
+  const events = factoryEvents(f.directory, 0, 500);
+  expect(
+    events!.filter((event) => event.action === "tickets-skipped"),
+  ).toHaveLength(1);
+  storage = openPersistence(f.directory, queue, undefined, { skipped });
+  storage.close();
+  expect(factoryEvents(f.directory, 0, 500)).toEqual(events);
+  storage = openPersistence(f.directory, queue, undefined, { skipped: [] });
+  storage.close();
+  expect(factoryStatus(f.directory).skippedTickets).toEqual([]);
+  expect(
+    factoryEvents(f.directory, 0, 500)!.filter(
+      (event) => event.action === "tickets-skipped",
+    ),
+  ).toHaveLength(2);
+});
+
 test("status reads fresh and legacy repositories without runtime writes or locks", async () => {
   const f = await fixture();
   expect(await f.factory().tick("status")).toEqual({

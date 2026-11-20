@@ -4,6 +4,7 @@
 
 - Goal: one definition setting that chooses between waiting out a provider limit and continuing
   on a named fallback model.
+- Outcome: One setting picks waiting or a fallback model on limits
 - Initial priority: P2. Effort: Small.
 - Risk: elevated; a fallback changes which model reviews or writes accepted code.
 - Depends on: F003-provider-limit-resume.

@@ -82,6 +82,8 @@ export type Task = {
   risky?: boolean;
   /** Omission keeps the main lane; only a definition with lightWorker admits "light". */
   lane?: "light";
+  /** Repository-relative ticket file this row synced from; authored queue entries never set it. */
+  file?: string;
 };
 type Preparation = {
   base: string;
@@ -1088,10 +1090,16 @@ export function enqueueAutomationRequest(
   }
 }
 
+export type SkippedTicket = {
+  file: string;
+  reason: string;
+};
 export type State = {
   enabled: boolean;
   owner?: ThreadID;
   runs: Record<string, Run>;
+  /** Ticket files the last sync could not read, each with a content-free reason. */
+  skippedTickets?: SkippedTicket[];
   foreman?: {
     notes: { at: number; thread: ThreadID; text: string }[];
     handoffs: {
@@ -1970,6 +1978,18 @@ function stateRecord(value: unknown): State {
   validateForeman(state.foreman);
   validateMonitor(state.monitor);
   validateAutomations(state.automations);
+  if (
+    state.skippedTickets !== undefined &&
+    (!Array.isArray(state.skippedTickets) ||
+      !state.skippedTickets.every(
+        (row) =>
+          record(row) &&
+          Object.keys(row).length === 2 &&
+          text(row.file) &&
+          text(row.reason),
+      ))
+  )
+    throw new Error("Invalid factory skipped tickets");
   for (const [id, value] of Object.entries(record(state.runs)))
     validateRun(id, value);
   return value as State;
@@ -2044,6 +2064,28 @@ function readAutomations(db: Database) {
     : {};
 }
 
+function readSkipped(db: Database): SkippedTicket[] | undefined {
+  const table = db
+    .query(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'skipped'",
+    )
+    .get();
+  if (!table) return undefined;
+  const row = db
+    .query<{ data: string }, []>("SELECT data FROM skipped WHERE id = 1")
+    .get();
+  return row ? (JSON.parse(row.data) as SkippedTicket[]) : undefined;
+}
+
+function saveSkipped(db: Database, skipped: SkippedTicket[]) {
+  db.run(
+    "CREATE TABLE IF NOT EXISTS skipped (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL)",
+  );
+  db.query("INSERT OR REPLACE INTO skipped (id, data) VALUES (1, ?)").run(
+    JSON.stringify(skipped),
+  );
+}
+
 function readState(db: Database): State {
   const coordinator = db
     .query<{ enabled: number; owner: ThreadID | null }, []>(
@@ -2079,10 +2121,12 @@ function readState(db: Database): State {
         .query<{ data: string }, []>("SELECT data FROM foreman WHERE id = 1")
         .get()
     : null;
+  const skipped = readSkipped(db);
   return stateRecord({
     enabled: coordinator.enabled === 1,
     ...(coordinator.owner === null ? {} : { owner: coordinator.owner }),
     runs,
+    ...(skipped ? { skippedTickets: skipped } : {}),
     ...(monitor ? { monitor: JSON.parse(monitor.data) } : {}),
     ...(foreman ? { foreman: JSON.parse(foreman.data) } : {}),
     ...readAutomations(db),
@@ -2153,6 +2197,7 @@ function saveState(db: Database, state: State) {
       JSON.stringify(state.foreman),
     );
   }
+  if (state.skippedTickets) saveSkipped(db, state.skippedTickets);
   if (state.automations) saveAutomations(db, state.automations);
   if (state.monitor) {
     db.run(
@@ -2371,11 +2416,42 @@ function refreshTickets(
   }
 }
 
-/** Open storage under the caller's poteto lock; migrate once. @throws On invalid storage or I/O. */
+// A synced row vanishes only while nothing owns it: admission or any run freezes it in place.
+function sweepSyncedTickets(
+  db: Database,
+  queue: Task[],
+  state: State,
+  now: () => number,
+) {
+  const synced = new Set(
+    queue.flatMap((task) => (task.file === undefined ? [] : [task.id])),
+  );
+  for (const row of db
+    .query<{ id: string; data: string }, []>("SELECT id, data FROM tickets")
+    .all()) {
+    const task = record(JSON.parse(row.data));
+    const file = task.file;
+    if (!text(file) || synced.has(row.id)) continue;
+    if (task.intake === "admitted" || state.runs[row.id]) continue;
+    db.query("DELETE FROM tickets WHERE id = ?").run(row.id);
+    saveEvent(db, {
+      at: new Date(now()).toISOString(),
+      ticket: row.id,
+      action: "removed",
+      detail: file,
+    });
+  }
+}
+
+/** Open storage under the caller's poteto lock; migrate once. When `sync` is passed, rows that
+ * synced from ticket files whose file is now gone are swept and the skip list is recorded;
+ * both write events only when something actually changed.
+ * @throws On invalid storage or I/O. */
 export function openPersistence(
   directory: string,
   queue: Task[],
   now: () => number = Date.now,
+  sync?: { skipped: SkippedTicket[] },
 ) {
   const imported = existsSync(join(directory, "state.sqlite"))
     ? null
@@ -2413,6 +2489,19 @@ export function openPersistence(
         PRIMARY KEY (ticket, attempt, kind, revision, outcome, sha256))`);
       const state = readState(db);
       refreshTickets(db, queue, now);
+      if (sync) {
+        sweepSyncedTickets(db, queue, state, now);
+        if (JSON.stringify(readSkipped(db)) !== JSON.stringify(sync.skipped)) {
+          saveSkipped(db, sync.skipped);
+          saveEvent(db, {
+            at: new Date(now()).toISOString(),
+            ticket: "factory",
+            action: "tickets-skipped",
+            detail: JSON.stringify(sync.skipped),
+          });
+        }
+        state.skippedTickets = sync.skipped;
+      }
       return state;
     })();
     return {
