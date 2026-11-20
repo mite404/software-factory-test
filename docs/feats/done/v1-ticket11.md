@@ -67,6 +67,12 @@ Execute common preflight in `docs/v1-execution.md`. Tool capability checks remai
 
 ## Done when
 
-- [ ] Existing tool roles are reused and mandatory absences block acceptance.
-- [ ] Results identify exact revisions, versions, and coverage without duplicate execution.
-- [ ] Full gates and cold review pass.
+- [x] Existing tool roles are reused and mandatory absences block acceptance.
+- [x] Results identify exact revisions, versions, and coverage without duplicate execution.
+- [x] Full gates and cold review pass.
+
+Landed 2026-11-20 as PR #91, merge commit `6c1e2c726ec7f1fc9ef5c6051d6dbd826ebeb881`, via the
+external path (F004 precedent): the candidate's only gate failure was an inherited unformatted
+`.factory-tickets.json` in the dispatch base, clone-local coordinator state that cannot ride an
+integration branch. Operator approved; full gate re-ran green on the integration branch head and
+the kimi-k3 high cold review verdict was land as-is.
