@@ -30,6 +30,9 @@
         "tickets": {
           "$ref": "definition.schema.json#/properties/tickets"
         },
+        "ticketFiles": {
+          "$ref": "definition.schema.json#/properties/ticketFiles"
+        },
         "scope": {
           "$ref": "definition.schema.json#/properties/scope"
         },
