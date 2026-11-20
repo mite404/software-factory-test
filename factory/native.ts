@@ -18,6 +18,7 @@ import {
   writeConfigFiles,
   configDirectory,
   type Check,
+  type VerificationCapability,
 } from "./config";
 import definitionSchema from "./definition.schema.json";
 import type { Executor } from "./executor";
@@ -1125,9 +1126,74 @@ function reviewIdentity(root: string, worktree: string, review: Review) {
 }
 
 type CommandResult = Awaited<ReturnType<typeof verify>>;
-type CheckRun = CheckStatus & { durationMs: number; result: CommandResult };
+type CheckRun = CheckStatus & {
+  command: string;
+  capability?: VerificationCapability & {
+    executable: string | null;
+    version: string | null;
+  };
+  durationMs: number;
+  result: CommandResult;
+};
 // A gate of checks keeps every check's own result; its status and log are summaries of them.
 type GateResult = CommandResult & { checks?: CheckRun[] };
+
+function shellArgument(value: string) {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+// Resolve only external executables. A probe is not a gate and never runs the check command.
+async function resolveCapability(
+  worktree: string,
+  check: Check,
+  onSpawn?: (pid: number, timeoutMs: number) => void,
+) {
+  if (!check.capability) return undefined;
+  const { tool, versionArgs, coverage } = check.capability;
+  const probe = await verify(
+    worktree,
+    `tool=$(type -P -- ${shellArgument(tool)}) || { printf '%s\\n' ${shellArgument(`Required executable unavailable: ${tool}`)} >&2; exit 127; }; printf '%s\\n' "$tool"; "$tool" ${versionArgs.map(shellArgument).join(" ")} 2>&1`,
+    Math.min(check.timeoutMs, 30_000),
+    onSpawn,
+  );
+  const newline = probe.stdout.indexOf("\n");
+  const executable = newline < 0 ? null : probe.stdout.slice(0, newline);
+  const version = newline < 0 ? "" : probe.stdout.slice(newline + 1).trim();
+  const available = probe.status === 0 && !!executable && !!version;
+  return {
+    capability: {
+      tool,
+      versionArgs,
+      executable,
+      version: available ? version : null,
+      coverage,
+    },
+    // A missing tool or failed version probe is not a flaky gate. Do not repeat it.
+    failure: available
+      ? null
+      : {
+          ...probe,
+          status: null,
+          stderr: `${probe.stderr}\nCapability unavailable or version unconfirmed: ${tool}\n`,
+        },
+  };
+}
+
+/** Discover declared tools for explicit setup checks without running verification commands.
+ * @throws When a required tool is absent or its version probe cannot be confirmed.
+ */
+export async function checkVerificationTools(
+  root: string,
+  checks: Check[] = [],
+) {
+  for (const check of checks) {
+    const resolved = await resolveCapability(root, check);
+    if (resolved?.failure && check.required)
+      throw new Error(
+        `Verification capability ${check.name}: ${resolved.failure.stderr}`,
+      );
+  }
+}
 
 // Every check runs in order even after a failure, so one rejection names every failure. A check
 // that times out, is killed or cannot start ends without exit 0, so it is never a pass.
@@ -1137,12 +1203,24 @@ async function runChecks(
   onSpawn: (pid: number, timeoutMs: number) => void,
 ): Promise<GateResult> {
   const runs: CheckRun[] = [];
-  for (const { name, command, required, timeoutMs } of checks) {
+  for (const check of checks) {
+    const { name, command, required, timeoutMs } = check;
     const started = performance.now();
-    const result = await verify(worktree, command, timeoutMs, onSpawn);
+    const resolved = await resolveCapability(worktree, check, onSpawn);
+    const result =
+      resolved?.failure ??
+      (await verify(worktree, command, timeoutMs, onSpawn));
     const status = checkStatus(result);
     const durationMs = Math.round(performance.now() - started);
-    runs.push({ name, required, status, durationMs, result });
+    runs.push({
+      name,
+      command,
+      required,
+      status,
+      durationMs,
+      result,
+      ...(resolved ? { capability: resolved.capability } : {}),
+    });
   }
   // The pass rule: every required check passed. A timed-out or killed one has no status, so like
   // a flat gate's timeout it is not rerun.
@@ -1301,14 +1379,25 @@ function gateLog(result: CommandResult) {
 }
 
 // What a gate evidence record preserves: the log, or for checks one record per check.
-function gateContent(result: GateResult) {
+function gateContent(result: GateResult, revision: string) {
   if (!result.checks) return gateLog(result);
   return JSON.stringify({
     checks: result.checks.map(
-      ({ name, required, status, durationMs, result: output }) => {
+      ({
+        name,
+        command,
+        capability,
+        required,
+        status,
+        durationMs,
+        result: output,
+      }) => {
         const { stdout, stderr } = gateOutput(output);
         return {
           name,
+          command,
+          revision,
+          ...(capability ? { capability } : {}),
           required,
           status,
           durationMs,
@@ -1449,7 +1538,12 @@ async function candidateEvidence(
     await writeGateExcerpt(log, "gate-failed", result);
     gate.recorded([
       reported,
-      record("gate", "gate-failed", gateContent(result), pinned.verify),
+      record(
+        "gate",
+        "gate-failed",
+        gateContent(result, revision),
+        pinned.verify,
+      ),
     ]);
     gateKind = "gate-rerun";
     rerunLog = join(directory, `${task.id}-${run.attempt}.rerun.log`);
@@ -1465,7 +1559,7 @@ async function candidateEvidence(
   recordChecks(run, result);
   gate.returned(outcome, [
     reported,
-    record(gateKind, outcome, gateContent(result), pinned.verify),
+    record(gateKind, outcome, gateContent(result, revision), pinned.verify),
   ]);
   return {
     revision: verified ? revision : null,

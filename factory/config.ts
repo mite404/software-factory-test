@@ -20,6 +20,15 @@ export const configDirectory = "factory/config";
 
 type Files = Map<string, Buffer>;
 type Data = Record<string, unknown>;
+export type VerificationCapability = {
+  /** External executable, resolved in the same login shell as the check. */
+  tool: string;
+  /** Arguments for a read-only version probe, not the verification command. */
+  versionArgs: string[];
+  /** Authored scope of the check, not measured code coverage. */
+  coverage: string[];
+};
+
 /** One gate check from `checks/<name>.yaml`; a definition holds them in run order. */
 export type Check = {
   name: string;
@@ -27,6 +36,8 @@ export type Check = {
   /** False makes the check advisory: its failure is reported but never rejects. */
   required: boolean;
   timeoutMs: number;
+  /** Optional installed-tool contract; absence preserves the ordinary shell check. */
+  capability?: VerificationCapability;
 };
 /** The timeout of a check that sets none, and of the flat `verify` command. */
 export const defaultCheckTimeoutMs = 600_000;
@@ -76,6 +87,28 @@ const layoutDirectories = new Set(
     return parts.map((_, i) => parts.slice(0, i + 1).join("/"));
   }),
 );
+
+/** Validate authored and persisted capability declarations, including unknown keys. */
+export function validVerificationCapability(
+  value: unknown,
+): value is VerificationCapability {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const data = value as Data;
+  const nonblank = (item: unknown): item is string =>
+    typeof item === "string" && /\S/.test(item) && !item.includes("\0");
+  return (
+    Object.keys(data).every((key) =>
+      ["tool", "versionArgs", "coverage"].includes(key),
+    ) &&
+    nonblank(data.tool) &&
+    Array.isArray(data.versionArgs) &&
+    data.versionArgs.length > 0 &&
+    data.versionArgs.every(nonblank) &&
+    Array.isArray(data.coverage) &&
+    data.coverage.length > 0 &&
+    data.coverage.every(nonblank)
+  );
+}
 
 // A directory the layout allows: a fixed one, or one automation's own.
 function inLayout(directory: string) {
@@ -315,6 +348,19 @@ function checkRunner(files: Files, named: unknown) {
   return runner;
 }
 
+function capabilityFields(
+  path: string,
+  value: unknown,
+): Pick<Check, "capability"> {
+  if (value === undefined) return {};
+  if (!validVerificationCapability(value))
+    fail(
+      path,
+      "invalid capability; expected only tool, versionArgs and coverage with nonblank strings",
+    );
+  return { capability: value };
+}
+
 // The one reader of check values. Files run by `order`, then by name, so ties are deterministic;
 // a set of only advisory checks is refused because that gate could never fail.
 function composeChecks(parsed: Map<string, { data: Data }>) {
@@ -335,6 +381,7 @@ function composeChecks(parsed: Map<string, { data: Data }>) {
       command,
       required,
       timeoutMs: timeoutMs as number,
+      ...capabilityFields(path, data.capability),
     };
     return [{ order: order as number, check }];
   });

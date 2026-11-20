@@ -161,13 +161,50 @@ like any other config file. Without `checks/`, the flat `verify` string gates ex
 one command under a 600 000 ms timeout. Checks are pinned with the definition, so an edit or a new
 check changes nothing for an active run until `reload`.
 
+An optional `capability` on a check declares the installed tool that command uses. For example,
+`checks/contracts.yaml` can contain:
+
+```yaml
+command: verification check contracts
+order: 1
+capability:
+  tool: verification
+  versionArgs: ["--version"]
+  coverage: ["public API contracts"]
+```
+
+Use the project's existing command and its documented read-only version arguments. The factory
+does not install tools, replace harnesses, add formal models, start watchers, or infer coverage.
+`coverage` is a nonempty list of authored scope labels, not measured code coverage. `tool` and
+each version argument must be nonblank strings. Unknown capability keys and incomplete
+declarations are refused at load. Capability declarations share the check's `required` role and
+are covered by the definition digest and immutable pin, not a separate configuration format.
+
+At a gate, discovery resolves an external executable with Bash `type -P` in the check's login
+shell and probes its version. The probe has the smaller of `timeoutMs` and 30 seconds, followed
+by the check's own timeout. Missing executables, failed probes, and empty version output fail
+that check without running its command. An unavailable required tool rejects even if every
+advisory check passes. An unavailable advisory tool remains a reported advisory failure.
+Discovery failures do not trigger the flake rerun. Successful discovery runs the authored check
+command once per gate execution; the existing rerun policy still applies to command failures.
+
+Private gate evidence records each check's exact command and revision. Declared capabilities
+also record the tool, resolved executable, observed version, and authored coverage. An unavailable
+tool has a null executable or version rather than an inferred success. Evidence stays bound to
+the attempted revision; a rebase requires a fresh gate and cannot reuse a stale pass. Setup
+`--check` uses the same discovery without running check commands or recording acceptance.
+Status, effective-definition reads, dashboard reads, and unchanged reconciles never probe tools,
+rerun checks, poll CI, or start a second watcher. Undeclared checks and verify-only projects keep
+their existing behavior and make no new version or coverage claim.
+
 A rejection lists every check with its status and time, then each failed check's own stdout and
 stderr tails. F008's 8192-byte budget is split evenly across the failed checks. A review
 rejection of a passed gate re-cuts the failed advisory checks' tails from that gate's evidence
 record to the same budget. The F019 rerun
-still runs once when a required check exits non-zero; a gate with a timed-out or killed required
-check is not rerun. The gate evidence record holds JSON with each check's status, duration and
-output tail. The status feed carries each ticket's last gate as `checks: {attempt, results}` with
+still runs once when a required check exits non-zero; a gate with a timed-out, killed or
+undiscovered required check is not rerun. The gate evidence record holds JSON with each check's
+command, revision, optional capability, status, duration and output tail. The status feed carries
+each ticket's last gate as `checks: {attempt, results}` with
 names, `required` and statuses only, and the kit page draws its verify chips from it. A flat
 `verify` gate is recorded there as one required check named `verify`; its log, excerpt, evidence
 and feedback stay as before.
