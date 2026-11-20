@@ -77,6 +77,14 @@ test("automation receipts stay pending until polled and refused requests show th
   expect(automationView(refused, 8, false, "", true).message).toBe(
     "run refused · Request expired after one hour.",
   );
+  expect(
+    automationView({ ...refused, schedule: null }, 8, false, "", true),
+  ).toMatchObject({
+    disabled: true,
+    pending: false,
+    schedule: "No longer loaded",
+    message: "run refused · Request expired after one hour.",
+  });
 });
 
 // One ticket per word: the stage and live activity that make the page say it.

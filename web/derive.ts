@@ -54,7 +54,9 @@ export function automationView(
   const nextAction: AutomationAction = row.enabled ? "disable" : "enable";
   return {
     pending,
-    disabled: !hasToken || sending || pending,
+    disabled: !hasToken || sending || pending || row.schedule === null,
+    schedule:
+      row.schedule === null ? "No longer loaded" : `${row.schedule} · UTC`,
     nextAction,
     switchLabel: row.enabled ? "On" : "Off",
     message: automationMessage(row.requests.at(-1), pending, sending, error),

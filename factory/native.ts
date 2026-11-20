@@ -4010,15 +4010,24 @@ export function createFactory(
           "refused",
           "Application outcome unknown; not retried.",
         );
-        if (
-          await changeAutomation(
+        let applied: boolean;
+        try {
+          applied = await changeAutomation(
             persistence,
             `automation-${request.action}`,
             request.name,
             owner,
             tools,
-          )
-        )
+          );
+        } catch (error) {
+          persistence.settleAutomationRequest(
+            request.id,
+            "refused",
+            String(error),
+          );
+          continue;
+        }
+        if (applied)
           persistence.settleAutomationRequest(request.id, "applied", null);
       }
     });

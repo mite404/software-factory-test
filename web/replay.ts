@@ -443,10 +443,10 @@ export function feedAt(n: number): Feed {
     automations: [
       {
         name: "sample-audit",
-        schedule: "0 9 * * 1",
+        schedule: n % 4 === 3 ? null : "0 9 * * 1",
         enabled: n % 4 === 0,
-        lastRunAt: Date.parse("2026-11-19T09:00:00Z"),
-        lastOutcome: "sent",
+        lastRunAt: n % 4 === 3 ? null : Date.parse("2026-11-19T09:00:00Z"),
+        lastOutcome: n % 4 === 3 ? null : "sent",
         requests:
           n % 4 < 2
             ? []
@@ -460,7 +460,7 @@ export function feedAt(n: number): Feed {
                     ? ({ status: "pending", reason: null } as const)
                     : ({
                         status: "refused",
-                        reason: "Request expired after one hour.",
+                        reason: "Error: Unknown automation sample-audit",
                       } as const)),
                 },
               ],

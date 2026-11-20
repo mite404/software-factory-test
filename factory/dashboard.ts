@@ -255,17 +255,36 @@ export type DashboardSnapshot = {
   }[];
 };
 
-export type DashboardAutomation = ReturnType<typeof automationRows>[number] & {
+export type DashboardAutomation = Omit<
+  ReturnType<typeof automationRows>[number],
+  "schedule"
+> & {
+  schedule: string | null;
   requests: AutomationRequest[];
 };
 
 function dashboardAutomations(
   records: NonNullable<ReturnType<typeof factoryRecords>>,
 ): DashboardAutomation[] {
-  return automationRows(records.state).map((row) => ({
-    ...row,
-    requests: records.requests.filter((request) => request.name === row.name),
-  }));
+  const requests = Map.groupBy(records.requests, (request) => request.name);
+  const rows: DashboardAutomation[] = automationRows(records.state).map(
+    (row) => ({
+      ...row,
+      requests: requests.get(row.name) ?? [],
+    }),
+  );
+  for (const [name, history] of requests) {
+    if (rows.some((row) => row.name === name)) continue;
+    rows.push({
+      name,
+      schedule: null,
+      enabled: false,
+      lastRunAt: null,
+      lastOutcome: null,
+      requests: history,
+    });
+  }
+  return rows;
 }
 
 function record(value: unknown): Record<string, unknown> {

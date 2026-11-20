@@ -159,6 +159,44 @@ test("automation POSTs require token and exact origin, queue only, and never exp
     } finally {
       db.close();
     }
+    const removed = openPersistence(directory, []);
+    try {
+      removed.commit(
+        { ...removed.state, automations: {} },
+        "factory",
+        "reload",
+        "",
+      );
+      const pending = await (await fetch(url + "/api/status")).json();
+      expect(pending.automations).toMatchObject([
+        {
+          name: "weekly.audit",
+          schedule: null,
+          requests: [{ status: "pending" }],
+        },
+      ]);
+      removed.settleAutomationRequest(
+        1,
+        "refused",
+        "Error: Unknown automation weekly.audit",
+      );
+      const refused = await (await fetch(url + "/api/status")).json();
+      expect(refused.automations).toMatchObject([
+        {
+          name: "weekly.audit",
+          schedule: null,
+          enabled: false,
+          requests: [
+            {
+              status: "refused",
+              reason: "Error: Unknown automation weekly.audit",
+            },
+          ],
+        },
+      ]);
+    } finally {
+      removed.close();
+    }
   } finally {
     await server.stop(true);
     await rm(root, { recursive: true, force: true });

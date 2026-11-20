@@ -933,6 +933,37 @@ test("dashboard requests apply oldest first only on connected owner reconciliati
   expect(factoryEvents(directory)).toEqual(before);
 });
 
+test("a removed automation refuses its queued request without blocking the next request or reconcile", async () => {
+  const f = await engine({
+    removed: automationFile("*/5 * * * *", false),
+    pulse: automationFile("*/5 * * * *", false, "Still loaded."),
+  });
+  await f.tick("start");
+  await f.tick("pause");
+  enqueueAutomationRequest(f.factory.directory, "removed", "run", at(12, 0));
+  enqueueAutomationRequest(f.factory.directory, "pulse", "run", at(12, 0));
+  await rm(join(f.root, "factory/config/automations/removed"), {
+    recursive: true,
+  });
+  f.git("add", ".");
+  f.git("commit", "-qm", "remove automation");
+  await f.tick("reload");
+  await f.tick("reconcile");
+  expect(factoryRecords(f.factory.directory)!.requests).toMatchObject([
+    {
+      name: "removed",
+      status: "refused",
+      reason: "Error: Unknown automation removed",
+    },
+    { name: "pulse", status: "applied", reason: null },
+  ]);
+  expect(f.sent()).toEqual([
+    { thread: "T-owner", message: "Factory automation pulse\nStill loaded." },
+  ]);
+  await f.tick("reconcile");
+  expect(f.sent()).toHaveLength(1);
+});
+
 test("a dashboard run with a lost send reply is visibly refused and never retried after restart", async () => {
   const f = await engine({ pulse: automationFile("*/5 * * * *", false) });
   await f.tick("start");

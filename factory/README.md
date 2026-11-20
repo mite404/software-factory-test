@@ -1336,6 +1336,11 @@ serve only trusted dashboard assets and keep the token private.
 includes automation prompt bodies or the control token. Reads and HTTP writes cannot invoke Amp
 tools; only the plugin's connected owner turn can apply intents.
 
+An individual action failure refuses that request with its error and does not stop later requests
+or the owner reconciliation. Requests for an automation removed by reload remain visible as
+**No longer loaded**, with controls disabled and their pending or refused result preserved.
+Their status row has a null `schedule`; no removed prompt or last-run state is reconstructed.
+
 ### Pipeline view
 
 Build the pipeline page in the repository served by `--repo` before starting the dashboard:

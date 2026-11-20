@@ -701,8 +701,8 @@ function AutomationRow({
     <li data-automation>
       <div>
         <h3>{row.name}</h3>
-        <code>{row.schedule} · UTC</code>
-        <p>
+        <code>{model.schedule}</code>
+        <p hidden={row.schedule === null}>
           Last run {model.lastRun} · {model.lastOutcome}
         </p>
       </div>
