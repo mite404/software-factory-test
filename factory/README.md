@@ -1219,6 +1219,45 @@ decision, is a no-op after reload. Recording preserves the enabled state, works 
 does not dispatch, send messages, or change schedules. Dependents become eligible on the next
 ordinary enabled reconciliation. Existing done tickets still use `record-merge`.
 
+## Chronicle a landed ticket
+
+A landed ticket gets a chronicle when its queue entry has `size: "large"` or `risky: true`
+(`Task` in `factory/persistence.ts`), or the operator names one by hand. Small, low-risk
+landings get none. The chronicle is two self-contained HTML artifacts: a walkthrough with real
+proof that the change works, and a changes summary with a data-flow flowchart. It is a manual
+Foreman procedure; it adds no factory code or schema.
+
+Proof capture starts at admission. When the Foreman writes the admission brief for a qualifying
+ticket, it appends this boilerplate paragraph:
+
+> Proof capture for the landing chronicle: while you verify, keep the proof a reader needs to
+> believe the change works. For UI changes, capture screenshots or short recordings of every
+> affected state, default state first, at the sizes the ticket names. For backend or tooling
+> changes, keep the command invocations and their decisive output excerpts. Attach these files
+> to your completion message to the Foreman. The attachments feed a public narrative page:
+> capture only what may be public, never private briefs, secrets, or runtime state.
+
+After `record-merge` succeeds for a qualifying ticket, the owning Foreman spawns one chronicler
+child thread on the light-lane model (`moonshotai/kimi-k3`, low effort). The chronicler reads
+only retained records: the accepted diff from the run's accepted base to the merge commit, the
+gate log at `.git/factory/<ticket>-<attempt>.log`, the post-graft review verdict at
+`.git/factory/<ticket>-<attempt>-<revision>-post-graft.review.json`, the attempt report
+summary, and the worker's attached proof media. It writes two self-contained HTML files with
+inline styles and scripts, no external or localhost references, and media embedded as data URLs
+or durable Amp attachment URLs:
+
+1. `Walkthrough · <ticket>`: the narrative of what the agent did and why, embedding the proof
+   media and quoting decisive gate-log excerpts with their log paths and revision shas.
+2. `Changes · <ticket>`: what data moves where and why, with a flowchart and the load-bearing
+   files called out.
+
+The chronicler returns file paths; the Foreman publishes each file as a thread artifact with
+exactly those stable titles, then links both artifacts in the ticket file at close-out and in
+the merge report. Stable titles make republication idempotent. Chronicling runs after the merge
+is recorded, so a chronicler failure never reopens the ticket, blocks the next dispatch, or
+touches the pull request. Private briefs, incident details, and Git-metadata report paths stay
+out of the pages; the chronicler's input is the public-safe subset of retained records.
+
 ## Refresh an installed adapter
 
 Run the setup command with `--refresh` to rebuild only the repository's generated plugin:
