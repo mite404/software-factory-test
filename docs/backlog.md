@@ -21,13 +21,12 @@ Merged, but at least one box, usually a live proof, is still open.
 | [F023-public-stop-reasons](feats/lifecycle-view/F023-public-stop-reasons.md) | A blocked or rejected ticket says why | 5/6 |
 | [v1-ticket3](feats/v1/v1-ticket3.md) | Repeat-safe repository services | 1/3 |
 
-## Not started (26)
+## Not started (25)
 
 In dispatch order.
 
 | Ticket | Outcome | Done when |
 | --- | --- | --- |
-| [v1-ticket11](feats/v1/v1-ticket11.md) | Required and advisory verification tools | 0/3 |
 | [F027-dashboard-controls](feats/config-layout/F027-dashboard-controls.md) | The dashboard switches and runs automations | 0/5 |
 | [F028-role-credentials](feats/config-layout/F028-role-credentials.md) | Each role sees only its own credentials | 0/3 |
 | [v1-ticket12](feats/v1/v1-ticket12.md) | Permission-bound native hooks | 0/3 |
@@ -62,7 +61,7 @@ Written up but set aside; not dispatched until the operator asks for it.
 | --- | --- | --- |
 | [F036-context-window-reminders](feats/worker-budgets/F036-context-window-reminders.md) | Context-window reminders with an operator-chosen handoff | 0/5 |
 
-## Done (40)
+## Done (41)
 
 | Ticket | Outcome | Done when |
 | --- | --- | --- |
@@ -104,5 +103,6 @@ Written up but set aside; not dispatched until the operator asks for it.
 | [v1-ticket4](feats/done/v1-ticket4.md) | Durable private evidence records | 3/3 |
 | [F025-config-directory](feats/done/F025-config-directory.md) | Factory settings live in one file per concern | 7/7 |
 | [F029-gate-check-files](feats/done/F029-gate-check-files.md) | The gate reports every check on its own | 6/6 |
+| [v1-ticket11](feats/done/v1-ticket11.md) | Required and advisory verification tools | 3/3 |
 | [F026-factory-automations](feats/done/F026-factory-automations.md) | Automations switch on, off and run on demand | 5/5 |
 | [F038-kimi-k3-reviewers](feats/done/F038-kimi-k3-reviewers.md) |  | 6/6 |
