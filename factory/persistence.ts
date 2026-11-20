@@ -2443,15 +2443,52 @@ function sweepSyncedTickets(
   }
 }
 
+// One ticket-file sync inside the open transaction: sweep vanished rows and record the skip
+// list when it changed, or clear a stale list once when the setting is gone.
+function applyTicketSync(
+  db: Database,
+  queue: Task[],
+  state: State,
+  now: () => number,
+  sync: { skipped: SkippedTicket[] } | "off",
+) {
+  if (sync === "off") {
+    // The ticketFiles setting is gone; a stale skip list would misreport, so clear it once.
+    if (!readSkipped(db)?.length) return;
+    saveSkipped(db, []);
+    saveEvent(db, {
+      at: new Date(now()).toISOString(),
+      ticket: "factory",
+      action: "tickets-skipped",
+      detail: "[]",
+    });
+    state.skippedTickets = [];
+    return;
+  }
+  sweepSyncedTickets(db, queue, state, now);
+  if (JSON.stringify(readSkipped(db) ?? []) !== JSON.stringify(sync.skipped)) {
+    saveSkipped(db, sync.skipped);
+    saveEvent(db, {
+      at: new Date(now()).toISOString(),
+      ticket: "factory",
+      action: "tickets-skipped",
+      detail: JSON.stringify(sync.skipped),
+    });
+  }
+  state.skippedTickets = sync.skipped;
+}
+
 /** Open storage under the caller's poteto lock; migrate once. When `sync` is passed, rows that
  * synced from ticket files whose file is now gone are swept and the skip list is recorded;
- * both write events only when something actually changed.
+ * both write events only when something actually changed. `"off"` means the ticketFiles
+ * setting is absent, so a stale skip list from an earlier definition is cleared once; other
+ * callers pass nothing and leave the list alone.
  * @throws On invalid storage or I/O. */
 export function openPersistence(
   directory: string,
   queue: Task[],
   now: () => number = Date.now,
-  sync?: { skipped: SkippedTicket[] },
+  sync?: { skipped: SkippedTicket[] } | "off",
 ) {
   const imported = existsSync(join(directory, "state.sqlite"))
     ? null
@@ -2489,19 +2526,7 @@ export function openPersistence(
         PRIMARY KEY (ticket, attempt, kind, revision, outcome, sha256))`);
       const state = readState(db);
       refreshTickets(db, queue, now);
-      if (sync) {
-        sweepSyncedTickets(db, queue, state, now);
-        if (JSON.stringify(readSkipped(db)) !== JSON.stringify(sync.skipped)) {
-          saveSkipped(db, sync.skipped);
-          saveEvent(db, {
-            at: new Date(now()).toISOString(),
-            ticket: "factory",
-            action: "tickets-skipped",
-            detail: JSON.stringify(sync.skipped),
-          });
-        }
-        state.skippedTickets = sync.skipped;
-      }
+      if (sync) applyTicketSync(db, queue, state, now, sync);
       return state;
     })();
     return {

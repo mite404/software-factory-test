@@ -367,8 +367,10 @@ it and merge them into the queue before tickets are refreshed. A ticket file is 
 named `F<NNN>-<slug>.md` whose H1 equals its name and which is not under a `done` directory. A
 ticket file with no queue entry of the same id becomes a `planned` row: its steps are the bold
 labels of the numbered list under `## Steps`, its outcome is the `- Outcome:` line under
-`## Status`, and its brief is `Implement <path>`. A queue entry of the same id wins, so the
-Foreman's brief, `after`, `size` and `risky` always come from the queue file.
+`## Status`, and its brief is `Implement <path>`. A queue entry of the same id merges field by
+field: the ticket file owns the steps and outcome, and the Foreman's brief, `after`, `size`,
+`risky` and lane come from the queue file. Deleting a merged row's file reverts the row to the
+queue entry alone.
 
 A synced row is always `planned`: no ticket file content can produce an admitted row, change an
 admitted row, or start a worker. Admission stays the owning Foreman's separate action. A synced

@@ -8,6 +8,7 @@ import {
   mkdir,
   readFile,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -2188,6 +2189,7 @@ test("ticket files sync to planned rows on reload and reconcile, queue first", a
         after: ["A"],
         intake: "planned",
         outcome: "Authored outcome",
+        steps: ["Stale hand copy"],
         size: "small",
         risky: true,
       },
@@ -2217,6 +2219,11 @@ test("ticket files sync to planned rows on reload and reconcile, queue first", a
     join(feats, "done/F103-finished.md"),
     ticketFileText("F103-finished", "Done outcome", "Done step"),
   );
+  // A dangling symlink is listed but unreadable; it is skipped, never fatal.
+  await symlink(
+    join(feats, "beta/F109-missing.md"),
+    join(feats, "beta/F105-gone.md"),
+  );
   f.git("add", ".");
   f.git("commit", "-qm", "ticket files");
   const engine = createFactory(f.root, f.host, openStore);
@@ -2229,14 +2236,18 @@ test("ticket files sync to planned rows on reload and reconcile, queue first", a
     storage.close();
     return rows;
   };
+  // The merge is field by field: the queue keeps brief, after, intake, size and risky while
+  // the ticket file replaces the stale hand-copied steps and outcome.
   expect(stored()["F100-queued"]).toEqual({
     id: "F100-queued",
     brief: "Foreman private brief",
     after: ["A"],
     intake: "planned",
-    outcome: "Authored outcome",
+    outcome: "File outcome",
+    steps: ["Read ticket files", "File step two", "Sweep vanished rows"],
     size: "small",
     risky: true,
+    file: "docs/feats/alpha/F100-queued.md",
   });
   expect(stored()["F101-alone"]).toEqual({
     id: "F101-alone",
@@ -2259,6 +2270,10 @@ test("ticket files sync to planned rows on reload and reconcile, queue first", a
       file: "docs/feats/beta/F102-broken.md",
       reason: "H1 does not match the file name",
     },
+    {
+      file: "docs/feats/beta/F105-gone.md",
+      reason: "unreadable",
+    },
   ]);
   expect(JSON.stringify(status)).not.toContain("CANARY");
   expect(JSON.stringify(factoryEvents(engine.directory, 0, 500))).not.toContain(
@@ -2280,6 +2295,19 @@ test("ticket files sync to planned rows on reload and reconcile, queue first", a
   expect(stored()["F104-later"]).toBeUndefined();
   expect(stored()["F100-queued"]).toMatchObject({ id: "F100-queued" });
   expect(f.counts()).toEqual({ creates: 0, sends: 0 });
+  // Deleting a merged row's file reverts it to the queue file's own entry, stale copy included.
+  await rm(join(feats, "alpha/F100-queued.md"));
+  await engine.tick("reload", "T-owner");
+  expect(stored()["F100-queued"]).toEqual({
+    id: "F100-queued",
+    brief: "Foreman private brief",
+    after: ["A"],
+    intake: "planned",
+    outcome: "Authored outcome",
+    steps: ["Stale hand copy"],
+    size: "small",
+    risky: true,
+  });
 });
 
 test("synced rows stay planned on a started factory until the owner admits one", async () => {

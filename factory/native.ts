@@ -801,23 +801,32 @@ export function readTicketFile(
 }
 
 /** Walk the Markdown below `directory`, reading each ticket file into a planned row or a skip.
- * A missing or unreadable directory syncs nothing. Rows are always `planned`; nothing here can
- * admit work.
+ * A missing directory syncs nothing; any other directory error fails closed. One unreadable
+ * file is skipped and never stops the walk. Rows are always `planned`; nothing here can admit
+ * work.
  */
 async function syncTicketFiles(root: string, directory: string) {
   const synced: Task[] = [];
   const skipped: SkippedTicket[] = [];
   const seen = new Set<string>();
   const entries = await readdir(directory, { recursive: true }).catch(
-    () => [] as string[],
+    (error: unknown) => {
+      const code = (error as { code?: string })?.code;
+      if (code === "ENOENT" || code === "ENOTDIR") return [] as string[];
+      throw error;
+    },
   );
   for (const entry of entries.sort()) {
     if (!entry.endsWith(".md")) continue;
     const path = relative(root, join(directory, entry));
-    const read = readTicketFile(
-      path,
-      await readFile(join(directory, entry), "utf8"),
-    );
+    let content: string;
+    try {
+      content = await readFile(join(directory, entry), "utf8");
+    } catch {
+      skipped.push({ file: path, reason: "unreadable" });
+      continue;
+    }
+    const read = readTicketFile(path, content);
     if (read === undefined) continue;
     if ("skip" in read) {
       skipped.push({ file: path, reason: read.skip });
@@ -841,8 +850,10 @@ async function syncTicketFiles(root: string, directory: string) {
   return { synced, skipped };
 }
 
-// The authored queue wins over a synced row on the same id, so the Foreman's brief, order,
-// prerequisites and sizing always come from the queue file.
+// The queue file and the ticket files merge field by field on the same id: the ticket file
+// owns what the work is (steps and outcome), the queue file owns what only the Foreman knows
+// (brief, order, prerequisites, sizing and lane). A synced-only row appends after the authored
+// queue.
 async function queueWithTickets(
   root: string,
   config: { tickets: string; ticketFiles?: string },
@@ -850,11 +861,20 @@ async function queueWithTickets(
   const queue = tasks(JSON.parse(await readFile(config.tickets, "utf8")), true);
   if (!config.ticketFiles) return { queue, skipped: [] as SkippedTicket[] };
   const { synced, skipped } = await syncTicketFiles(root, config.ticketFiles);
-  const authored = new Set(queue.map((task) => task.id));
-  return {
-    queue: [...queue, ...synced.filter((task) => !authored.has(task.id))],
-    skipped,
-  };
+  const unsynced = new Map(synced.map((task) => [task.id, task]));
+  const merged = queue.map((task) => {
+    const sync = unsynced.get(task.id);
+    if (!sync) return task;
+    unsynced.delete(task.id);
+    return {
+      ...sync,
+      ...task,
+      steps: sync.steps,
+      outcome: sync.outcome,
+      file: sync.file,
+    };
+  });
+  return { queue: [...merged, ...unsynced.values()], skipped };
 }
 
 function git(root: string, ...args: string[]) {
@@ -2255,7 +2275,7 @@ export function createFactory(
         directory,
         queue,
         now,
-        config.ticketFiles ? { skipped } : undefined,
+        config.ticketFiles ? { skipped } : "off",
       );
       const state = persistence.state;
       assertWatchdogCaller(state, action, owner, tools);
@@ -4364,7 +4384,7 @@ export function createFactory(
         directory,
         queue,
         now,
-        next.ticketFiles ? { skipped } : undefined,
+        next.ticketFiles ? { skipped } : "off",
       );
       try {
         assertWatchdogCaller(persistence.state, action, owner, tools);

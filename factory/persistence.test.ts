@@ -1062,6 +1062,39 @@ test("sync sweeps only runless unadmitted synced rows and records each removal",
 
 test("skipped ticket list persists in status and an unchanged sync writes no event", async () => {
   const f = await fixture();
+  const skippedEvents = () =>
+    factoryEvents(f.directory, 0, 500)!.filter(
+      (event) => event.action === "tickets-skipped",
+    );
+  // A first sync with nothing skipped writes no row and no event.
+  let storage = openPersistence(f.directory, queue, undefined, {
+    skipped: [],
+  });
+  storage.close();
+  expect(factoryStatus(f.directory).skippedTickets).toBeUndefined();
+  expect(skippedEvents()).toHaveLength(0);
+  const skipped = [
+    {
+      file: "docs/feats/x/F103-broken.md",
+      reason: "no Outcome line under ## Status",
+    },
+  ];
+  storage = openPersistence(f.directory, queue, undefined, { skipped });
+  storage.close();
+  expect(factoryStatus(f.directory).skippedTickets).toEqual(skipped);
+  expect(skippedEvents()).toHaveLength(1);
+  const events = factoryEvents(f.directory, 0, 500);
+  storage = openPersistence(f.directory, queue, undefined, { skipped });
+  storage.close();
+  expect(factoryEvents(f.directory, 0, 500)).toEqual(events);
+  storage = openPersistence(f.directory, queue, undefined, { skipped: [] });
+  storage.close();
+  expect(factoryStatus(f.directory).skippedTickets).toEqual([]);
+  expect(skippedEvents()).toHaveLength(2);
+});
+
+test("removing the ticketFiles setting clears the stale skip list once", async () => {
+  const f = await fixture();
   const skipped = [
     {
       file: "docs/feats/x/F103-broken.md",
@@ -1071,21 +1104,20 @@ test("skipped ticket list persists in status and an unchanged sync writes no eve
   let storage = openPersistence(f.directory, queue, undefined, { skipped });
   storage.close();
   expect(factoryStatus(f.directory).skippedTickets).toEqual(skipped);
-  const events = factoryEvents(f.directory, 0, 500);
-  expect(
-    events!.filter((event) => event.action === "tickets-skipped"),
-  ).toHaveLength(1);
-  storage = openPersistence(f.directory, queue, undefined, { skipped });
-  storage.close();
-  expect(factoryEvents(f.directory, 0, 500)).toEqual(events);
-  storage = openPersistence(f.directory, queue, undefined, { skipped: [] });
+  // A reload with the setting gone clears the list once, then stays quiet.
+  storage = openPersistence(f.directory, queue, undefined, "off");
   storage.close();
   expect(factoryStatus(f.directory).skippedTickets).toEqual([]);
-  expect(
-    factoryEvents(f.directory, 0, 500)!.filter(
-      (event) => event.action === "tickets-skipped",
-    ),
-  ).toHaveLength(2);
+  const events = factoryEvents(f.directory, 0, 500);
+  storage = openPersistence(f.directory, queue, undefined, "off");
+  storage.close();
+  expect(factoryEvents(f.directory, 0, 500)).toEqual(events);
+  // Other callers without a sync argument leave the list alone.
+  storage = openPersistence(f.directory, queue, undefined, { skipped });
+  storage.close();
+  storage = openPersistence(f.directory, queue);
+  storage.close();
+  expect(factoryStatus(f.directory).skippedTickets).toEqual(skipped);
 });
 
 test("status reads fresh and legacy repositories without runtime writes or locks", async () => {
