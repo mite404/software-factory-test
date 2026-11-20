@@ -27,14 +27,14 @@ test("automation receipts stay pending until polled and refused requests show th
     lastOutcome: null,
     requests: [],
   };
-  expect(automationView(row, null, false, "", false)).toMatchObject({
+  expect(automationView(row, null, false, null, false)).toMatchObject({
     disabled: true,
     switchLabel: "Off",
     nextAction: "enable",
     lastRun: "never",
     message: "No requests",
   });
-  expect(automationView(row, 7, false, "", true)).toMatchObject({
+  expect(automationView(row, 7, false, null, true)).toMatchObject({
     pending: true,
     disabled: true,
     switchLabel: "Off",
@@ -54,7 +54,7 @@ test("automation receipts stay pending until polled and refused requests show th
       },
     ],
   };
-  expect(automationView(applied, 7, false, "", true)).toMatchObject({
+  expect(automationView(applied, 7, false, null, true)).toMatchObject({
     pending: false,
     disabled: false,
     switchLabel: "On",
@@ -74,17 +74,53 @@ test("automation receipts stay pending until polled and refused requests show th
       },
     ],
   };
-  expect(automationView(refused, 8, false, "", true).message).toBe(
+  expect(automationView(refused, 8, false, null, true).message).toBe(
     "run refused · Request expired after one hour.",
   );
   expect(
-    automationView({ ...refused, schedule: null }, 8, false, "", true),
+    automationView({ ...refused, schedule: null }, 8, false, null, true),
   ).toMatchObject({
     disabled: true,
     pending: false,
     schedule: "No longer loaded",
     message: "run refused · Request expired after one hour.",
   });
+  const error = { after: 7, message: "Request outcome unknown." };
+  expect(automationView(row, null, false, error, true).message).toBe(
+    error.message,
+  );
+  expect(automationView(applied, null, false, error, true).message).toBe(
+    error.message,
+  );
+  const newer = {
+    ...refused.requests[0]!,
+    status: "pending" as const,
+    reason: null,
+  };
+  expect(
+    automationView({ ...refused, requests: [newer] }, null, false, error, true),
+  ).toMatchObject({
+    disabled: true,
+    message: "Pending · waiting for a connected owner wake",
+  });
+  expect(
+    automationView(
+      {
+        ...refused,
+        requests: [{ ...newer, status: "applied" }],
+      },
+      null,
+      false,
+      error,
+      true,
+    ).message,
+  ).toBe("run applied");
+  expect(automationView(refused, null, false, error, true).message).toBe(
+    "run refused · Request expired after one hour.",
+  );
+  expect(
+    automationView(refused, null, false, { ...error, after: 8 }, true).message,
+  ).toBe(error.message);
 });
 
 // One ticket per word: the stage and live activity that make the page say it.

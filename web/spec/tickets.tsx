@@ -37,6 +37,7 @@ import { Toasts, notify } from "@/components/ui/toaster";
 import {
   automationView,
   eventRows,
+  type AutomationError,
   type EventRow,
   type GraphColumn,
   type GraphNode,
@@ -666,11 +667,12 @@ function AutomationRow({
 }) {
   const [sending, setSending] = useState(false);
   const [queued, setQueued] = useState<number | null>(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<AutomationError | null>(null);
+  const after = row.requests.at(-1)?.id ?? 0;
   const model = automationView(row, queued, sending, error, !!token);
   async function request(action: "enable" | "disable" | "run") {
     setSending(true);
-    setError("");
+    setError(null);
     try {
       const response = await fetch(
         `/api/automations/${encodeURIComponent(row.name)}`,
@@ -684,15 +686,19 @@ function AutomationRow({
         },
       );
       if (response.status !== 202) {
-        setError(
-          `Request refused (${response.status}). Check the token and dashboard origin.`,
-        );
+        setError({
+          after,
+          message: `Request refused (${response.status}). Check the token and dashboard origin.`,
+        });
         return;
       }
       const receipt: { id: number } = await response.json();
       setQueued(receipt.id);
     } catch {
-      setError("Request outcome unknown. Check status before retrying.");
+      setError({
+        after,
+        message: "Request outcome unknown. Check status before retrying.",
+      });
     } finally {
       setSending(false);
     }

@@ -14,6 +14,8 @@ import type {
 } from "../factory/persistence";
 import type { Actor } from "../factory/pipeline";
 
+export type AutomationError = { after: number; message: string };
+
 export type EventRow = DashboardEvent & {
   time: string;
   href: string | null;
@@ -33,9 +35,9 @@ function automationMessage(
   latest: AutomationRequest | undefined,
   pending: boolean,
   sending: boolean,
-  error: string,
+  error: AutomationError | null,
 ) {
-  if (error) return error;
+  if (error && (!latest || latest.id <= error.after)) return error.message;
   if (sending) return "Submitting…";
   if (pending) return "Pending · waiting for a connected owner wake";
   if (!latest) return "No requests";
@@ -47,7 +49,7 @@ export function automationView(
   row: DashboardAutomation,
   queued: number | null,
   sending: boolean,
-  error: string,
+  error: AutomationError | null,
   hasToken: boolean,
 ) {
   const pending = pendingAutomationRequest(row.requests, queued);
