@@ -35,7 +35,9 @@ import { ItemList, type Column } from "@/components/ui/item-list";
 import { Lcd, LcdDigits } from "@/components/ui/lcd";
 import { Toasts, notify } from "@/components/ui/toaster";
 import {
+  automationView,
   eventRows,
+  type AutomationError,
   type EventRow,
   type GraphColumn,
   type GraphNode,
@@ -656,6 +658,160 @@ function Everything({ view }: { view: View }) {
   );
 }
 
+function AutomationRow({
+  row,
+  token,
+}: {
+  row: View["automations"][number];
+  token: string;
+}) {
+  const [sending, setSending] = useState(false);
+  const [queued, setQueued] = useState<number | null>(null);
+  const [error, setError] = useState<AutomationError | null>(null);
+  const after = row.requests.at(-1)?.id ?? 0;
+  const model = automationView(row, queued, sending, error, !!token);
+  async function request(action: "enable" | "disable" | "run") {
+    setSending(true);
+    setError(null);
+    try {
+      const response = await fetch(
+        `/api/automations/${encodeURIComponent(row.name)}`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${token}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ action }),
+        },
+      );
+      if (response.status !== 202) {
+        setError({
+          after,
+          message: `Request refused (${response.status}). Check the token and dashboard origin.`,
+        });
+        return;
+      }
+      const receipt: { id: number } = await response.json();
+      setQueued(receipt.id);
+    } catch {
+      setError({
+        after,
+        message: "Request outcome unknown. Check status before retrying.",
+      });
+    } finally {
+      setSending(false);
+    }
+  }
+  return (
+    <li data-automation>
+      <div>
+        <h3>{row.name}</h3>
+        <code>{model.schedule}</code>
+        <p hidden={row.schedule === null}>
+          Last run {model.lastRun} · {model.lastOutcome}
+        </p>
+      </div>
+      <div data-automation-actions>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={row.enabled}
+          aria-label={`Enable ${row.name}`}
+          disabled={model.disabled}
+          onClick={() => void request(model.nextAction)}
+        >
+          <span aria-hidden="true">●</span> {model.switchLabel}
+        </button>
+        <button
+          type="button"
+          disabled={model.disabled}
+          onClick={() => void request("run")}
+          aria-label={`Run ${row.name} now`}
+        >
+          Run now
+        </button>
+      </div>
+      <p data-automation-result role="status">
+        {model.message}
+      </p>
+    </li>
+  );
+}
+
+function Automations({ rows }: { rows: View["automations"] }) {
+  const [token, setToken] = useState(() => {
+    try {
+      return localStorage.getItem("factory-control-token") ?? "";
+    } catch {
+      return "";
+    }
+  });
+  const [error, setError] = useState("");
+  return (
+    <section data-section data-area="automations">
+      <h2>Automations</h2>
+      <p>
+        Requests apply on the next connected owner wake. They do not start the
+        factory.
+      </p>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          const input = new FormData(event.currentTarget).get("token");
+          const value = typeof input === "string" ? input.trim() : "";
+          try {
+            localStorage.setItem("factory-control-token", value);
+            setToken(value);
+            setError("");
+            event.currentTarget.reset();
+          } catch {
+            setError(
+              "Browser storage is unavailable. Allow local storage to save the token.",
+            );
+          }
+        }}
+      >
+        <label htmlFor="control-token">Operator token</label>
+        <input
+          id="control-token"
+          name="token"
+          type="password"
+          autoComplete="off"
+          pattern="[a-f0-9]{64}"
+          required
+          placeholder={
+            token
+              ? "Token saved in this browser"
+              : "Paste the private control token"
+          }
+        />
+        <button type="submit">Save token</button>
+        {token && (
+          <button
+            type="button"
+            onClick={() => {
+              localStorage.removeItem("factory-control-token");
+              setToken("");
+            }}
+          >
+            Forget token
+          </button>
+        )}
+      </form>
+      <p role="alert" hidden={!error}>
+        {error}
+      </p>
+      {!rows.length && <p>No loaded automations.</p>}
+      <ul data-automations>
+        {rows.map((row) => (
+          <AutomationRow key={row.name} row={row} token={token} />
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function PullRequest({ request }: { request: Ticket["pullRequest"] }) {
   if (!request) return null;
   return (
@@ -1000,6 +1156,7 @@ function Tickets({
           <Coming pending={pending} shown={shown} choose={setChosen} />
           {view.graph && <Lifecycle graph={view.graph} />}
           <Everything view={view} />
+          <Automations rows={view.automations} />
         </Device>
         <Toasts />
         <EventLog events={events} status={eventStatus} />

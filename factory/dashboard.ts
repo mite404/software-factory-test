@@ -3,8 +3,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { effectiveDefinition } from "./native";
+import { automationRows, effectiveDefinition } from "./native";
+import { authorizedControl } from "./control-token";
 import {
+  enqueueAutomationRequest,
+  type AutomationRequest,
   evidenceOutcomes,
   factoryEvidence,
   factoryEvents,
@@ -252,9 +255,51 @@ export type DashboardSnapshot = {
   }[];
 };
 
+export type DashboardAutomation = Omit<
+  ReturnType<typeof automationRows>[number],
+  "schedule"
+> & {
+  schedule: string | null;
+  requests: AutomationRequest[];
+};
+
+function dashboardAutomations(
+  records: NonNullable<ReturnType<typeof factoryRecords>>,
+): DashboardAutomation[] {
+  const requests = Map.groupBy(records.requests, (request) => request.name);
+  const rows: DashboardAutomation[] = automationRows(records.state).map(
+    (row) => ({
+      ...row,
+      requests: requests.get(row.name) ?? [],
+    }),
+  );
+  for (const [name, history] of requests) {
+    if (rows.some((row) => row.name === name)) continue;
+    rows.push({
+      name,
+      schedule: null,
+      enabled: false,
+      lastRunAt: null,
+      lastOutcome: null,
+      requests: history,
+    });
+  }
+  return rows;
+}
+
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object") throw new Error("Invalid status");
   return { ...value };
+}
+
+function parseAutomationAction(body: unknown) {
+  const input = record(body);
+  if (Object.keys(input).join() !== "action") throw new Error("Invalid action");
+  const action = (["enable", "disable", "run"] as const).find(
+    (value) => value === input.action,
+  );
+  if (!action) throw new Error("Invalid action");
+  return action;
 }
 
 function string(value: unknown): string {
@@ -628,8 +673,19 @@ async function definitionResponse(
   }
 }
 
-/** Serve a curated, read-only status projection, never raw factory files. @throws If Git or HTML is unavailable. */
-export function startDashboard({ root, port }: { root: string; port: number }) {
+/** Serve curated status and authenticated automation intents, never raw factory files.
+ * @param controlOrigin Exact public origin for POSTs behind a portal. Proxy headers are not identity.
+ * @throws If Git or HTML is unavailable.
+ */
+export function startDashboard({
+  root,
+  port,
+  controlOrigin,
+}: {
+  root: string;
+  port: number;
+  controlOrigin?: string;
+}) {
   const directory = execFileSync(
     "git",
     ["-C", root, "rev-parse", "--absolute-git-dir"],
@@ -644,7 +700,65 @@ export function startDashboard({ root, port }: { root: string; port: number }) {
   const headers = {
     "cache-control": "no-store",
     "x-content-type-options": "nosniff",
+    "content-security-policy": "frame-ancestors 'none'",
   };
+  function controlRefusal(request: Request, url: URL) {
+    if (request.headers.get("origin") !== (controlOrigin ?? url.origin))
+      return new Response("Origin refused", { status: 403, headers });
+    if (
+      !authorizedControl(
+        join(directory, "factory"),
+        request.headers.get("authorization"),
+      )
+    )
+      return new Response("Authorization required", { status: 401, headers });
+    const contentType = request.headers.get("content-type") ?? "";
+    if (contentType.split(";")[0]!.trim() !== "application/json")
+      return new Response("JSON required", { status: 415, headers });
+    return null;
+  }
+  async function requestAutomation(request: Request, url: URL, name: string) {
+    const refusal = controlRefusal(request, url);
+    if (refusal) return refusal;
+    let action: ReturnType<typeof parseAutomationAction>;
+    try {
+      action = parseAutomationAction(await request.json());
+    } catch {
+      return new Response("Invalid action", { status: 400, headers });
+    }
+    try {
+      const records = factoryRecords(join(directory, "factory"));
+      if (!records)
+        return new Response("Durable storage unavailable", {
+          status: 503,
+          headers,
+        });
+      if (!Object.hasOwn(records.state.automations ?? {}, name))
+        return new Response("Unknown automation", { status: 404, headers });
+      const id = enqueueAutomationRequest(
+        join(directory, "factory"),
+        name,
+        action,
+      );
+      return Response.json({ id, status: "pending" }, { status: 202, headers });
+    } catch {
+      return new Response("Durable storage unavailable", {
+        status: 503,
+        headers,
+      });
+    }
+  }
+  async function writeResponse(request: Request, url: URL) {
+    const match = /^\/api\/automations\/([A-Za-z0-9][A-Za-z0-9._-]*)$/.exec(
+      url.pathname,
+    );
+    if (request.method === "POST" && match)
+      return requestAutomation(request, url, match[1]!);
+    return new Response("Read-only service", {
+      status: 405,
+      headers: { ...headers, allow: "GET" },
+    });
+  }
   async function staticPage(url: URL) {
     const path = url.pathname;
     if (path === "/api/events") return eventsResponse(directory, url, headers);
@@ -664,13 +778,10 @@ export function startDashboard({ root, port }: { root: string; port: number }) {
   return Bun.serve({
     hostname: "127.0.0.1",
     port,
+    maxRequestBodySize: 1024,
     async fetch(request) {
-      if (request.method !== "GET")
-        return new Response("Read-only service", {
-          status: 405,
-          headers: { ...headers, allow: "GET" },
-        });
       const url = new URL(request.url);
+      if (request.method !== "GET") return writeResponse(request, url);
       const path = url.pathname;
       const page = await staticPage(url);
       if (page) return page;
@@ -689,6 +800,7 @@ export function startDashboard({ root, port }: { root: string; port: number }) {
         enabled: false,
         fresh: false,
         tasks: [],
+        automations: [] as DashboardAutomation[],
       };
       try {
         empty.target = targetBranch(root);
@@ -737,6 +849,7 @@ export function startDashboard({ root, port }: { root: string; port: number }) {
             fresh,
             tasks,
             counts,
+            automations: dashboardAutomations(records),
           },
           { headers },
         );
@@ -761,6 +874,7 @@ if (import.meta.main) {
   const server = startDashboard({
     root: resolve(values.repo ?? "."),
     port: Number(process.env.PORT ?? 4310),
+    controlOrigin: process.env.FACTORY_CONTROL_ORIGIN,
   });
   process.stdout.write(`Factory dashboard listening on port ${server.port}\n`);
 }

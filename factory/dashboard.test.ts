@@ -12,8 +12,196 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startDashboard } from "./dashboard";
+import { installControlToken } from "./control-token";
 import { tasks } from "./native";
 import { lifecycleStatus, openPersistence } from "./persistence";
+
+test("automation POSTs require token and exact origin, queue only, and never expose prompts", async () => {
+  const root = await mkdtemp(join(tmpdir(), "factory-dashboard-controls-"));
+  execFileSync("git", ["init", "-q", root]);
+  const directory = join(root, ".git/factory");
+  const storage = openPersistence(directory, []);
+  storage.commit(
+    {
+      enabled: false,
+      owner: "T-owner",
+      runs: {},
+      automations: {
+        "weekly.audit": {
+          schedule: "0 9 * * 1",
+          authored: false,
+          armedAt: 0,
+          prompt: "PRIVATE-AUTOMATION-BODY-CANARY",
+        },
+      },
+    },
+    "factory",
+    "fixture",
+    "",
+  );
+  storage.close();
+  installControlToken(directory);
+  const token = (
+    await readFile(join(directory, "control-token"), "utf8")
+  ).trim();
+  installControlToken(directory);
+  expect(
+    (await readFile(join(directory, "control-token"), "utf8")).trim(),
+  ).toBe(token);
+  const origin = "https://operator.example.invalid";
+  const server = startDashboard({ root, port: 0, controlOrigin: origin });
+  const url = `http://127.0.0.1:${server.port}`;
+  const post = (
+    headers: Record<string, string>,
+    body = '{"action":"run"}',
+    path = "/api/automations/weekly.audit",
+    method = "POST",
+  ) =>
+    fetch(url + path, {
+      method,
+      headers: { "content-type": "application/json", ...headers },
+      body,
+    });
+  try {
+    const database = join(directory, "state.sqlite");
+    const before = await readFile(database);
+    const valid = { origin, authorization: `Bearer ${token}` };
+    for (const [headers, code] of [
+      [{ origin }, 401],
+      [{ origin, authorization: "Bearer wrong" }, 401],
+      [{ ...valid, origin: "https://attacker.invalid" }, 403],
+      [{ authorization: valid.authorization }, 403],
+      [{ ...valid, origin: "null" }, 403],
+      [
+        {
+          ...valid,
+          origin: "https://attacker.invalid",
+          "x-forwarded-host": "attacker.invalid",
+          "x-forwarded-proto": "https",
+        },
+        403,
+      ],
+    ] as const)
+      expect((await post(headers)).status).toBe(code);
+    for (const body of [
+      '{"action":"start"}',
+      '{"action":"run","name":"weekly.audit"}',
+      "null",
+      "[]",
+      "broken",
+    ])
+      expect((await post(valid, body)).status).toBe(400);
+    expect(
+      (await post(valid, undefined, "/api/automations/missing")).status,
+    ).toBe(404);
+    for (const path of [
+      "/",
+      "/api/status",
+      "/api/events",
+      "/api/evidence",
+      "/api/definition",
+      "/api/control-token",
+      "/assets/missing.js",
+      "/unknown",
+    ])
+      for (const method of ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+        expect((await post(valid, undefined, path, method)).status).toBe(405);
+    expect(
+      (await post(valid, undefined, "/api/automations/weekly.audit", "PUT"))
+        .status,
+    ).toBe(405);
+    expect((await fetch(url + "/api/control-token")).status).toBe(404);
+    expect(await readFile(database)).toEqual(before);
+    const response = await post(valid);
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({ id: 1, status: "pending" });
+    const statusText = await (await fetch(url + "/api/status")).text();
+    expect(statusText).not.toContain("PRIVATE-AUTOMATION-BODY-CANARY");
+    expect(statusText).not.toContain(token);
+    const status = JSON.parse(statusText);
+    expect(status.automations).toEqual([
+      {
+        name: "weekly.audit",
+        schedule: "0 9 * * 1",
+        enabled: false,
+        lastRunAt: null,
+        lastOutcome: null,
+        requests: [
+          {
+            id: 1,
+            name: "weekly.audit",
+            action: "run",
+            status: "pending",
+            reason: null,
+            at: expect.any(Number),
+          },
+        ],
+      },
+    ]);
+    const db = new Database(database, { readonly: true });
+    try {
+      expect(db.query("SELECT data FROM automations").get()).toEqual({
+        data: JSON.stringify({
+          "weekly.audit": {
+            schedule: "0 9 * * 1",
+            authored: false,
+            armedAt: 0,
+            prompt: "PRIVATE-AUTOMATION-BODY-CANARY",
+          },
+        }),
+      });
+      expect(
+        db.query("SELECT count(*) AS n FROM automation_requests").get(),
+      ).toEqual({ n: 1 });
+      expect(db.query("SELECT action FROM events ORDER BY id").all()).toEqual([
+        { action: "fixture" },
+      ]);
+    } finally {
+      db.close();
+    }
+    const removed = openPersistence(directory, []);
+    try {
+      removed.commit(
+        { ...removed.state, automations: {} },
+        "factory",
+        "reload",
+        "",
+      );
+      const pending = await (await fetch(url + "/api/status")).json();
+      expect(pending.automations).toMatchObject([
+        {
+          name: "weekly.audit",
+          schedule: null,
+          requests: [{ status: "pending" }],
+        },
+      ]);
+      removed.settleAutomationRequest(
+        1,
+        "refused",
+        "Error: Unknown automation weekly.audit",
+      );
+      const refused = await (await fetch(url + "/api/status")).json();
+      expect(refused.automations).toMatchObject([
+        {
+          name: "weekly.audit",
+          schedule: null,
+          enabled: false,
+          requests: [
+            {
+              status: "refused",
+              reason: "Error: Unknown automation weekly.audit",
+            },
+          ],
+        },
+      ]);
+    } finally {
+      removed.close();
+    }
+  } finally {
+    await server.stop(true);
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("events are cursor ordered, bounded, read-only and expose only validated references", async () => {
   const root = await mkdtemp(join(tmpdir(), "factory-events-"));

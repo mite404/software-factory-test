@@ -1,6 +1,12 @@
-import type { DashboardEvent, DashboardSnapshot } from "../factory/dashboard";
+import type {
+  DashboardAutomation,
+  DashboardEvent,
+  DashboardSnapshot,
+} from "../factory/dashboard";
 import { pipelineSteps } from "../factory/pipeline";
 import type {
+  AutomationAction,
+  AutomationRequest,
   CheckStatus,
   Stage,
   StopIncident,
@@ -8,10 +14,61 @@ import type {
 } from "../factory/persistence";
 import type { Actor } from "../factory/pipeline";
 
+export type AutomationError = { after: number; message: string };
+
 export type EventRow = DashboardEvent & {
   time: string;
   href: string | null;
 };
+
+function pendingAutomationRequest(
+  requests: AutomationRequest[],
+  queued: number | null,
+) {
+  return (
+    requests.some((request) => request.status === "pending") ||
+    (queued !== null && !requests.some((request) => request.id === queued))
+  );
+}
+
+function automationMessage(
+  latest: AutomationRequest | undefined,
+  pending: boolean,
+  sending: boolean,
+  error: AutomationError | null,
+) {
+  if (error && (!latest || latest.id <= error.after)) return error.message;
+  if (sending) return "Submitting…";
+  if (pending) return "Pending · waiting for a connected owner wake";
+  if (!latest) return "No requests";
+  return `${latest.action} ${latest.status}${latest.reason ? ` · ${latest.reason}` : ""}`;
+}
+
+/** Render recorded automation state without optimistic switches; a receipt stays pending until polled. */
+export function automationView(
+  row: DashboardAutomation,
+  queued: number | null,
+  sending: boolean,
+  error: AutomationError | null,
+  hasToken: boolean,
+) {
+  const pending = pendingAutomationRequest(row.requests, queued);
+  const nextAction: AutomationAction = row.enabled ? "disable" : "enable";
+  return {
+    pending,
+    disabled: !hasToken || sending || pending || row.schedule === null,
+    schedule:
+      row.schedule === null ? "No longer loaded" : `${row.schedule} · UTC`,
+    nextAction,
+    switchLabel: row.enabled ? "On" : "Off",
+    message: automationMessage(row.requests.at(-1), pending, sending, error),
+    lastRun:
+      row.lastRunAt === null
+        ? "never"
+        : new Date(row.lastRunAt).toLocaleString(),
+    lastOutcome: row.lastOutcome ?? "not recorded",
+  };
+}
 
 /**
  * Suppress historical notices until an earlier successful page exhausted the event log.
@@ -108,6 +165,7 @@ type Chip = { text: string; x: number; width: number };
 // What GET /api/status returns: the snapshot plus freshness, or an empty feed before first run.
 export type Feed = {
   project: string;
+  automations?: DashboardAutomation[];
   target: string; // branch the integrator fast-forwards onto
   observedAt: string | null;
   enabled: boolean;
@@ -208,6 +266,7 @@ type News = {
 // Everything the page paints, fully resolved so main.ts only copies values into the SVG.
 export type View = {
   state: "live" | "paused" | "stale";
+  automations: DashboardAutomation[];
   project: string;
   target: string; // merge target branch, cut to fit its pill
   observed: string;
@@ -842,6 +901,7 @@ export function derive(
   const count = counts(tasks);
   return {
     state: !next.fresh ? "stale" : next.enabled ? "live" : "paused",
+    automations: next.automations ?? [],
     project: next.project.toUpperCase(),
     target: cut(next.target, 24),
     observed: observed(next, now),

@@ -2004,8 +2004,8 @@ function clockMayRun(
   );
 }
 
-// The public list: no prompt text, only what the Foreman needs to choose an action.
-function automationRows(state: State) {
+/** The public automation list for controls and the dashboard. Never includes prompt text. */
+export function automationRows(state: State) {
   return Object.entries(state.automations ?? {}).map(([name, record]) => ({
     name,
     schedule: record.schedule,
@@ -3950,6 +3950,89 @@ export function createFactory(
     }
   }
 
+  async function changeAutomation(
+    persistence: ReturnType<typeof openPersistence>,
+    change: "automation-enable" | "automation-disable" | "automation-run",
+    name: unknown,
+    owner: ThreadID | undefined,
+    tools?: ConnectedTools,
+  ) {
+    const state = persistence.state;
+    assertControlCaller(state, owner, change);
+    assertOwner(state, owner);
+    const id = text(name);
+    const record = Object.hasOwn(state.automations ?? {}, id)
+      ? state.automations![id]!
+      : undefined;
+    if (!record) throw new Error(`Unknown automation ${id}`);
+    const save = (action: string, detail: string) =>
+      persistence.commit(state, "factory", action, detail);
+    if (change === "automation-run") {
+      return sendAutomation(
+        state,
+        id,
+        now(),
+        (message) => host.send(state.owner!, message),
+        save,
+      );
+    }
+    tools = currentTools(tools);
+    if (!tools)
+      throw new Error(
+        "Enabling or disabling an automation requires connected owner tools",
+      );
+    if (switchAutomation(record, change === "automation-enable", now()))
+      save(change, id);
+    await moveWatchdog(persistence, owner!, tools);
+    return true;
+  }
+
+  async function applyAutomationRequests(
+    owner: ThreadID | undefined,
+    tools: ConnectedTools | undefined,
+  ) {
+    if (!owner || !tools || factoryStatus(directory).owner !== owner) return;
+    await saveRecord("automation-requests", owner, async (persistence) => {
+      for (const request of persistence.automationRequests()) {
+        if (request.status !== "pending") continue;
+        if (!currentTools(tools)) return;
+        if (now() - request.at > 3_600_000) {
+          persistence.settleAutomationRequest(
+            request.id,
+            "refused",
+            "Request expired after one hour.",
+          );
+          continue;
+        }
+        // Reserve before any effect. A crash or lost reply must never replay a run.
+        persistence.settleAutomationRequest(
+          request.id,
+          "refused",
+          "Application outcome unknown; not retried.",
+        );
+        let applied: boolean;
+        try {
+          applied = await changeAutomation(
+            persistence,
+            `automation-${request.action}`,
+            request.name,
+            owner,
+            tools,
+          );
+        } catch (error) {
+          persistence.settleAutomationRequest(
+            request.id,
+            "refused",
+            String(error),
+          );
+          continue;
+        }
+        if (applied)
+          persistence.settleAutomationRequest(request.id, "applied", null);
+      }
+    });
+  }
+
   /** List the loaded automations, or switch one on or off and refit the clock, or send one now.
    * Owner only. None of these admits, starts, resumes or dispatches work; run sends text once, enabled or
    * not. An enable or disable without connected owner tools changes nothing.
@@ -3971,39 +4054,14 @@ export function createFactory(
       .then(() =>
         saveRecord(change, owner, async (persistence) => {
           const state = persistence.state;
-          const rows = () => automationRows(state);
-          if (change === "automations") return rows();
-          const id = text(name);
-          const record = Object.hasOwn(state.automations ?? {}, id)
-            ? state.automations![id]!
-            : undefined;
-          if (!record) throw new Error(`Unknown automation ${id}`);
-          const save = (action: string, detail: string) =>
-            persistence.commit(state, "factory", action, detail);
-          if (change === "automation-run") {
-            if (
-              !(await sendAutomation(
-                state,
-                id,
-                now(),
-                (message) => host.send(state.owner!, message),
-                save,
-              ))
-            )
-              throw new Error(
-                `Automation ${id} send outcome unknown; it is recorded and not retried`,
-              );
-            return rows();
-          }
-          tools = currentTools(tools);
-          if (!tools)
+          if (
+            change !== "automations" &&
+            !(await changeAutomation(persistence, change, name, owner, tools))
+          )
             throw new Error(
-              "Enabling or disabling an automation requires connected owner tools",
+              `Automation ${String(name)} send outcome unknown; it is recorded and not retried`,
             );
-          if (switchAutomation(record, change === "automation-enable", now()))
-            save(change, id);
-          await moveWatchdog(persistence, owner!, tools);
-          return rows();
+          return automationRows(state);
         }),
       );
     pending = result;
@@ -4276,6 +4334,7 @@ export function createFactory(
         if (action === "reload" || action === "admit")
           return loadDefinition(action, owner, tools, selectedTicket);
         const config = await effectiveConfiguration(root);
+        if (action === "reconcile") await applyAutomationRequests(owner, tools);
         if (!retryAdmission(initial, action, !!config.lightWorker))
           return initial;
         return reconcile(action, owner, observe, repairRequest, tools);

@@ -1029,6 +1029,65 @@ export function automationEnabled(record: AutomationRecord) {
   return record.override ?? record.authored;
 }
 
+export type AutomationAction = "enable" | "disable" | "run";
+export type AutomationRequest = {
+  id: number;
+  name: string;
+  action: AutomationAction;
+  at: number;
+} & (
+  | { status: "pending"; reason: null }
+  | { status: "applied"; reason: null }
+  | { status: "refused"; reason: string }
+);
+
+function automationRequestTable(db: Database) {
+  db.run(`CREATE TABLE IF NOT EXISTS automation_requests (
+    id INTEGER PRIMARY KEY, name TEXT NOT NULL,
+    action TEXT NOT NULL CHECK (action IN ('enable', 'disable', 'run')),
+    at INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending'
+      CHECK (status IN ('pending', 'applied', 'refused')), reason TEXT)`);
+}
+
+function readAutomationRequests(db: Database): AutomationRequest[] {
+  if (
+    !db
+      .query("SELECT 1 FROM sqlite_master WHERE name = 'automation_requests'")
+      .get()
+  )
+    return [];
+  return db
+    .query<AutomationRequest, []>(
+      "SELECT id, name, action, at, status, reason FROM automation_requests ORDER BY id",
+    )
+    .all();
+}
+
+/** Queue one dashboard intent without saving coordinator state or causing remote effects.
+ * @throws If durable storage is absent or unavailable.
+ */
+export function enqueueAutomationRequest(
+  directory: string,
+  name: string,
+  action: AutomationAction,
+  at = Date.now(),
+) {
+  const db = database(directory, false);
+  try {
+    return db.transaction(() => {
+      automationRequestTable(db);
+      const row = db
+        .query<{ id: number }, [string, string, number]>(
+          "INSERT INTO automation_requests (name, action, at) VALUES (?, ?, ?) RETURNING id",
+        )
+        .get(name, action, at)!;
+      return row.id;
+    })();
+  } finally {
+    db.close();
+  }
+}
+
 export type State = {
   enabled: boolean;
   owner?: ThreadID;
@@ -2223,7 +2282,7 @@ export function factoryRecords(directory: string) {
           "SELECT ticket, action, detail FROM events WHERE action IN ('review-created', 'review-verdict') ORDER BY id",
         )
         .all();
-      return { state, tickets, reviews };
+      return { state, tickets, reviews, requests: readAutomationRequests(db) };
     })();
   } finally {
     db.close();
@@ -2346,6 +2405,7 @@ export function openPersistence(
         for (const event of imported.events) saveEvent(db, event);
       }
       definitionTables(db);
+      automationRequestTable(db);
       db.run(`CREATE TABLE IF NOT EXISTS evidence (ticket TEXT NOT NULL,
         attempt INTEGER NOT NULL CHECK (attempt > 0), kind TEXT NOT NULL,
         revision TEXT NOT NULL, definition TEXT, tool TEXT NOT NULL, outcome TEXT NOT NULL,
@@ -2357,6 +2417,20 @@ export function openPersistence(
     })();
     return {
       state,
+      /** Read dashboard intents oldest first under the coordinator lock. @throws On failed I/O. */
+      automationRequests() {
+        return readAutomationRequests(db);
+      },
+      /** Persist a request outcome before or after an effect. @throws On failed I/O. */
+      settleAutomationRequest(
+        id: number,
+        status: "applied" | "refused",
+        reason: string | null,
+      ) {
+        db.query(
+          "UPDATE automation_requests SET status = ?, reason = ? WHERE id = ?",
+        ).run(status, reason, id);
+      },
       /** Save a validated immutable definition. Accepting it for future dispatch (`load`) also
        * replaces the loaded automations with `declared`, in the same transaction: each one keeps its
        * override while its authored default is unchanged, and its last run; one that turns on is

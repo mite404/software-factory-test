@@ -1241,7 +1241,7 @@ it names only repository-local files, never the checkout that ran setup, and the
 repository can move to another directory or orb. Like the plugin, the copy is generated and
 git-excluded, so run `--refresh` after a fresh clone. Setup and every refresh add any missing
 exclude rule to `.git/info/exclude` and leave existing lines alone, so an install made before the
-dashboard copy existed is also covered. The service runs only the read-only dashboard on port
+dashboard copy existed is also covered. The service runs only the dashboard on port
 4310. It grants no execution, schedule, ticket or push permission.
 
 The application's own services file is never rewritten or reformatted: the entry is appended after
@@ -1270,7 +1270,7 @@ Reconciliation respects the paused queue and `permissions.execute`; it does not 
 
 ## Dashboard
 
-Run the read-only dashboard against a repository with an installed, loaded factory plugin:
+Run the dashboard against a repository with an installed, loaded factory plugin:
 
 ```sh
 bun factory/dashboard.ts --repo /path/to/repository
@@ -1287,8 +1287,59 @@ amp orb service start factory-dashboard \
 Use the portal URL returned by Amp. Do not expose the loopback service directly on a public host.
 Setup declares this service for a managed repository (see
 [Dashboard service declaration](#dashboard-service-declaration)); these commands run the source
-available in this checkout, not a published package. Every non-GET request answers 405 and changes
-nothing.
+available in this checkout, not a published package. Non-GET requests answer 405, except the
+authenticated automation request endpoint described below.
+
+### Automation controls
+
+The Automations section shows each loaded automation's UTC cron schedule, enabled state, last
+run time and send outcome. The switch and **Run now** queue requests. They do not edit schedules,
+send prompts, admit tickets or start the factory. A pending request waits for the next connected
+owner wake or explicit owner `reconcile`. Observer and disconnected reconciles cannot apply it.
+Requests apply oldest first through the same checks as `automation-enable`, `automation-disable`
+and `automation-run`, including while paused. Requests older than one hour are refused with a
+visible reason. A reserved request whose effect is interrupted stays refused with an unknown
+outcome and is never retried automatically. Inspect state before submitting another request.
+
+Setup and `--refresh` create `.git/factory/control-token` with owner-only file access, preserving
+an existing token. Read that file locally and paste its value into **Operator token**, then click
+**Save token**. The page stores it in local storage for this origin. **Forget token** clears that
+browser's copy. Never put the token in a URL, a ticket, a screenshot or a published file. Delete
+the token file locally and rerun setup with `--refresh` to rotate it; other browsers must then
+paste the new value. Anyone holding the token can request these three automation actions. Portal
+sign-in alone is not authorization to control the factory.
+
+For a portal, set `FACTORY_CONTROL_ORIGIN` in the dashboard process environment to its exact
+public origin, such as `https://your-dashboard.example`, with no trailing slash. Restart the
+dashboard after configuring it. Without this setting, POSTs accept only the direct request URL's
+origin. Proxy headers never select the trusted origin. This also means a Vite proxy needs the
+Vite page's origin configured on the dashboard during development.
+
+The Foreman's live header-echo preflight on this orb observed only `x-forwarded-host`,
+`x-forwarded-port: 443` and `x-forwarded-proto: https`. No usable identity or authorization header
+reached the origin, so token delivery uses the operator-pasted fallback. Requests from inside the
+orb bypassed the sign-in page; the headless sign-in exchange completed but exposed no cookie to
+curl. The external signed-in browser path was not directly observed. These observations do not
+establish an identity contract. There is no `GET /api/control-token` endpoint.
+
+`POST /api/automations/<name>` accepts only JSON with one `action` field (`enable`, `disable` or
+`run`), an `Authorization: Bearer <token>` header and an exact `Origin` match. A valid request
+inserts one durable SQLite intent and returns 202 with its ID and `status: "pending"`. Missing or
+incorrect tokens return 401; absent or different origins return 403. Both write nothing. There
+is no CORS opt-in. All other non-GET paths remain read-only. The bearer token prevents blind
+requests, and the origin check prevents cross-site browser posts even with a supplied token.
+Same-origin script compromise or a stolen token used outside a browser is outside that defense;
+serve only trusted dashboard assets and keep the token private.
+
+`GET /api/status` includes `automations` with `name`, `schedule`, `enabled`, `lastRunAt`,
+`lastOutcome` and `requests` (ID, name, action, timestamp, status and refusal reason). It never
+includes automation prompt bodies or the control token. Reads and HTTP writes cannot invoke Amp
+tools; only the plugin's connected owner turn can apply intents.
+
+An individual action failure refuses that request with its error and does not stop later requests
+or the owner reconciliation. Requests for an automation removed by reload remain visible as
+**No longer loaded**, with controls disabled and their pending or refused result preserved.
+Their status row has a null `schedule`; no removed prompt or last-run state is reconstructed.
 
 ### Pipeline view
 

@@ -45,6 +45,10 @@ test("two project definitions migrate explicitly, preserve metadata and expose o
           store,
         ).status,
       ).toBe(0);
+      const tokenPath = join(root, ".git/factory/control-token");
+      const token = await readFile(tokenPath, "utf8");
+      expect(token.trim()).toMatch(/^[a-f0-9]{64}$/);
+      expect((await stat(tokenPath)).mode & 0o777).toBe(0o600);
       const legacy = join(root, ".factory.json");
       const yaml = join(root, "factory/definition.yaml");
       const raw = await Bun.file(legacy).json();
@@ -87,6 +91,7 @@ test("two project definitions migrate explicitly, preserve metadata and expose o
       expect(migratedDigest).not.toBe(flatDigest);
       expect(run("--migrate").status).toBe(0);
       expect(run("--refresh", "--store", store).status).toBe(0);
+      expect(await readFile(tokenPath, "utf8")).toBe(token);
       expect((await configuration(root)).digest).toBe(migratedDigest);
       const effective = run("--effective");
       expect(effective.status).toBe(0);
