@@ -440,6 +440,32 @@ export function feedAt(n: number): Feed {
     pipelineSteps,
     lifecycle: lifecycleStatus(),
     stages,
+    automations: [
+      {
+        name: "sample-audit",
+        schedule: "0 9 * * 1",
+        enabled: n % 4 === 0,
+        lastRunAt: Date.parse("2026-11-19T09:00:00Z"),
+        lastOutcome: "sent",
+        requests:
+          n % 4 < 2
+            ? []
+            : [
+                {
+                  id: 1,
+                  name: "sample-audit",
+                  action: "run",
+                  at: Date.parse("2026-11-19T10:00:00Z"),
+                  ...(n % 4 === 2
+                    ? ({ status: "pending", reason: null } as const)
+                    : ({
+                        status: "refused",
+                        reason: "Request expired after one hour.",
+                      } as const)),
+                },
+              ],
+      },
+    ],
     tasks: TICKETS.slice(0, frame.ticket + 1).map((ticket, i) =>
       taskAt(frame, ticket, i),
     ),

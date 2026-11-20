@@ -773,6 +773,73 @@
   font-weight: 600;
 }
 
+#kit [data-area="automations"] {
+  grid-column: 1 / -1;
+}
+
+#kit [data-area="automations"] form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-block: 18px;
+}
+
+#kit [data-area="automations"] :is(input, button) {
+  font: inherit;
+  border: 1px solid #8888;
+  border-radius: 6px;
+  padding: 9px 12px;
+  background: #faf9f6;
+  color: #383831;
+}
+
+#kit [data-area="automations"] input {
+  min-width: 0;
+  flex: 1 1 220px;
+}
+
+#kit [data-area="automations"] button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+#kit [data-area="automations"] [aria-checked="true"] {
+  color: #245b35;
+  background: #e6efdf;
+}
+
+#kit [data-automations] {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+#kit [data-automation] {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px 24px;
+  border-top: 1px solid #8885;
+  padding-block: 16px;
+  overflow-wrap: anywhere;
+}
+
+#kit [data-automation] :is(h3, p) {
+  margin: 4px 0;
+}
+
+#kit [data-automation-actions] {
+  display: flex;
+  gap: 8px;
+}
+
+#kit [data-automation-result] {
+  flex-basis: 100%;
+  font-size: 12px;
+}
+
 @media (max-width: 600px) {
   #kit [data-device]:not(#_):not(#_) {
     grid-template-columns: minmax(0, 1fr);

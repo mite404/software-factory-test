@@ -1,7 +1,8 @@
 # Pipeline view
 
-Read-only page that draws the factory's status feed and event log. It only ever calls
-`GET /api/status` and `GET /api/events` on its own origin.
+The page draws the factory's status feed and event log using `GET /api/status` and
+`GET /api/events` on its own origin. Automation controls queue authenticated intents with
+`POST /api/automations/<name>`; only a connected owner reconciliation applies them.
 
 The default URL shows the SPEC-01 diagram and ticket device. There are no theme or kit switches.
 `?demo` shows labelled sample data in the same page; `tick` selects its starting poll.

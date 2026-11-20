@@ -28,6 +28,7 @@ import {
 } from "./native";
 import { hasConfigDefinition, type Check } from "./config";
 import { reviewerModel } from "./persistence";
+import { installControlToken } from "./control-token";
 
 function discoverStore() {
   const skill = execFileSync("amp", ["skill", "info", "poteto-mode"], {
@@ -92,7 +93,7 @@ const serviceName = "factory-dashboard";
 const dashboardDir = ".amp/factory";
 const dashboardFiles = ["dashboard.js", "dashboard.html"];
 
-// The read-only dashboard on the API origin. Declaring it grants no execution, schedule, ticket or push permission.
+// Declaring the dashboard grants no execution, schedule, ticket or push permission.
 // The command is constant and names only a repository-local file, so it needs no shell quoting.
 function dashboardService() {
   return {
@@ -193,6 +194,12 @@ async function installDashboard(
   root: string,
   files: Awaited<ReturnType<typeof bundleDashboard>>,
 ) {
+  const gitDirectory = execFileSync(
+    "git",
+    ["-C", root, "rev-parse", "--absolute-git-dir"],
+    { encoding: "utf8" },
+  ).trim();
+  installControlToken(join(gitDirectory, "factory"));
   await mkdir(join(root, dashboardDir), { recursive: true });
   for (const [name, text] of Object.entries(files))
     await replaceFile(join(root, dashboardDir, name), text);

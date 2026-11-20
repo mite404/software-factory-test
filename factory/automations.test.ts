@@ -17,6 +17,8 @@ import {
   factoryDefinition,
   factoryEvents,
   factoryStatus,
+  factoryRecords,
+  enqueueAutomationRequest,
   openPersistence,
   type State,
 } from "./persistence";
@@ -879,6 +881,82 @@ async function engine(
     at: (time: number) => (clock = time),
   };
 }
+
+test("dashboard requests apply oldest first only on connected owner reconciliation, once, including expiry", async () => {
+  const f = await engine({
+    pulse: automationFile("*/5 * * * *", false, "Requested run."),
+  });
+  await f.tick("start");
+  await f.tick("pause");
+  const directory = f.factory.directory;
+  enqueueAutomationRequest(directory, "pulse", "run", at(10, 0));
+  enqueueAutomationRequest(directory, "pulse", "enable", at(11, 0));
+  enqueueAutomationRequest(directory, "pulse", "run", at(12, 0));
+  enqueueAutomationRequest(directory, "pulse", "disable", at(12, 0));
+  await f.factory.tick("status");
+  await f.tick("reconcile", "T-owner", null).catch(() => {});
+  expect(factoryRecords(directory)!.requests.map((row) => row.status)).toEqual([
+    "pending",
+    "pending",
+    "pending",
+    "pending",
+  ]);
+  expect(f.sent()).toEqual([]);
+  await f.tick("reconcile");
+  const records = factoryRecords(directory)!;
+  expect(
+    records.requests.map(({ action, status, reason }) => ({
+      action,
+      status,
+      reason,
+    })),
+  ).toEqual([
+    {
+      action: "run",
+      status: "refused",
+      reason: "Request expired after one hour.",
+    },
+    { action: "enable", status: "applied", reason: null },
+    { action: "run", status: "applied", reason: null },
+    { action: "disable", status: "applied", reason: null },
+  ]);
+  expect(f.sent()).toEqual([
+    { thread: "T-owner", message: "Factory automation pulse\nRequested run." },
+  ]);
+  expect(records.state.enabled).toBe(false);
+  expect(records.state.runs).toEqual({});
+  expect(records.state.automations!.pulse!.override).toBe(false);
+  expect(records.state.automations!.pulse!.lastRunAt).toBe(at(12, 0));
+  const before = factoryEvents(directory);
+  await f.tick("reconcile");
+  expect(f.sent()).toHaveLength(1);
+  expect(factoryEvents(directory)).toEqual(before);
+});
+
+test("a dashboard run with a lost send reply is visibly refused and never retried after restart", async () => {
+  const f = await engine({ pulse: automationFile("*/5 * * * *", false) });
+  await f.tick("start");
+  await f.tick("pause");
+  f.outcome.failOwnerSends = true;
+  enqueueAutomationRequest(f.factory.directory, "pulse", "run", at(12, 0));
+  await f.tick("reconcile");
+  const request = factoryRecords(f.factory.directory)!.requests[0]!;
+  expect(request.status).toBe("refused");
+  expect(request.reason).toContain("outcome unknown");
+  expect(f.sent()).toHaveLength(1);
+  const restarted = createFactory(f.root, f.host, openStore, () => at(12, 0));
+  await restarted.tick(
+    "reconcile",
+    "T-owner",
+    f.host.state,
+    undefined,
+    f.fixture.tools,
+  );
+  expect(f.sent()).toHaveLength(1);
+  expect(
+    factoryStatus(f.factory.directory).automations!.pulse!.lastOutcome,
+  ).toBe("unknown");
+});
 
 test("missed wakes collapse into one run: wakes at 0, 5 and 25 minutes send three times, not six", async () => {
   const f = await engine({

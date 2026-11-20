@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+  automationView,
   derive,
   eventBatch,
   eventRows,
@@ -16,6 +17,67 @@ import {
 } from "../factory/persistence";
 
 const NOW = Date.parse("2026-11-13T12:00:10Z");
+
+test("automation receipts stay pending until polled and refused requests show their reason", () => {
+  const row = {
+    name: "audit",
+    schedule: "0 9 * * 1",
+    enabled: false,
+    lastRunAt: null,
+    lastOutcome: null,
+    requests: [],
+  };
+  expect(automationView(row, null, false, "", false)).toMatchObject({
+    disabled: true,
+    switchLabel: "Off",
+    nextAction: "enable",
+    lastRun: "never",
+    message: "No requests",
+  });
+  expect(automationView(row, 7, false, "", true)).toMatchObject({
+    pending: true,
+    disabled: true,
+    switchLabel: "Off",
+    message: "Pending · waiting for a connected owner wake",
+  });
+  const applied = {
+    ...row,
+    enabled: true,
+    requests: [
+      {
+        id: 7,
+        name: "audit",
+        action: "enable" as const,
+        at: NOW,
+        status: "applied" as const,
+        reason: null,
+      },
+    ],
+  };
+  expect(automationView(applied, 7, false, "", true)).toMatchObject({
+    pending: false,
+    disabled: false,
+    switchLabel: "On",
+    nextAction: "disable",
+    message: "enable applied",
+  });
+  const refused = {
+    ...row,
+    requests: [
+      {
+        id: 8,
+        name: "audit",
+        action: "run" as const,
+        at: NOW,
+        status: "refused" as const,
+        reason: "Request expired after one hour.",
+      },
+    ],
+  };
+  expect(automationView(refused, 8, false, "", true).message).toBe(
+    "run refused · Request expired after one hour.",
+  );
+});
 
 // One ticket per word: the stage and live activity that make the page say it.
 const WHERE = {

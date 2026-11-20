@@ -1038,6 +1038,7 @@ test("durable records retain ticket identity without importing legacy or writing
     state: parked,
     tickets: [{ id: "A", steps: [] }],
     reviews: [],
+    requests: [],
   });
   expect(await readFile(join(f.directory, "state.sqlite"))).toEqual(bytes);
   expect(await readdir(f.directory)).toEqual(files);

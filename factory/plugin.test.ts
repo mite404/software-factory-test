@@ -9,6 +9,8 @@ import { startDashboard } from "./dashboard";
 import registerFactory from "./plugin";
 import {
   factoryStatus,
+  factoryRecords,
+  enqueueAutomationRequest,
   openPersistence,
   type lifecycleStatus,
   type Run,
@@ -17,6 +19,113 @@ import { watchdogFixture } from "./bookkeeping.fixture";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
+
+test("only the connected owner wake applies a queued dashboard run, once", async () => {
+  const root = await mkdtemp(join(tmpdir(), "factory-plugin-controls-"));
+  const directory = join(root, ".git/factory");
+  let dispose = () => {};
+  let wake!: (
+    event: { thread: { id: string } },
+    ctx: PluginToolContext,
+  ) => Promise<unknown>;
+  const sent: string[] = [];
+  try {
+    git(root, "init", "-q");
+    await writeFile(join(root, "prd.md"), "Fixture");
+    await writeFile(join(root, "tickets.json"), "[]");
+    await writeFile(
+      join(root, ".factory.json"),
+      JSON.stringify({
+        version: 1,
+        capacity: 1,
+        workerModel: "openai/gpt-6.1-sol",
+        prd: "prd.md",
+        tickets: "tickets.json",
+        scope: ["src/"],
+        verify: "true",
+        permissions: { execute: false, publish: false, externalTickets: false },
+      }),
+    );
+    const storage = openPersistence(directory, []);
+    storage.commit(
+      {
+        enabled: false,
+        owner: "T-owner",
+        runs: {},
+        automations: {
+          pulse: {
+            schedule: "*/5 * * * *",
+            authored: false,
+            armedAt: Date.now(),
+            prompt: "Fixture prompt.",
+          },
+        },
+      },
+      "factory",
+      "fixture",
+      "",
+    );
+    storage.close();
+    enqueueAutomationRequest(directory, "pulse", "run");
+    registerFactory(
+      {
+        createAgent() {
+          throw new Error("Dashboard requests cannot dispatch");
+        },
+        threads: {
+          get() {
+            return {
+              async appendUserMessage(message: { content: string }) {
+                sent.push(message.content);
+              },
+              state: {
+                async get() {
+                  return "idle";
+                },
+              },
+            };
+          },
+        },
+        logger: { log() {} },
+        registerTool() {},
+        on(_event: string, handler: typeof wake) {
+          wake = handler;
+        },
+        onDispose(handler: () => void) {
+          dispose = handler;
+        },
+      } as unknown as PluginAPI,
+      root,
+      () => ({
+        async init() {},
+        async close() {},
+        ledger: { async record() {} },
+      }),
+    );
+    const context = (id: string, tools?: PluginToolContext["tools"]) =>
+      ({ thread: { id }, tools }) as PluginToolContext;
+    await wake({ thread: { id: "T-other" } }, context("T-other"));
+    await wake({ thread: { id: "T-owner" } }, context("T-owner"));
+    expect(factoryRecords(directory)!.requests[0]!.status).toBe("pending");
+    expect(sent).toEqual([]);
+    const fixture = watchdogFixture();
+    await wake(
+      { thread: { id: "T-owner" } },
+      context("T-owner", fixture.tools),
+    );
+    await wake(
+      { thread: { id: "T-owner" } },
+      context("T-owner", fixture.tools),
+    );
+    expect(sent).toEqual(["Factory automation pulse\nFixture prompt."]);
+    expect(factoryRecords(directory)!.requests[0]!.status).toBe("applied");
+    expect(factoryStatus(directory).enabled).toBe(false);
+    expect(fixture.schedules.size).toBe(0);
+  } finally {
+    dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("status exposes a compact static lifecycle with real control actions and no private evidence", async () => {
   const root = await mkdtemp(join(tmpdir(), "factory-plugin-lifecycle-"));
