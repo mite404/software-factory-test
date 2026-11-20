@@ -11,6 +11,9 @@
   public artifacts, so the privacy rules in that section are the blast radius.
 - Depends on: nothing.
 - Planned at: `a0703dd6c5f10e9017db5808b78fc1bf7bbb80e0`, 2026-11-19
+- Superseded by: F040-landing-chronicles on 2026-11-20. This ticket was admitted without a
+  lane while the parked F028 run holds the main lane, and an admitted queue row is frozen.
+  Do not admit or dispatch this ID again.
 - Local path: `docs/feats/chronicle/F039-landing-chronicles.md`
 
 ## Why this matters
