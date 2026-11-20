@@ -4,6 +4,7 @@
 
 - Goal: show the run lifecycle as a graph on the dashboard, with every ticket placed on its
   current state and each state opening the thread that owns it.
+- Outcome: The dashboard shows the run lifecycle as a graph
 - Initial priority: P2. Effort: Medium.
 - Risk: normal; a read-only page section. A wrong drawing can mislead, so it is derived, not
   hand-drawn.

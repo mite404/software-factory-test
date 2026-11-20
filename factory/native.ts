@@ -2,7 +2,14 @@ import type { AgentReasoningEffort, PluginTools } from "@ampcode/plugin";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
-import { lstat, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import {
   automationsOf,
@@ -76,6 +83,7 @@ import {
   type Watchdog,
   type WatchdogPolicy,
   type ProviderLimit,
+  type SkippedTicket,
   automationEnabled,
   mergedAutomations,
   type AutomationRecord,
@@ -443,6 +451,19 @@ function gateLine(verify: unknown, checks: Check[] | undefined) {
     .join("; ");
 }
 
+// An optional path setting: absent stays absent, present resolves like any other local path.
+function optionalLocalPath(root: string, value: unknown) {
+  return value === undefined ? undefined : localPath(root, text(value));
+}
+
+// A spreadable optional property: absent contributes nothing, present contributes one field.
+function optionalField<K extends string, V>(
+  key: K,
+  value: V | undefined,
+): Partial<Record<K, V>> {
+  return value === undefined ? {} : ({ [key]: value } as Record<K, V>);
+}
+
 async function validateConfiguration(
   root: string,
   raw: Record<string, unknown>,
@@ -466,6 +487,7 @@ async function validateConfiguration(
   const permissions = actionPermissions(raw);
   const prd = localPath(root, text(raw.prd));
   const tickets = localPath(root, text(raw.tickets));
+  const ticketFiles = optionalLocalPath(root, raw.ticketFiles);
   const scope = allowedScope(root, raw.scope);
   const verify = gateLine(raw.verify, checks);
   const setup = parseSetup(raw.setup, raw.setupTimeoutMs);
@@ -481,6 +503,7 @@ async function validateConfiguration(
     ...permissions,
     prd,
     tickets,
+    ...optionalField("ticketFiles", ticketFiles),
     scope,
     verify,
     checks,
@@ -733,6 +756,125 @@ export function tasks(value: unknown, light = false): Task[] {
       if (id === row.id || !rows.some((other) => other.id === id))
         throw new Error("Invalid dependency");
   return rows;
+}
+
+const ticketFileName = /^(F\d{3}-[A-Za-z0-9][A-Za-z0-9-]*)\.md$/;
+
+function markdownSection(content: string, heading: string) {
+  const lines = content.split("\n");
+  const start = lines.findIndex((line) => line.trim() === `## ${heading}`);
+  if (start < 0) return [];
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((line) => line.startsWith("## "));
+  return end < 0 ? rest : rest.slice(0, end);
+}
+
+/** Read one ticket file's text into its public planning fields.
+ * Returns undefined for files that are not tickets (other names, `done` directories), a skip
+ * reason for a ticket that cannot be read, or its id, bold step labels and outcome. Only the
+ * H1 check, the Outcome line and the step labels are read; Approach and other prose never leave
+ * the file.
+ */
+export function readTicketFile(
+  path: string,
+  content: string,
+):
+  | { id: string; steps: string[]; outcome: string }
+  | { skip: string }
+  | undefined {
+  const name = ticketFileName.exec(path.split("/").pop() ?? "");
+  if (!name) return undefined;
+  if (path.split("/").includes("done")) return undefined;
+  const h1 = /^# (.+)$/m.exec(content)?.[1]?.trim();
+  if (h1 !== name[1]) return { skip: "H1 does not match the file name" };
+  const outcome = markdownSection(content, "Status").flatMap((line) => {
+    const value = /^-\s+Outcome:\s*(.+?)\s*$/.exec(line)?.[1];
+    return value ? [value] : [];
+  })[0];
+  if (!outcome) return { skip: "no Outcome line under ## Status" };
+  const steps = markdownSection(content, "Steps").flatMap((line) => {
+    const label = /^\s*\d+\.\s+\*\*(.+?)\*\*/.exec(line)?.[1]?.trim();
+    return label ? [label] : [];
+  });
+  if (!steps.length) return { skip: "no bold step labels under ## Steps" };
+  return { id: name[1]!, steps, outcome };
+}
+
+/** Walk the Markdown below `directory`, reading each ticket file into a planned row or a skip.
+ * A missing directory syncs nothing; any other directory error fails closed. One unreadable
+ * file is skipped and never stops the walk. Rows are always `planned`; nothing here can admit
+ * work.
+ */
+async function syncTicketFiles(root: string, directory: string) {
+  const synced: Task[] = [];
+  const skipped: SkippedTicket[] = [];
+  const seen = new Set<string>();
+  const entries = await readdir(directory, { recursive: true }).catch(
+    (error: unknown) => {
+      const code = (error as { code?: string })?.code;
+      if (code === "ENOENT" || code === "ENOTDIR") return [] as string[];
+      throw error;
+    },
+  );
+  for (const entry of entries.sort()) {
+    if (!entry.endsWith(".md")) continue;
+    const path = relative(root, join(directory, entry));
+    let content: string;
+    try {
+      content = await readFile(join(directory, entry), "utf8");
+    } catch {
+      skipped.push({ file: path, reason: "unreadable" });
+      continue;
+    }
+    const read = readTicketFile(path, content);
+    if (read === undefined) continue;
+    if ("skip" in read) {
+      skipped.push({ file: path, reason: read.skip });
+      continue;
+    }
+    if (seen.has(read.id)) {
+      skipped.push({ file: path, reason: "duplicate ticket ID" });
+      continue;
+    }
+    seen.add(read.id);
+    synced.push({
+      id: read.id,
+      brief: `Implement ${path}`,
+      after: [],
+      intake: "planned",
+      outcome: read.outcome,
+      steps: read.steps,
+      file: path,
+    });
+  }
+  return { synced, skipped };
+}
+
+// The queue file and the ticket files merge field by field on the same id: the ticket file
+// owns what the work is (steps and outcome), the queue file owns what only the Foreman knows
+// (brief, order, prerequisites, sizing and lane). A synced-only row appends after the authored
+// queue.
+async function queueWithTickets(
+  root: string,
+  config: { tickets: string; ticketFiles?: string },
+) {
+  const queue = tasks(JSON.parse(await readFile(config.tickets, "utf8")), true);
+  if (!config.ticketFiles) return { queue, skipped: [] as SkippedTicket[] };
+  const { synced, skipped } = await syncTicketFiles(root, config.ticketFiles);
+  const unsynced = new Map(synced.map((task) => [task.id, task]));
+  const merged = queue.map((task) => {
+    const sync = unsynced.get(task.id);
+    if (!sync) return task;
+    unsynced.delete(task.id);
+    return {
+      ...sync,
+      ...task,
+      steps: sync.steps,
+      outcome: sync.outcome,
+      file: sync.file,
+    };
+  });
+  return { queue: [...merged, ...unsynced.values()], skipped };
 }
 
 function git(root: string, ...args: string[]) {
@@ -2128,11 +2270,13 @@ export function createFactory(
       const config = await effectiveConfiguration(root);
       const twoLanes = !!config.lightWorker;
       assertControlCaller(factoryStatus(directory), owner, action);
-      const queue = tasks(
-        JSON.parse(await readFile(config.tickets, "utf8")),
-        true,
+      const { queue, skipped } = await queueWithTickets(root, config);
+      persistence = openPersistence(
+        directory,
+        queue,
+        now,
+        config.ticketFiles ? { skipped } : "off",
       );
-      persistence = openPersistence(directory, queue, now);
       const state = persistence.state;
       assertWatchdogCaller(state, action, owner, tools);
       restoreTickets(queue, persistence.tickets, state);
@@ -4235,11 +4379,13 @@ export function createFactory(
           ? await effectiveConfiguration(root)
           : await configuration(root);
       assertControlCaller(factoryStatus(directory), owner, action);
-      const queue = tasks(
-        JSON.parse(await readFile(next.tickets, "utf8")),
-        true,
+      const { queue, skipped } = await queueWithTickets(root, next);
+      const persistence = openPersistence(
+        directory,
+        queue,
+        now,
+        next.ticketFiles ? { skipped } : "off",
       );
-      const persistence = openPersistence(directory, queue, now);
       try {
         assertWatchdogCaller(persistence.state, action, owner, tools);
         if (action === "admit") {

@@ -3,6 +3,7 @@
 ## Status
 
 - Goal: make the private backup command succeed where commit signing is tied to one Git identity.
+- Outcome: The private backup command signs with its Git identity
 - Initial priority: P0. Effort: Small.
 - Risk: elevated; the change touches the only path that moves coordinator state out of the orb.
 - Depends on: backup-adoption-ticket1 (accepted).

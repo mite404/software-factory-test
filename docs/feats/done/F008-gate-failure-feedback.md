@@ -3,6 +3,7 @@
 ## Status
 
 - Goal: a failed gate returns the failing check and its output to the worker, not a log path.
+- Outcome: A failed gate returns its check and output
 - Initial priority: P0. Effort: Small.
 - Risk: normal; changes the text of one repair message and nothing about acceptance.
 - Depends on: F003-provider-limit-resume, only because both edit the rejection path in

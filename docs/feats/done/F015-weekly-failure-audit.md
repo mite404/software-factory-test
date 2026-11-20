@@ -5,6 +5,7 @@
 - Goal: once a week, collect every failed attempt, have Jev classify and rate each finding into
   fixed buckets, and hand the buckets to a Fable thread that audits the factory and the
   architecture of the app it builds.
+- Outcome: Failed attempts feed a weekly factory audit
 - Initial priority: P1. Effort: Large. The operator filed this as a major feature and expects it
   to be complex.
 - Risk: elevated; review findings leave the orb for a third-party API, and a new secret is read.

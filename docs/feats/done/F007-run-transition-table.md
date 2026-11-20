@@ -3,6 +3,7 @@
 ## Status
 
 - Goal: declare the run lifecycle in one table so every stop has a visible, tested exit.
+- Outcome: Every stop has a declared, tested exit
 - Initial priority: P1. Effort: Medium.
 - Risk: elevated; the table replaces the scattered rules that decide every stop and recovery.
 - Depends on: F003, F004, F005 and F006, so their new stops and recoveries enter the table once

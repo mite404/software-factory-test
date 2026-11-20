@@ -6,6 +6,7 @@ Replace every placeholder and recheck paths/commands before authoring a real tic
 ## Status
 
 - Goal: show durable acceptance even when live observations are unavailable.
+- Outcome: Durable acceptance visible without live observations
 - Initial priority: P0
 - Effort: Medium
 - Risk: elevated; read-only status crosses the private-state/public-projection boundary.

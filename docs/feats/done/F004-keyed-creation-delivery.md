@@ -4,6 +4,7 @@
 
 - Goal: recover an unclear thread creation or message delivery by looking for it, not by parking
   it for the Foreman.
+- Outcome: Unclear thread creation and delivery recover by lookup
 - Initial priority: P1. Effort: Medium.
 - Risk: elevated; a wrong lookup would create a duplicate worker or send a brief twice.
 - Depends on: F002-worker-runner-executor and PR #24 (merged). Complements v1-ticket10.

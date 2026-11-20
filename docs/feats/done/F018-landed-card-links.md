@@ -4,6 +4,7 @@
 
 - Goal: on the kit page, a click anywhere on a landed ticket's hover card opens its thread in
   Amp, and a small arrow beside the revision hash opens its pull request on GitHub.
+- Outcome: Landed cards link to thread and pull request
 - Initial priority: P1. Effort: Small.
 - Risk: normal; read-only links. A wrong URL built from feed data would be a link to an
   attacker-chosen site, so each URL is built from validated parts only.

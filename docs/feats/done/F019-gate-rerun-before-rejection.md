@@ -4,6 +4,7 @@
 
 - Goal: a gate failure caused by machine load does not reject a correct candidate. The factory
   runs a failed gate a second time, and only two failures in a row reject.
+- Outcome: A load-caused gate failure reruns before rejecting
 - Initial priority: P1. Effort: Small.
 - Risk: elevated; changes when a candidate is rejected. A wrong rule could accept a candidate
   that fails its gate, so a pass is still required and nothing is ever accepted on a failure.

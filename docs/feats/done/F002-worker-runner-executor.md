@@ -3,6 +3,7 @@
 ## Status
 
 - Goal: keep worker and reviewer tools alive when the Foreman's Amp CLI process is replaced.
+- Outcome: Worker and reviewer tools survive an Amp CLI replacement
 - Initial priority: P0. Effort: Small.
 - Risk: elevated; the change decides where every worker and reviewer thread executes.
 - Depends on: v1-ticket2 (accepted). Complements v1-ticket10, which recovers an outage that still

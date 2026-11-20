@@ -4,6 +4,7 @@
 
 - Goal: after a second escalation fails, park the ticket, alert the operator, and let the queue
   continue with tickets that do not depend on it.
+- Outcome: A twice-failed ticket parks while the queue continues
 - Initial priority: P1. Effort: Medium.
 - Risk: elevated; adds a run kind and changes which runs hold the queue.
 - Depends on: F007-run-transition-table, so the new kind and its exit enter the declared table.

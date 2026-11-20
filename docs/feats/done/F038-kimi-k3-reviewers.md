@@ -13,6 +13,8 @@
 | Blocks | Manual low-risk ticket threads on `moonshotai/kimi-k3` low |
 | Updated | 2026-11-19 |
 
+- Outcome: Reviewers run on Kimi K3 for OpenAI workers
+
 ## Why this matters
 
 The operator's Claude subscription is paused, so no `anthropic/*` model can run. Every cold

@@ -4,6 +4,7 @@
 
 - Goal: the cold reviewer reviews with the `ce-code-review` skill, and no longer receives the
   worker's process instructions, such as the poteto-mode line.
+- Outcome: Cold review uses ce-code-review only
 - Initial priority: P2. Effort: Small.
 - Risk: elevated; changes the prompt every cold review runs on. A skill that delegates, edits
   files or writes its own report format would break the reviewer's contract, so the factory's

@@ -4,6 +4,7 @@
 
 - Goal: make the SPEC-01 kit page the dashboard, with no query string, and delete the page
   parts only the other renderer used.
+- Outcome: The kit page is the dashboard
 - Initial priority: P1. Effort: Small.
 - Risk: normal; a read-only page. The risk is deleting a style or element the kit page still
   uses, so the rendered page is compared before and after.

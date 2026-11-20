@@ -3,6 +3,7 @@
 ## Status
 
 - Goal: refuse to start a worker when its brief is missing a fact, and say which fact.
+- Outcome: A worker refuses a brief with a missing fact
 - Initial priority: P2. Effort: Small.
 - Risk: normal; adds a refusal before creation and changes no accepted behavior.
 - Depends on: F007-run-transition-table, so the new stop enters the declared table.
