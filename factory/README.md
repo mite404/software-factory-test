@@ -1235,6 +1235,16 @@ Git proves the patch and ancestry, not GitHub's association between the PR numbe
 Missing evidence, stale incidents, active or uncertain runs, and conflicting repeats are refused
 without changing the run or its events.
 
+When upstream moved a candidate's paths before landing, supply optional `renames`, an object mapping
+each old repository-relative file path to its exact landed path. Only accepted diff file headers
+are adapted before the combined and per-commit patch proofs; content and upstream paths are never
+rewritten. Every source must occur in the combined accepted diff. Unchanged paths, path traversal,
+colliding destinations, wrong or incomplete mappings, and content drift refuse without writes.
+Git-detected renames are expanded into file additions/deletions, and verbatim patch IDs preserve
+path and content whitespace for this proof. The mapping is saved in the durable `landed-outside`
+event and must match on repeat requests; key order does not matter. Omitted or empty mappings keep
+the ordinary proof. This option does not extend `record-merge`.
+
 Success stores a done run with its original base, worker, merge record and decision, closes the
 incident, and appends one `landed-outside` event. An identical request, including its incident and
 decision, is a no-op after reload. Recording preserves the enabled state, works while paused, and

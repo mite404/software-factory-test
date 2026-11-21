@@ -533,6 +533,12 @@ export default function registerFactory(
           description:
             "For owner-only record-landing, a revision descending from the saved base and reachable from the worker worktree HEAD. Requires the current incident, decision, PR and merge commit. Git must prove the exact patch upstream and the merge in both upstream and root HEAD. Later blocked reports do not disqualify earlier candidates. No dispatch or schedule effects.",
         },
+        renames: {
+          type: "object",
+          additionalProperties: { type: "string" },
+          description:
+            "For record-landing only, explicit old-to-new repository-relative file paths. Rewrites accepted patch headers, never content or upstream paths. Unused sources, unchanged paths, collisions or unproven content refuse without writes. Saved in the landed-outside event. Omitted or empty keeps ordinary proof.",
+        },
         decision: { type: "string" },
         owner: {
           type: "string",
