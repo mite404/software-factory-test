@@ -913,11 +913,19 @@ function laneWorker(
   return pinned.lightWorker;
 }
 
-function patchID(root: string, patch: string) {
-  return execFileSync("git", ["-C", root, "patch-id", "--stable"], {
-    input: patch,
-    encoding: "utf8",
-  }).split(/\s/)[0];
+function patchID(
+  root: string,
+  patch: string,
+  renames?: Record<string, string>,
+  requireAll = false,
+) {
+  const adapted = renames ? renamedPatch(patch, renames, requireAll) : patch;
+  // Stable IDs strip path and content whitespace; explicit renames preserve both.
+  return execFileSync(
+    "git",
+    ["-C", root, "patch-id", renames ? "--verbatim" : "--stable"],
+    { input: adapted, encoding: "utf8" },
+  ).split(/\s/)[0];
 }
 
 function parseMergeRequest(value: unknown) {
@@ -935,23 +943,124 @@ function parseMergeRequest(value: unknown) {
   return { ticket, pr, commit };
 }
 
+function parseRenames(value: unknown) {
+  const renames: Record<string, string> = {};
+  for (const [from, to] of Object.entries(
+    value === undefined ? {} : object(value),
+  ).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    for (const path of [from, to]) {
+      if (
+        typeof path !== "string" ||
+        path.includes("\0") ||
+        path.split("/").some((part) => !part || part === "." || part === "..")
+      )
+        throw new Error("Renames require repository-relative file paths");
+    }
+    if (from === to || typeof to !== "string")
+      throw new Error("Renames must change the file path");
+    Object.defineProperty(renames, from, { value: to, enumerable: true });
+  }
+  return renames;
+}
+
 function parseLandingRequest(value: unknown) {
   const raw = object(value);
   const revision = text(raw.revision);
   if (!/^[a-f0-9]{40}$/.test(revision))
     throw new Error("Expected a full candidate revision");
+  const renames = parseRenames(raw.renames);
   return {
     ...parseMergeRequest(value),
     incident: text(raw.incident),
     revision,
     decision: text(raw.decision),
+    ...(Object.keys(renames).length ? { renames } : {}),
   };
+}
+
+// Git's C-quoted path spelling with core.quotePath=true, including UTF-8 octets.
+function patchPath(path: string) {
+  if (/^[ -~]*$/.test(path) && !/["\\]/.test(path)) return path;
+  const escapes: Record<number, string> = {
+    7: "\\a",
+    8: "\\b",
+    9: "\\t",
+    10: "\\n",
+    11: "\\v",
+    12: "\\f",
+    13: "\\r",
+    34: '\\"',
+    92: "\\\\",
+  };
+  return (
+    '"' +
+    Array.from(
+      Buffer.from(path),
+      (byte) =>
+        escapes[byte] ??
+        (byte >= 32 && byte < 127
+          ? String.fromCharCode(byte)
+          : `\\${byte.toString(8).padStart(3, "0")}`),
+    ).join("") +
+    '"'
+  );
+}
+
+function renamedPatch(
+  patch: string,
+  renames: Record<string, string>,
+  requireAll = false,
+) {
+  const replacements = new Map<string, string>();
+  const expected = new Set<string>();
+  for (const [from, to] of Object.entries(renames)) {
+    const header = `diff --git ${patchPath(`a/${from}`)} ${patchPath(`b/${from}`)}`;
+    expected.add(header);
+    replacements.set(
+      header,
+      `diff --git ${patchPath(`a/${to}`)} ${patchPath(`b/${to}`)}`,
+    );
+    for (const [marker, side] of [
+      ["---", "a"],
+      ["+++", "b"],
+    ]) {
+      for (const suffix of ["", "\t"]) {
+        replacements.set(
+          `${marker} ${patchPath(`${side}/${from}`)}${suffix}`,
+          `${marker} ${patchPath(`${side}/${to}`)}${suffix}`,
+        );
+      }
+    }
+  }
+  let headers = false;
+  const files = new Set<string>();
+  const adapted = patch
+    .split("\n")
+    .map((line) => {
+      if (line.startsWith("diff --git ")) {
+        headers = true;
+        expected.delete(line);
+        const next = replacements.get(line) ?? line;
+        if (files.has(next))
+          throw new Error("Renames must not combine accepted file paths");
+        files.add(next);
+      } else if (line.startsWith("@@") || line === "GIT binary patch") {
+        headers = false;
+      }
+      // Never rewrite hunk content, even when it looks like a file header.
+      return headers ? (replacements.get(line) ?? line) : line;
+    })
+    .join("\n");
+  if (requireAll && expected.size)
+    throw new Error("Rename source is absent from the accepted diff");
+  return adapted;
 }
 
 function verifyMerge(
   root: string,
   run: Extract<Run, { kind: "done" }>,
   commit: string,
+  renames?: Record<string, string>,
 ) {
   const upstream = git(
     root,
@@ -965,43 +1074,44 @@ function verifyMerge(
   if (!/^[a-f0-9]{40}$/.test(run.revision))
     throw new Error("Invalid accepted revision");
   const base = run.acceptedBase ?? run.review?.base ?? `${run.revision}^`;
-  const accepted = patchID(
-    root,
-    git(
-      root,
-      "diff",
-      "--no-ext-diff",
-      "--no-textconv",
-      "--binary",
-      "-U0",
-      base,
-      run.revision,
-      "--",
-    ),
-  );
-  const patches = (head: string) =>
+  const diff = (command: string, ...args: string[]) =>
+    execFileSync(
+      "git",
+      [
+        "-C",
+        root,
+        "-c",
+        "core.quotePath=true",
+        command,
+        "--no-ext-diff",
+        "--no-textconv",
+        "--binary",
+        "-U0",
+        // Expand detected renames so every section has one unambiguous file path.
+        ...(renames
+          ? ["--no-renames", "--src-prefix=a/", "--dst-prefix=b/"]
+          : []),
+        ...args,
+      ],
+      // Unlike scalar Git output, patch whitespace is evidence, not padding.
+      { encoding: "utf8" },
+    );
+  const acceptedPatch = diff("diff", base, run.revision, "--");
+  const accepted = patchID(root, acceptedPatch, renames, true);
+  const patches = (
+    head: string,
+    mapping: Record<string, string> | undefined = renames ? {} : undefined,
+  ) =>
     git(root, "rev-list", "--no-merges", `${base}..${head}`)
       .split("\n")
       .filter(Boolean)
-      .map((revision) =>
-        patchID(
-          root,
-          git(
-            root,
-            "show",
-            "--format=",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--binary",
-            "-U0",
-            revision,
-            "--",
-          ),
-        ),
-      );
+      .map((revision) => {
+        const patch = diff("show", "--format=", revision, "--");
+        return patchID(root, patch, mapping);
+      });
   const landed = Map.groupBy(patches(commit).filter(Boolean), (patch) => patch);
   if (!landed.has(accepted)) {
-    const required = patches(run.revision);
+    const required = patches(run.revision, renames);
     if (
       required.length === 0 ||
       !required.every((patch) => landed.get(patch)?.pop())
@@ -1794,7 +1904,7 @@ function verifiedLanding(
     workerModel: checkpoint.workerModel,
     insight: evidence.decision,
   };
-  const at = verifyMerge(root, done, evidence.commit);
+  const at = verifyMerge(root, done, evidence.commit, evidence.renames);
   try {
     git(root, "merge-base", "--is-ancestor", evidence.commit, "HEAD");
   } catch {

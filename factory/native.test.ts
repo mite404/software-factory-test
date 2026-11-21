@@ -1251,6 +1251,193 @@ test.each(
   },
 );
 
+test.each(
+  [
+    { landing: "single", old: "old.md", moved: "done/new.md" },
+    { landing: "multi", old: 'old space é"\t.md', moved: 'done/new é"\t.md' },
+    { landing: "squashed", old: "old.md", moved: "done/new.md" },
+    { landing: "binary", old: "old.bin", moved: "done/new.bin" },
+    { landing: "mode", old: "old.sh", moved: "done/new.sh" },
+    { landing: "trailing-space", old: "old.md", moved: "done/new.md" },
+    { landing: "trailing-tab", old: "old.md", moved: "done/new.md" },
+  ].map((scenario) => ({
+    ...scenario,
+    initial: scenario.landing.startsWith("trailing-")
+      ? 'text = """\nbefore\n"""\n'
+      : scenario.landing === "binary"
+        ? Buffer.from([0, 1, 2, 3])
+        : "before\n-- a/old.md\n++ b/old.md\nafter\n",
+    changed:
+      new Map<string, string | Buffer>([
+        ["trailing-space", 'text = """\nhello \n"""\n'],
+        ["trailing-tab", 'text = """\nhello\t\n"""\n'],
+        ["binary", Buffer.from([0, 4, 5, 6])],
+        ["mode", "before\n-- a/old.md\n++ b/old.md\nafter\n"],
+      ]).get(scenario.landing) ?? "before\n--- a/old.md\n+++ b/old.md\nafter\n",
+    drift: scenario.landing.startsWith("trailing-")
+      ? 'text = """\nhello\n"""\n'
+      : scenario.landing === "binary"
+        ? Buffer.from([0, 7, 8, 9])
+        : "before\n--- a/o ld.md\n+++ b/old.md\nafter\n",
+    mode: scenario.landing === "mode" ? 0o755 : 0o644,
+  })),
+)(
+  "external landing proves explicit path renames ($landing)",
+  async ({ landing, old, moved, initial, changed, drift, mode }) => {
+    const f = await preparationFixture(() => "");
+    const renames = {
+      [old]: moved,
+      ...(["multi", "squashed"].includes(landing)
+        ? { "second.md": "done/second.md" }
+        : {}),
+    };
+    // Both spellings exist, but only the exact destination receives the change.
+    await mkdir(join(f.root, "done"));
+    await writeFile(join(f.root, moved.replace("new", "n ew")), "unrelated\n");
+    for (const path of [old, "second.md"]) {
+      await writeFile(join(f.root, path), initial);
+    }
+    f.git("add", ".");
+    f.git("commit", "-qm", "original paths");
+    const base = f.git("rev-parse", "HEAD");
+    f.git("worktree", "add", "--detach", f.worktree, base);
+    const paths = Object.keys(renames);
+    for (const path of paths) {
+      await writeFile(join(f.worktree, path), changed);
+      await chmod(join(f.worktree, path), mode);
+      f.git("-C", f.worktree, "commit", "-qam", `candidate ${path}`);
+    }
+    const revision = f.git("-C", f.worktree, "rev-parse", "HEAD");
+    for (const [from, to] of Object.entries(renames)) f.git("mv", from, to);
+    f.git("commit", "-qm", "upstream path move");
+    const movedBase = f.git("rev-parse", "HEAD");
+    for (const path of Object.values(renames)) {
+      await writeFile(join(f.root, path), changed);
+      await chmod(join(f.root, path), mode);
+      if (landing !== "squashed")
+        f.git("commit", "-qam", "land candidate hunk");
+    }
+    if (landing === "squashed") f.git("commit", "-qam", "squash candidate");
+    const commit = f.git("rev-parse", "HEAD");
+    const branch = f.git("branch", "--show-current");
+    f.git("remote", "add", "origin", f.root);
+    f.git("update-ref", `refs/remotes/origin/${branch}`, commit);
+    f.git("branch", `--set-upstream-to=origin/${branch}`, branch);
+    const engine = f.factory();
+    const storage = openPersistence(engine.directory, []);
+    storage.commit(
+      {
+        enabled: false,
+        owner: "T-owner",
+        runs: {
+          A: {
+            kind: "blocked",
+            thread: "T-prepared",
+            reason: "Target changed",
+            incident: {
+              id: "rename-stop",
+              ticket: "A",
+              owner: "T-owner",
+              base,
+              attempt: 1,
+              reason: "target-changed",
+              recovery: "inspect",
+              delivery: "sent",
+            },
+          },
+        },
+      },
+      "A",
+      "fixture",
+      "candidate waiting for landing proof",
+    );
+    storage.close();
+    const request = {
+      ticket: "A",
+      revision,
+      commit,
+      pr: 97,
+      incident: "rename-stop",
+      decision: "Owner approved exact upstream path moves",
+      renames,
+    };
+    const statePath = join(engine.directory, "state.sqlite");
+    const before = await readFile(statePath);
+    for (const invalid of [
+      undefined,
+      {},
+      null,
+      [],
+      "old.md",
+      { [old]: 1 },
+      { [old]: old },
+      { ...renames, [old]: "wrong.md" },
+      { ...renames, [old]: moved.replace("new", "n ew") },
+      { ...renames, absent: "elsewhere.md" },
+      { ...renames, "": "empty-source.md" },
+      { ...renames, [old]: "../outside.md" },
+      { ...renames, [old]: "/absolute.md" },
+      { ...renames, "second.md": moved },
+      Object.fromEntries(Object.entries(renames).slice(0, -1)),
+    ]) {
+      expect(
+        await engine
+          .recordLanding({ ...request, renames: invalid }, "T-owner")
+          .catch(() => "refused"),
+      ).toBe("refused");
+      expect(await readFile(statePath)).toEqual(before);
+    }
+    // A separate landing with drift, not one after the correct patch already landed.
+    f.git("checkout", "-q", "--detach", movedBase);
+    await writeFile(join(f.root, moved), drift);
+    f.git("commit", "-qam", "wrong landing content");
+    const wrong = f.git("rev-parse", "HEAD");
+    f.git("update-ref", `refs/remotes/origin/${branch}`, wrong);
+    f.git("checkout", "-q", branch);
+    f.git("reset", "--hard", wrong);
+    expect(
+      await engine
+        .recordLanding({ ...request, commit: wrong }, "T-owner")
+        .catch(() => "refused"),
+    ).toBe("refused");
+    expect(await readFile(statePath)).toEqual(before);
+    f.git("reset", "--hard", commit);
+    f.git("update-ref", `refs/remotes/origin/${branch}`, commit);
+    const landed = await engine.recordLanding(request, "T-owner");
+    expect(landed).toMatchObject({
+      enabled: false,
+      runs: { A: { kind: "done", revision, merge: { pr: 97, commit } } },
+    });
+    const after = await readFile(statePath);
+    expect(await f.factory().recordLanding(request, "T-owner")).toEqual(landed);
+    expect(
+      await f.factory().recordLanding(
+        {
+          ...request,
+          renames: Object.fromEntries(Object.entries(renames).reverse()),
+        },
+        "T-owner",
+      ),
+    ).toEqual(landed);
+    expect(await readFile(statePath)).toEqual(after);
+    const records = openPersistence(engine.directory, []);
+    expect(JSON.parse(records.lastEvent("A", "landed-outside")!)).toEqual(
+      request,
+    );
+    records.close();
+    expect(
+      await engine
+        .recordLanding(
+          { ...request, renames: { ...renames, extra: "other" } },
+          "T-owner",
+        )
+        .catch(String),
+    ).toContain("Conflicting");
+    expect(await readFile(statePath)).toEqual(after);
+    expect(f.counts()).toEqual({ creates: 0, sends: 0 });
+  },
+);
+
 async function externalLandingFixture(targetChanged = false) {
   const f = await preparationFixture(() => "");
   await writeFile(
@@ -1507,6 +1694,16 @@ test("external landing preserves saved repair identity while paused", async () =
   storage.close();
   await engine.tick("pause", "T-owner");
   const counts = f.counts();
+  const before = await snapshot();
+  expect(
+    await engine
+      .recordLanding(
+        { ...request, renames: { "src/value": "src/value" } },
+        "T-owner",
+      )
+      .catch(() => "refused"),
+  ).toBe("refused");
+  expect(await snapshot()).toEqual(before);
   const landed = await engine.recordLanding(request, "T-owner");
   expect(landed.enabled).toBe(false);
   expect(landed.runs.A).toMatchObject({
@@ -1519,7 +1716,9 @@ test("external landing preserves saved repair identity while paused", async () =
   });
   expect(f.counts()).toEqual(counts);
   const after = await snapshot();
-  expect(await f.factory().recordLanding(request, "T-owner")).toEqual(landed);
+  expect(
+    await f.factory().recordLanding({ ...request, renames: {} }, "T-owner"),
+  ).toEqual(landed);
   expect(await snapshot()).toEqual(after);
 });
 
