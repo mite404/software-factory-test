@@ -940,7 +940,13 @@ function parseMergeRequest(value: unknown) {
     !/^[a-f0-9]{40}$/.test(commit)
   )
     throw new Error("Expected a positive PR number and full merge commit");
-  return { ticket, pr, commit };
+  const renames = parseRenames(request.renames);
+  return {
+    ticket,
+    pr,
+    commit,
+    ...(Object.keys(renames).length ? { renames } : {}),
+  };
 }
 
 function parseRenames(value: unknown) {
@@ -968,13 +974,13 @@ function parseLandingRequest(value: unknown) {
   const revision = text(raw.revision);
   if (!/^[a-f0-9]{40}$/.test(revision))
     throw new Error("Expected a full candidate revision");
-  const renames = parseRenames(raw.renames);
+  const { renames, ...merge } = parseMergeRequest(value);
   return {
-    ...parseMergeRequest(value),
+    ...merge,
     incident: text(raw.incident),
     revision,
     decision: text(raw.decision),
-    ...(Object.keys(renames).length ? { renames } : {}),
+    ...(renames ? { renames } : {}),
   };
 }
 
@@ -4401,7 +4407,8 @@ export function createFactory(
       .catch(() => {})
       .then(() =>
         saveRecord("record-merge", owner, (persistence) => {
-          const { ticket, pr, commit } = parseMergeRequest(request);
+          const { ticket, pr, commit, renames } = parseMergeRequest(request);
+          const detail = renames ? JSON.stringify({ commit, renames }) : commit;
           const state = persistence.state;
           const run = Object.hasOwn(state.runs, ticket)
             ? state.runs[ticket]
@@ -4409,13 +4416,18 @@ export function createFactory(
           if (!admitsRun(run, "record-merge"))
             throw new Error("Merge recording requires a done ticket");
           if (run.merge) {
-            if (run.merge.pr !== pr || run.merge.commit !== commit)
+            if (
+              run.merge.pr !== pr ||
+              run.merge.commit !== commit ||
+              (persistence.lastEvent(ticket, "merge-recorded") ??
+                run.merge.commit) !== detail
+            )
               throw new Error("Conflicting merge record");
             return state;
           }
-          const at = verifyMerge(root, run, commit);
+          const at = verifyMerge(root, run, commit, renames);
           run.merge = { pr, commit, at };
-          persistence.commit(state, ticket, "merge-recorded", commit);
+          persistence.commit(state, ticket, "merge-recorded", detail);
           return state;
         }),
       );

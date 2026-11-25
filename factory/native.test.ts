@@ -1251,6 +1251,54 @@ test.each(
   },
 );
 
+async function renamedCandidateFixture(
+  landing: string,
+  old: string,
+  moved: string,
+  initial: string | Buffer,
+  changed: string | Buffer,
+  mode: number,
+) {
+  const f = await preparationFixture(() => "");
+  const renames = {
+    [old]: moved,
+    ...(["multi", "squashed"].includes(landing)
+      ? { "second.md": "done/second.md" }
+      : {}),
+  };
+  // Both spellings exist, but only the exact destination receives the change.
+  await mkdir(join(f.root, "done"));
+  await writeFile(join(f.root, moved.replace("new", "n ew")), "unrelated\n");
+  for (const path of [old, "second.md"]) {
+    await writeFile(join(f.root, path), initial);
+  }
+  f.git("add", ".");
+  f.git("commit", "-qm", "original paths");
+  const base = f.git("rev-parse", "HEAD");
+  f.git("worktree", "add", "--detach", f.worktree, base);
+  for (const path of Object.keys(renames)) {
+    await writeFile(join(f.worktree, path), changed);
+    await chmod(join(f.worktree, path), mode);
+    f.git("-C", f.worktree, "commit", "-qam", `candidate ${path}`);
+  }
+  const revision = f.git("-C", f.worktree, "rev-parse", "HEAD");
+  for (const [from, to] of Object.entries(renames)) f.git("mv", from, to);
+  f.git("commit", "-qm", "upstream path move");
+  const movedBase = f.git("rev-parse", "HEAD");
+  for (const path of Object.values(renames)) {
+    await writeFile(join(f.root, path), changed);
+    await chmod(join(f.root, path), mode);
+    if (landing !== "squashed") f.git("commit", "-qam", "land candidate hunk");
+  }
+  if (landing === "squashed") f.git("commit", "-qam", "squash candidate");
+  const commit = f.git("rev-parse", "HEAD");
+  const branch = f.git("branch", "--show-current");
+  f.git("remote", "add", "origin", f.root);
+  f.git("update-ref", `refs/remotes/origin/${branch}`, commit);
+  f.git("branch", `--set-upstream-to=origin/${branch}`, branch);
+  return { f, renames, base, revision, movedBase, commit, branch };
+}
+
 test.each(
   [
     { landing: "single", old: "old.md", moved: "done/new.md" },
@@ -1260,69 +1308,43 @@ test.each(
     { landing: "mode", old: "old.sh", moved: "done/new.sh" },
     { landing: "trailing-space", old: "old.md", moved: "done/new.md" },
     { landing: "trailing-tab", old: "old.md", moved: "done/new.md" },
-  ].map((scenario) => ({
-    ...scenario,
-    initial: scenario.landing.startsWith("trailing-")
-      ? 'text = """\nbefore\n"""\n'
-      : scenario.landing === "binary"
-        ? Buffer.from([0, 1, 2, 3])
-        : "before\n-- a/old.md\n++ b/old.md\nafter\n",
-    changed:
-      new Map<string, string | Buffer>([
-        ["trailing-space", 'text = """\nhello \n"""\n'],
-        ["trailing-tab", 'text = """\nhello\t\n"""\n'],
-        ["binary", Buffer.from([0, 4, 5, 6])],
-        ["mode", "before\n-- a/old.md\n++ b/old.md\nafter\n"],
-      ]).get(scenario.landing) ?? "before\n--- a/old.md\n+++ b/old.md\nafter\n",
-    drift: scenario.landing.startsWith("trailing-")
-      ? 'text = """\nhello\n"""\n'
-      : scenario.landing === "binary"
-        ? Buffer.from([0, 7, 8, 9])
-        : "before\n--- a/o ld.md\n+++ b/old.md\nafter\n",
-    mode: scenario.landing === "mode" ? 0o755 : 0o644,
-  })),
+  ].flatMap((scenario) =>
+    ["record-landing", "record-merge"].map((action) => ({
+      action,
+      ...scenario,
+      initial: scenario.landing.startsWith("trailing-")
+        ? 'text = """\nbefore\n"""\n'
+        : scenario.landing === "binary"
+          ? Buffer.from([0, 1, 2, 3])
+          : "before\n-- a/old.md\n++ b/old.md\nafter\n",
+      changed:
+        new Map<string, string | Buffer>([
+          ["trailing-space", 'text = """\nhello \n"""\n'],
+          ["trailing-tab", 'text = """\nhello\t\n"""\n'],
+          ["binary", Buffer.from([0, 4, 5, 6])],
+          ["mode", "before\n-- a/old.md\n++ b/old.md\nafter\n"],
+        ]).get(scenario.landing) ??
+        "before\n--- a/old.md\n+++ b/old.md\nafter\n",
+      drift: scenario.landing.startsWith("trailing-")
+        ? 'text = """\nhello\n"""\n'
+        : scenario.landing === "binary"
+          ? Buffer.from([0, 7, 8, 9])
+          : "before\n--- a/o ld.md\n+++ b/old.md\nafter\n",
+      mode: scenario.landing === "mode" ? 0o755 : 0o644,
+    })),
+  ),
 )(
-  "external landing proves explicit path renames ($landing)",
-  async ({ landing, old, moved, initial, changed, drift, mode }) => {
-    const f = await preparationFixture(() => "");
-    const renames = {
-      [old]: moved,
-      ...(["multi", "squashed"].includes(landing)
-        ? { "second.md": "done/second.md" }
-        : {}),
-    };
-    // Both spellings exist, but only the exact destination receives the change.
-    await mkdir(join(f.root, "done"));
-    await writeFile(join(f.root, moved.replace("new", "n ew")), "unrelated\n");
-    for (const path of [old, "second.md"]) {
-      await writeFile(join(f.root, path), initial);
-    }
-    f.git("add", ".");
-    f.git("commit", "-qm", "original paths");
-    const base = f.git("rev-parse", "HEAD");
-    f.git("worktree", "add", "--detach", f.worktree, base);
-    const paths = Object.keys(renames);
-    for (const path of paths) {
-      await writeFile(join(f.worktree, path), changed);
-      await chmod(join(f.worktree, path), mode);
-      f.git("-C", f.worktree, "commit", "-qam", `candidate ${path}`);
-    }
-    const revision = f.git("-C", f.worktree, "rev-parse", "HEAD");
-    for (const [from, to] of Object.entries(renames)) f.git("mv", from, to);
-    f.git("commit", "-qm", "upstream path move");
-    const movedBase = f.git("rev-parse", "HEAD");
-    for (const path of Object.values(renames)) {
-      await writeFile(join(f.root, path), changed);
-      await chmod(join(f.root, path), mode);
-      if (landing !== "squashed")
-        f.git("commit", "-qam", "land candidate hunk");
-    }
-    if (landing === "squashed") f.git("commit", "-qam", "squash candidate");
-    const commit = f.git("rev-parse", "HEAD");
-    const branch = f.git("branch", "--show-current");
-    f.git("remote", "add", "origin", f.root);
-    f.git("update-ref", `refs/remotes/origin/${branch}`, commit);
-    f.git("branch", `--set-upstream-to=origin/${branch}`, branch);
+  "$action proves explicit path renames ($landing)",
+  async ({ action, landing, old, moved, initial, changed, drift, mode }) => {
+    const { f, renames, base, revision, movedBase, commit, branch } =
+      await renamedCandidateFixture(
+        landing,
+        old,
+        moved,
+        initial,
+        changed,
+        mode,
+      );
     const engine = f.factory();
     const storage = openPersistence(engine.directory, []);
     storage.commit(
@@ -1330,21 +1352,32 @@ test.each(
         enabled: false,
         owner: "T-owner",
         runs: {
-          A: {
-            kind: "blocked",
-            thread: "T-prepared",
-            reason: "Target changed",
-            incident: {
-              id: "rename-stop",
-              ticket: "A",
-              owner: "T-owner",
-              base,
-              attempt: 1,
-              reason: "target-changed",
-              recovery: "inspect",
-              delivery: "sent",
-            },
-          },
+          A:
+            action === "record-merge"
+              ? {
+                  kind: "done",
+                  thread: "T-prepared",
+                  revision,
+                  acceptedBase: base,
+                  attempt: 1,
+                  insight: "accepted",
+                  acceptedAt: Date.parse("2026-11-25T00:00:00.000Z"),
+                }
+              : {
+                  kind: "blocked",
+                  thread: "T-prepared",
+                  reason: "Target changed",
+                  incident: {
+                    id: "rename-stop",
+                    ticket: "A",
+                    owner: "T-owner",
+                    base,
+                    attempt: 1,
+                    reason: "target-changed",
+                    recovery: "inspect",
+                    delivery: "sent",
+                  },
+                },
         },
       },
       "A",
@@ -1352,14 +1385,24 @@ test.each(
       "candidate waiting for landing proof",
     );
     storage.close();
+    const accepted = factoryStatus(engine.directory).runs.A;
+    f.host.state = async () => {
+      throw new Error("Recording must not observe threads");
+    };
     const request = {
       ticket: "A",
-      revision,
+      revision: action === "record-merge" ? base : revision,
       commit,
       pr: 97,
       incident: "rename-stop",
       decision: "Owner approved exact upstream path moves",
       renames,
+    };
+    const record = (input: unknown, restart = false) => {
+      const current = restart ? f.factory() : engine;
+      return action === "record-merge"
+        ? current.recordMerge(input, "T-owner")
+        : current.recordLanding(input, "T-owner");
     };
     const statePath = join(engine.directory, "state.sqlite");
     const before = await readFile(statePath);
@@ -1381,9 +1424,7 @@ test.each(
       Object.fromEntries(Object.entries(renames).slice(0, -1)),
     ]) {
       expect(
-        await engine
-          .recordLanding({ ...request, renames: invalid }, "T-owner")
-          .catch(() => "refused"),
+        await record({ ...request, renames: invalid }).catch(() => "refused"),
       ).toBe("refused");
       expect(await readFile(statePath)).toEqual(before);
     }
@@ -1396,43 +1437,63 @@ test.each(
     f.git("checkout", "-q", branch);
     f.git("reset", "--hard", wrong);
     expect(
-      await engine
-        .recordLanding({ ...request, commit: wrong }, "T-owner")
-        .catch(() => "refused"),
+      await record({ ...request, commit: wrong }).catch(() => "refused"),
     ).toBe("refused");
     expect(await readFile(statePath)).toEqual(before);
     f.git("reset", "--hard", commit);
+    // A locally available commit is not proof until the fetched upstream contains it.
+    f.git("update-ref", `refs/remotes/origin/${branch}`, movedBase);
+    expect(await record(request).catch(() => "refused")).toBe("refused");
+    expect(await readFile(statePath)).toEqual(before);
     f.git("update-ref", `refs/remotes/origin/${branch}`, commit);
-    const landed = await engine.recordLanding(request, "T-owner");
+    const landed = await record(request);
     expect(landed).toMatchObject({
       enabled: false,
       runs: { A: { kind: "done", revision, merge: { pr: 97, commit } } },
     });
+    if (action === "record-merge") {
+      if (accepted?.kind !== "done") throw new Error("Expected accepted run");
+      expect(landed.runs.A).toEqual({
+        ...accepted,
+        stageAt: expect.any(Number),
+        merge: { pr: 97, commit, at: expect.any(String) },
+      });
+    }
     const after = await readFile(statePath);
-    expect(await f.factory().recordLanding(request, "T-owner")).toEqual(landed);
+    expect(await record(request, true)).toEqual(landed);
     expect(
-      await f.factory().recordLanding(
+      await record(
         {
           ...request,
           renames: Object.fromEntries(Object.entries(renames).reverse()),
         },
-        "T-owner",
+        true,
       ),
     ).toEqual(landed);
     expect(await readFile(statePath)).toEqual(after);
     const records = openPersistence(engine.directory, []);
-    expect(JSON.parse(records.lastEvent("A", "landed-outside")!)).toEqual(
-      request,
-    );
+    if (action === "record-landing")
+      expect(JSON.parse(records.lastEvent("A", "landed-outside")!)).toEqual(
+        request,
+      );
+    else
+      expect(JSON.parse(records.lastEvent("A", "merge-recorded")!)).toEqual({
+        commit,
+        renames,
+      });
     records.close();
-    expect(
-      await engine
-        .recordLanding(
-          { ...request, renames: { ...renames, extra: "other" } },
-          "T-owner",
-        )
-        .catch(String),
-    ).toContain("Conflicting");
+    for (const conflict of [
+      { renames: { ...renames, extra: "other" } },
+      { renames: undefined },
+      { renames: {} },
+      { pr: 98 },
+      { commit: wrong },
+    ]) {
+      expect(
+        await record({ ...request, ...conflict }, true).catch(String),
+      ).toContain("Conflicting");
+      expect(await readFile(statePath)).toEqual(after);
+    }
     expect(await readFile(statePath)).toEqual(after);
     expect(f.counts()).toEqual({ creates: 0, sends: 0 });
   },

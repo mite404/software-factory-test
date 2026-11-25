@@ -1035,7 +1035,43 @@ test.each([
   },
 );
 
-async function recordedMergeFixture(action: string) {
+async function integrateRecordedCandidate(
+  root: string,
+  revision: string,
+  mapped: boolean,
+) {
+  git(root, "checkout", "-q", "main");
+  await writeFile(join(root, "value"), "main context\nbefore\n");
+  await writeFile(join(root, "unrelated"), "main moved\n");
+  git(root, "add", ".");
+  git(root, "commit", "-qm", "unrelated");
+  if (mapped) {
+    git(root, "mv", "value", "landed-value");
+    git(root, "commit", "-qm", "move upstream path");
+  }
+  const missing = git(root, "rev-parse", "HEAD");
+  git(root, "checkout", "-qb", "integration");
+  const pick = spawnSync("git", ["-C", root, "cherry-pick", revision], {
+    encoding: "utf8",
+  });
+  expect(pick.status).toBe(1);
+  if (mapped) {
+    expect(pick.stdout).toContain("CONFLICT (modify/delete): value");
+    git(root, "rm", "value");
+  }
+  await writeFile(
+    join(root, mapped ? "landed-value" : "value"),
+    "main context\nafter\n",
+  );
+  git(root, "add", ".");
+  git(root, "cherry-pick", "--continue");
+  expect(git(root, "rev-parse", "HEAD")).not.toBe(revision);
+  git(root, "checkout", "-q", "main");
+  git(root, "merge", "--no-ff", "-qm", "merge PR", "integration");
+  return missing;
+}
+
+async function recordedMergeFixture(action: string, mapped = false) {
   const root = await mkdtemp(join(tmpdir(), "factory-merge-"));
   const directory = join(root, ".git/factory");
   const worktree = join(directory, "worktrees/A");
@@ -1084,23 +1120,7 @@ async function recordedMergeFixture(action: string) {
     git(root, "commit", "-qam", "accepted change");
     const revision = git(root, "rev-parse", "HEAD");
     git(root, "worktree", "add", "--detach", worktree, revision);
-    git(root, "checkout", "-q", "main");
-    await writeFile(join(root, "value"), "main context\nbefore\n");
-    await writeFile(join(root, "unrelated"), "main moved\n");
-    git(root, "add", ".");
-    git(root, "commit", "-qm", "unrelated");
-    const missing = git(root, "rev-parse", "HEAD");
-    git(root, "checkout", "-qb", "integration");
-    const pick = spawnSync("git", ["-C", root, "cherry-pick", revision], {
-      encoding: "utf8",
-    });
-    expect(pick.status).toBe(1);
-    await writeFile(join(root, "value"), "main context\nafter\n");
-    git(root, "add", "value");
-    git(root, "cherry-pick", "--continue");
-    expect(git(root, "rev-parse", "HEAD")).not.toBe(revision);
-    git(root, "checkout", "-q", "main");
-    git(root, "merge", "--no-ff", "-qm", "merge PR", "integration");
+    const missing = await integrateRecordedCandidate(root, revision, mapped);
     const commit = git(root, "rev-parse", "HEAD");
     const at = new Date(
       git(root, "show", "-s", "--format=%cI", commit),
@@ -1153,7 +1173,8 @@ async function recordedMergeFixture(action: string) {
             action === "record-landing"
               ? blocked
               : { ...done, acceptedBase: base },
-          legacy: { ...done, insight: "" },
+          // Historical unmapped merge record without a merge-recorded event.
+          legacy: { ...done, insight: "", merge: { pr: 42, commit, at } },
         },
       },
       "factory",
@@ -1200,7 +1221,16 @@ async function recordedMergeFixture(action: string) {
     };
     expect(
       (await status()).tasks.map((task: { merge: unknown }) => task.merge),
-    ).toEqual([null, null, null]);
+    ).toEqual([
+      null,
+      {
+        pr: 42,
+        url: "https://github.com/example/merge-fixture/pull/42",
+        commit,
+        at,
+      },
+      null,
+    ]);
     const request = {
       action,
       ticket: "A",
@@ -1210,6 +1240,7 @@ async function recordedMergeFixture(action: string) {
       incident: "current-stop",
       decision: "Operator verified external landing",
       url: `https://caller.invalid/${canary}`,
+      ...(mapped ? { renames: { value: "landed-value" } } : {}),
     };
     const owner = {
       thread: { id: "T-owner" },
@@ -1286,10 +1317,21 @@ async function recordedMergeFixture(action: string) {
     expect(execute({ ...request, ticket: "queued" }, owner)).rejects.toThrow(
       /done ticket|blocked or parked ticket/,
     );
+    const historical = await readFile(join(directory, "state.sqlite"));
     await execute(
-      { ...request, action: "record-merge", ticket: "legacy" },
+      { ...request, action: "record-merge", ticket: "legacy", renames: {} },
       owner,
     );
+    await execute(
+      {
+        ...request,
+        action: "record-merge",
+        ticket: "legacy",
+        renames: undefined,
+      },
+      owner,
+    );
+    expect(await readFile(join(directory, "state.sqlite"))).toEqual(historical);
     const insight = {
       action: "record-insight",
       ticket: "legacy",
@@ -1352,8 +1394,11 @@ async function recordedMergeFixture(action: string) {
 
 test.each(["record-merge", "record-landing"])(
   "owner %s proves a cherry-picked patch across changed context and publishes only curated metadata",
-  recordedMergeFixture,
+  (action) => recordedMergeFixture(action),
 );
+
+test("owner record-merge proves explicit paths through plugin without effects", () =>
+  recordedMergeFixture("record-merge", true));
 
 test("plugin and HTTP keep private briefs and native titles out of public titles", async () => {
   const root = await mkdtemp(join(tmpdir(), "factory-plugin-privacy-"));

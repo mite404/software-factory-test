@@ -1196,7 +1196,8 @@ After merging an accepted ticket, the owning Foreman calls the factory control t
 as last fetched; the action does not fetch, push, or call GitHub.
 
 Recording requires a `done` run and ancestry of the commit in that fetched remote upstream.
-Both `record-merge` and `record-landing` prove the accepted change with stable Git patch IDs.
+Both `record-merge` and `record-landing` prove the accepted change with Git patch IDs, stable by
+default or verbatim with explicit path mappings as described below.
 Either the combined saved-base-to-revision diff matches one landed non-merge commit (a squash),
 or every non-merge commit in the accepted range has a patch-ID twin in the landed range.
 On the per-commit path, each landed commit proves at most one accepted commit, even when several
@@ -1208,10 +1209,14 @@ without review, the accepted revision's first parent. Cherry-picked integration 
 different hashes and context.
 Git verifies the change and ancestry, not whether GitHub assigned that PR number to the commit.
 
-The record stores `pr`, `commit`, and the commit time as `at`. Repeating the same number and commit
-does not write; conflicting values are refused. Recording works while paused, preserves the
-enabled state, and never dispatches work or changes watchdog schedules. Backfill older accepted
-tickets once from their pull request records.
+The record stores `pr`, `commit`, and the commit time as `at`. Optional `renames` uses the exact
+header-only mapping proof described below. The normalized mapping is saved atomically with the
+merge record in its `merge-recorded` event. Repeating the same number, commit and mapping does not
+write, including after restart or with reordered mapping keys. Changed mappings, omitted mappings
+after a mapped record, or conflicting PR/commit values refuse without writes. Omitted and empty
+mappings are equivalent; historical unmapped records remain repeat-safe.
+Recording works while paused, preserves the enabled state, and never dispatches work or changes
+watchdog schedules. Backfill older accepted tickets once from their pull request records.
 
 Each task in `/api/status` includes `merge: { pr, url, commit, at }` or `merge: null`. The URL comes
 only from the root branch's configured GitHub remote and the validated number. HTTPS and SSH
@@ -1243,15 +1248,16 @@ Git proves the patch and ancestry, not GitHub's association between the PR numbe
 Missing evidence, stale incidents, active or uncertain runs, and conflicting repeats are refused
 without changing the run or its events.
 
-When upstream moved a candidate's paths before landing, supply optional `renames`, an object mapping
-each old repository-relative file path to its exact landed path. Only accepted diff file headers
-are adapted before the combined and per-commit patch proofs; content and upstream paths are never
-rewritten. Every source must occur in the combined accepted diff. Unchanged paths, path traversal,
-colliding destinations, wrong or incomplete mappings, and content drift refuse without writes.
+For either `record-merge` or `record-landing`, when upstream moved a candidate's paths before
+landing, supply optional `renames`, an object mapping each old repository-relative file path to its
+exact landed path. Only accepted diff file headers are adapted before the combined and per-commit
+patch proofs; content and upstream paths are never rewritten. Every source must occur in the
+combined accepted diff. Unchanged paths, path traversal, colliding destinations, wrong or incomplete
+mappings, and content drift refuse without writes.
 Git-detected renames are expanded into file additions/deletions, and verbatim patch IDs preserve
-path and content whitespace for this proof. The mapping is saved in the durable `landed-outside`
-event and must match on repeat requests; key order does not matter. Omitted or empty mappings keep
-the ordinary proof. This option does not extend `record-merge`.
+path and content whitespace for this proof, including exact binary data and file modes.
+For `record-landing`, the mapping is saved in the durable `landed-outside` event and must match on
+repeat requests; key order does not matter. Omitted or empty mappings keep the ordinary proof.
 
 Success stores a done run with its original base, worker, merge record and decision, closes the
 incident, and appends one `landed-outside` event. An identical request, including its incident and

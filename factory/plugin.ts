@@ -597,7 +597,7 @@ export default function registerFactory(
           type: "object",
           additionalProperties: { type: "string" },
           description:
-            "For record-landing only, explicit old-to-new repository-relative file paths. Rewrites accepted patch headers, never content or upstream paths. Unused sources, unchanged paths, collisions or unproven content refuse without writes. Saved in the landed-outside event. Omitted or empty keeps ordinary proof.",
+            "For owner-only record-merge or record-landing, explicit old-to-new repository-relative file paths. Rewrites accepted patch headers, never content or upstream paths. Unused sources, unchanged paths, collisions or unproven content refuse without writes. Saved atomically in the recording event; repeat mappings must match, regardless of key order. Omitted or empty keeps ordinary proof.",
         },
         decision: {
           type: "string",

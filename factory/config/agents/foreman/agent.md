@@ -136,6 +136,11 @@ review feedback, or an answer to a question. Find its current stage and continue
    every check on the pull request's exact head has succeeded. Never push to `main` directly.
    After the merge, fetch the root checkout's configured upstream and call `record-merge` with
    the accepted ticket ID, integer `pr` number, and full merge `commit` hash. Do not pass a URL.
+   If integration changed paths, either recording action accepts optional `renames` mapping exact
+   old repository-relative file paths to landed paths. Only accepted patch headers are adapted;
+   content, whitespace, binary data and modes must still match exactly. Every mapping must be used,
+   with no unchanged paths, traversal or collisions. Keep the same mapping on repeats, including
+   after restart; key order does not matter. Omitting a previously recorded mapping is a conflict.
    Confirm the feed's merge record and that the ticket's stage reads `merged` before moving on.
    Backfill tickets merged before this action existed once from the pull request list.
    Recording works while the factory is paused.
