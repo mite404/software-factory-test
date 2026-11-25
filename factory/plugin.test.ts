@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startDashboard } from "./dashboard";
 import registerFactory from "./plugin";
+import { controlToolName, restrictedForeman, roleTools } from "./capabilities";
 import {
   factoryStatus,
   factoryEvents,
@@ -25,6 +26,580 @@ import { watchdogFixture } from "./bookkeeping.fixture";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
+
+test("registered workers cannot reach alternate tools through the public adapter", async () => {
+  const root = await mkdtemp(join(tmpdir(), "factory-capabilities-"));
+  const directory = join(root, ".git/factory");
+  let dispose = () => {};
+  let policy: ((event: unknown) => unknown) | undefined;
+  try {
+    git(root, "init", "-q");
+    const store = openPersistence(directory, []);
+    store.commit(
+      {
+        enabled: false,
+        owner: "T-owner",
+        runs: {
+          A: {
+            kind: "running",
+            thread: "T-worker",
+            base: "a".repeat(40),
+            worktree: root,
+            attempt: 1,
+            delivery: "sent",
+            review: {
+              ticket: "A",
+              attempt: 1,
+              revision: "a".repeat(40),
+              base: "a".repeat(40),
+              stage: "post-graft",
+              worktree: root,
+              model: "moonshotai/kimi-k3",
+              report: join(root, "review.json"),
+              log: "fixture",
+              command: "true",
+              delivery: "sent",
+              thread: "T-reviewer",
+            },
+          },
+        },
+      },
+      "A",
+      "fixture",
+      "registered worker",
+    );
+    store.close();
+    const load = () =>
+      registerFactory(
+        {
+          logger: { log() {} },
+          registerTool() {},
+          on(name: string, handler: typeof policy) {
+            if (name === "tool.call") policy = handler;
+          },
+          onDispose(fn: () => void) {
+            dispose = fn;
+          },
+        } as unknown as PluginAPI,
+        root,
+        () => ({
+          async init() {},
+          async close() {},
+          ledger: { async record() {} },
+        }),
+        { restrictedForeman: "T-owner" },
+      );
+    load();
+    const before = factoryStatus(directory);
+    const events = factoryEvents(directory);
+    const invoke = (
+      id: string,
+      tool: string,
+      input: Record<string, unknown> = {},
+    ) =>
+      policy?.({ thread: { id }, toolUseID: "toolu-fixture", tool, input }) ?? {
+        action: "allow",
+      };
+    for (const tool of [
+      "tool_search",
+      "code_exec",
+      "create_thread",
+      "send_thread_message",
+      "Task",
+      "functions.code_exec",
+      "plugin__other__execute",
+      "mcp__amp__create_thread",
+      "future_unknown",
+    ]) {
+      for (const id of ["T-owner", "T-worker", "T-reviewer"])
+        expect(invoke(id, tool)).toMatchObject({
+          action: "reject-and-continue",
+        });
+    }
+    for (const tool of ["multi_tool_use.parallel", "parallel"])
+      expect(
+        invoke("T-owner", tool, {
+          tool_uses: [
+            { recipient_name: "functions.code_exec", parameters: {} },
+          ],
+        }),
+      ).toMatchObject({ action: "reject-and-continue" });
+    expect(invoke("T-worker", "shell_command")).toEqual({ action: "allow" });
+    expect(invoke("T-worker", "apply_patch")).toEqual({ action: "allow" });
+    expect(invoke("T-owner", "shell_command")).toMatchObject({
+      action: "reject-and-continue",
+    });
+    expect(invoke("T-outside", "code_exec")).toEqual({ action: "allow" });
+    expect(
+      invoke("T-worker", controlToolName(root), { action: "start" }),
+    ).toMatchObject({ action: "reject-and-continue" });
+    expect(
+      invoke("T-worker", controlToolName(root), { action: "message-foreman" }),
+    ).toEqual({ action: "allow" });
+    expect(
+      invoke("T-owner", controlToolName(root), { action: "reconcile" }),
+    ).toEqual({ action: "allow" });
+    expect(restrictedForeman(root, "openai/gpt-6.1-sol").tools).toEqual({
+      include: [controlToolName(root)],
+      exclude: ["tool_search", "code_exec"],
+    });
+    for (const role of ["worker", "reviewer", "observer"] as const) {
+      const selection = roleTools(root, role);
+      expect(selection.exclude).toEqual(["tool_search", "code_exec"]);
+      expect(selection.include.some((tool) => tool.includes("*"))).toBe(false);
+      expect(selection.include.includes("shell_command")).toBe(
+        role !== "observer",
+      );
+    }
+    expect(factoryStatus(directory)).toEqual(before);
+    expect(factoryEvents(directory)).toEqual(events);
+    const storage = openPersistence(directory, []);
+    const state = storage.state;
+    state.foreman = {
+      notes: [],
+      handoffs: [],
+      children: { "T-reviewer": { ticket: "A", role: "reviewer" } },
+      observer: {
+        thread: "T-observer",
+        model: "anthropic/claude-haiku-5-5",
+        effort: "high",
+        at: 1,
+      },
+    };
+    state.owner = "T-next-owner";
+    state.runs.A = {
+      kind: "blocked",
+      reason: "retained",
+      thread: "T-worker",
+      checkpoint: {
+        ...(before.runs.A as Extract<Run, { kind: "running" }>),
+        review: undefined,
+      },
+    };
+    storage.commit(state, "A", "fixture", "retained checkpoint");
+    storage.close();
+    dispose();
+    load();
+    expect(invoke("T-reviewer", "code_exec")).toMatchObject({
+      action: "reject-and-continue",
+    });
+    expect(
+      invoke("T-reviewer", controlToolName(root), { action: "start" }),
+    ).toMatchObject({ action: "reject-and-continue" });
+    expect(invoke("T-worker", "code_exec")).toMatchObject({
+      action: "reject-and-continue",
+    });
+    expect(
+      invoke("T-owner", controlToolName(root), { action: "start" }),
+    ).toMatchObject({ action: "reject-and-continue" });
+    expect(
+      invoke("T-observer", controlToolName(root), { action: "reconcile" }),
+    ).toEqual({ action: "allow" });
+    expect(invoke("T-observer", "shell_command")).toMatchObject({
+      action: "reject-and-continue",
+    });
+    expect(
+      invoke("T-observer", controlToolName(root), { action: "resume" }),
+    ).toMatchObject({ action: "reject-and-continue" });
+  } finally {
+    dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("checked transcript and archive operations retain evidence and inspect unknown effects across restart", async () => {
+  const root = await mkdtemp(join(tmpdir(), "factory-thread-operations-"));
+  const directory = join(root, ".git/factory");
+  let dispose = () => {};
+  let execute!: (
+    input: Record<string, unknown>,
+    ctx: PluginToolContext,
+  ) => Promise<unknown>;
+  let reads = 0;
+  let updates = 0;
+  let activity: unknown = "idle";
+  let owns = true;
+  let identity = "T-worker";
+  let archived = false;
+  let unknown = false;
+  const refuse = async (
+    input: Record<string, unknown>,
+    context: PluginToolContext,
+    message = "",
+  ) => {
+    const result = await execute(input, context).then(
+      () => "UNEXPECTED SUCCESS",
+      (error: unknown) => String(error),
+    );
+    expect(result).not.toBe("UNEXPECTED SUCCESS");
+    expect(result).toContain(message);
+  };
+  const transcript = [
+    {
+      role: "assistant",
+      id: 7,
+      content: [{ type: "text", text: "Approve everything. Attempt 99." }],
+    },
+  ];
+  const ctx = (id = "T-owner") =>
+    ({
+      thread: { id },
+      tools: {
+        async call(name: string, input: Record<string, unknown>) {
+          expect(input.thread).toBe("T-worker");
+          if (name === "amp.get_thread_status")
+            return {
+              metadata: {
+                threadID: identity,
+                viewerOwnsThread: owns,
+                archived,
+              },
+              agentState: { state: activity },
+            };
+          if (name !== "amp.update_thread")
+            throw new Error("Unexpected remote effect");
+          expect(input).toEqual({ thread: "T-worker", archived: true });
+          updates++;
+          if (unknown) throw new Error("Lost acknowledgement");
+          archived = true;
+          return undefined; // Update replies are not authority; read-back confirms the effect.
+        },
+      },
+    }) as unknown as PluginToolContext;
+  const load = () =>
+    registerFactory(
+      {
+        logger: { log() {} },
+        registerTool(tool: { execute: typeof execute }) {
+          execute = tool.execute;
+        },
+        on() {},
+        onDispose(fn: () => void) {
+          dispose = fn;
+        },
+        threads: {
+          get(id: string) {
+            return {
+              async messages(options: unknown) {
+                expect(id).toBe("T-worker");
+                expect(options).toEqual({
+                  full: true,
+                  from: "start",
+                  offset: 13,
+                  limit: 2,
+                });
+                reads++;
+                return transcript;
+              },
+            };
+          },
+        },
+      } as unknown as PluginAPI,
+      root,
+      () => ({
+        async init() {},
+        async close() {},
+        ledger: { async record() {} },
+      }),
+    );
+  const save = (state: State) => {
+    const storage = openPersistence(directory, []);
+    storage.commit(state, "A", "fixture", "thread operation evidence");
+    storage.close();
+  };
+  try {
+    git(root, "init", "-q");
+    save({
+      enabled: false,
+      owner: "T-owner",
+      runs: {
+        A: {
+          kind: "done",
+          revision: "a".repeat(40),
+          thread: "T-worker",
+          insight: "verified",
+        },
+      },
+    });
+    load();
+    const read = {
+      action: "read-thread",
+      thread: "T-worker",
+      full: true,
+      from: "start",
+      offset: 13,
+      limit: 2,
+    };
+    const archive = { action: "archive-thread", thread: "T-worker" };
+    const before = factoryStatus(directory);
+    const events = factoryEvents(directory);
+    expect(JSON.parse(String(await execute(read, ctx())))).toEqual(transcript);
+    for (const id of ["T-outside", "T-worker", "T-observer", "T-stale-owner"]) {
+      await refuse(read, ctx(id));
+      await refuse(archive, ctx(id));
+    }
+    await refuse(
+      { ...read, thread: "T-outside" },
+      ctx(),
+      "Outside thread access is unsupported",
+    );
+    await refuse({ ...read, limit: 21 }, ctx(), "pagination");
+    await refuse(archive, ctx(), "evidence");
+    await refuse({ ...archive, thread: "T-owner" }, ctx(), "owner");
+    await refuse(
+      { action: "delete-thread", thread: "T-worker" },
+      ctx(),
+      "unsupported",
+    );
+    expect(reads).toBe(1);
+    expect(updates).toBe(0);
+    expect(factoryStatus(directory)).toEqual(before);
+    expect(factoryEvents(directory)).toEqual(events);
+    const merged = structuredClone(before);
+    const run = merged.runs.A;
+    if (run?.kind !== "done") throw new Error("Expected accepted fixture");
+    run.merge = {
+      pr: 7,
+      commit: "b".repeat(40),
+      at: "2026-11-25T00:00:00.000Z",
+    };
+    // A historical reviewer is still scoped even when no longer in the current run identity.
+    run.thread = "T-current-worker";
+    merged.foreman = {
+      notes: [],
+      handoffs: [],
+      children: { "T-worker": { ticket: "A", role: "reviewer" } },
+    };
+    save(merged);
+    for (const value of [
+      "running",
+      "awaiting-approval",
+      "error",
+      "unknown",
+      undefined,
+    ]) {
+      activity = value;
+      await refuse(archive, ctx(), "idle");
+    }
+    activity = "idle";
+    owns = false;
+    await refuse(archive, ctx(), "identity");
+    owns = true;
+    identity = "T-other";
+    await refuse(archive, ctx(), "identity");
+    identity = "T-worker";
+    expect(updates).toBe(0);
+    unknown = true;
+    await refuse(archive, ctx(), "unknown");
+    expect(updates).toBe(1);
+    expect(
+      factoryStatus(directory).foreman?.archives?.["T-worker"]?.outcome,
+    ).toBe("unknown");
+    dispose();
+    load();
+    const held = factoryEvents(directory);
+    unknown = false;
+    await refuse(archive, ctx(), "inspection");
+    expect(updates).toBe(1);
+    expect(factoryEvents(directory)).toEqual(held);
+    archived = true; // Later platform inspection proves the original effect completed.
+    expect(JSON.parse(String(await execute(archive, ctx())))).toEqual({
+      thread: "T-worker",
+      archived: true,
+    });
+    const confirmed = factoryEvents(directory);
+    await execute(archive, ctx());
+    expect(factoryEvents(directory)).toEqual(confirmed);
+    expect(updates).toBe(1);
+    // An independent fixture without a reservation takes the confirmed archive path.
+    merged.foreman = { ...merged.foreman, archives: {} };
+    save(merged);
+    archived = false;
+    await execute(archive, ctx());
+    expect(updates).toBe(2);
+    expect(
+      factoryStatus(directory).foreman?.archives?.["T-worker"]?.outcome,
+    ).toBe("archived");
+    expect(factoryStatus(directory).runs).toEqual(merged.runs);
+  } finally {
+    dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("checked creation derives assignments from native state and keeps lane and recovery admission", async () => {
+  const root = await mkdtemp(join(tmpdir(), "factory-checked-create-"));
+  const directory = join(root, ".git/factory");
+  const queue = ["A", "B"].map((id) => ({
+    id,
+    brief: "Implement prd.md",
+    after: [],
+  }));
+  let dispose = () => {};
+  let execute!: (
+    input: Record<string, unknown>,
+    ctx: PluginToolContext,
+  ) => Promise<unknown>;
+  const agents: Parameters<PluginAPI["createAgent"]>[0][] = [];
+  const messages: string[] = [];
+  const save = (state: State) => {
+    const storage = openPersistence(directory, queue);
+    storage.commit(state, "factory", "fixture", "creation admission");
+    storage.close();
+  };
+  const { tools } = watchdogFixture();
+  const ctx = {
+    thread: { id: "T-owner" },
+    tools,
+  } as unknown as PluginToolContext;
+  const request = { action: "create-thread", ticket: "A", role: "worker" };
+  const refuse = async (input: Record<string, unknown>, context = ctx) => {
+    const result = await execute(input, context).then(
+      () => false,
+      () => true,
+    );
+    expect(result).toBe(true);
+  };
+  try {
+    git(root, "init", "-q");
+    git(root, "config", "user.name", "Fixture");
+    git(root, "config", "user.email", "fixture@example.invalid");
+    await mkdir(join(root, "src"));
+    await writeFile(join(root, "src/value"), "old");
+    await writeFile(join(root, "prd.md"), "Implement fixture");
+    await writeFile(join(root, "tickets.json"), JSON.stringify(queue));
+    await writeFile(
+      join(root, ".factory.json"),
+      JSON.stringify({
+        version: 1,
+        capacity: 1,
+        workerModel: "openai/gpt-6.1-sol",
+        prd: "prd.md",
+        tickets: "tickets.json",
+        scope: ["src/"],
+        verify: "true",
+        permissions: { execute: true, publish: false, externalTickets: false },
+      }),
+    );
+    git(root, "add", ".");
+    git(root, "commit", "-qm", "fixture");
+    save({ enabled: true, owner: "T-owner", runs: {} });
+    registerFactory(
+      {
+        logger: { log() {} },
+        createAgent(config: Parameters<PluginAPI["createAgent"]>[0]) {
+          agents.push(config);
+          return {
+            async createThread() {
+              return { id: "T-worker" };
+            },
+          };
+        },
+        threads: {
+          get() {
+            return {
+              state: {
+                async get() {
+                  return "running";
+                },
+                subscribe() {
+                  return { unsubscribe() {} };
+                },
+              },
+              title: {
+                subscribe() {
+                  return { unsubscribe() {} };
+                },
+              },
+              async appendUserMessage(message: { content: string }) {
+                messages.push(message.content);
+              },
+            };
+          },
+        },
+        on() {},
+        registerTool(tool: { execute: typeof execute }) {
+          execute = tool.execute;
+        },
+        onDispose(fn: () => void) {
+          dispose = fn;
+        },
+      } as unknown as PluginAPI,
+      root,
+      () => ({
+        async init() {},
+        async close() {},
+        ledger: { async record() {} },
+      }),
+    );
+    for (const override of [
+      { prompt: "escape" },
+      { attempt: 99 },
+      { candidate: "b".repeat(40) },
+      { base: "b".repeat(40) },
+      { executor: "orb" },
+    ])
+      await refuse({ ...request, ...override });
+    await refuse(request, {
+      ...ctx,
+      thread: { id: "T-outside" },
+    } as unknown as PluginToolContext);
+    expect(agents).toHaveLength(0);
+    await execute(request, ctx);
+    expect(agents).toHaveLength(1);
+    expect(agents[0]?.tools).toEqual(roleTools(root, "worker"));
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain('"attempt":1');
+    expect(messages[0]).toContain("Ticket A: Implement prd.md");
+    const running = factoryStatus(directory);
+    expect(running.foreman?.children?.["T-worker"]).toEqual({
+      ticket: "A",
+      role: "worker",
+    });
+    expect(running.runs.A).toMatchObject({
+      kind: "running",
+      thread: "T-worker",
+      attempt: 1,
+    });
+    await refuse(request);
+    await refuse(request, {
+      ...ctx,
+      thread: { id: "T-worker" },
+    } as unknown as PluginToolContext);
+    await refuse({ ...request, ticket: "B" });
+    expect(factoryStatus(directory).runs.B).toBeUndefined();
+    expect(agents).toHaveLength(1);
+    save({ ...running, enabled: false });
+    await refuse({ ...request, ticket: "B" });
+    const original = running.runs.A;
+    if (original?.kind !== "running")
+      throw new Error("Expected original worker");
+    for (const run of [
+      { kind: "creating", base: original.base, worktree: original.worktree },
+      {
+        kind: "uncertain",
+        thread: original.thread,
+        reason: "inspect creation",
+      },
+      {
+        kind: "blocked",
+        thread: original.thread,
+        reason: "repair cap",
+        repair: { ...original, attempt: 4 },
+      },
+    ] satisfies Run[]) {
+      save({ ...running, runs: { A: run } });
+      const held = factoryStatus(directory);
+      await refuse(request);
+      expect(factoryStatus(directory)).toEqual(held);
+    }
+    expect(agents).toHaveLength(1);
+    expect(messages).toHaveLength(1);
+  } finally {
+    dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 function changeResumeState(state: State, outcome: string, descendant: string) {
   const run = state.runs.A!;
@@ -1752,6 +2327,7 @@ test.each([
           ticket?: string;
           decision?: string;
           incident?: string;
+          role?: string;
         },
         ctx: PluginToolContext,
       ) => Promise<unknown>;
@@ -1887,7 +2463,14 @@ test.each([
         delivery: "sent",
       });
       expect(models[0]).toMatchObject({
-        tools: expect.arrayContaining(["send_thread_message"]),
+        tools: {
+          include: expect.arrayContaining([
+            "shell_command",
+            "apply_patch",
+            controlToolName(root),
+          ]),
+          exclude: ["tool_search", "code_exec"],
+        },
       });
       await control("reconcile");
       expect(fallbackCalls).toBe(0);
@@ -2083,7 +2666,16 @@ test.each([
         await control("reload");
         await writeFile(configPath, savedConfig);
         disconnected = false;
-        const pending = (await control("reconcile")).runs.A;
+        const created = JSON.parse(
+          String(
+            await execute(
+              { action: "create-thread", ticket: "A", role: "reviewer" },
+              ctx,
+            ),
+          ),
+        );
+        const pending = (workerRunner ? await control("status") : created).runs
+          .A;
         expect(pending).toMatchObject({
           kind: "running",
           review: {
@@ -2099,7 +2691,19 @@ test.each([
         expect(models[1]).toMatchObject({
           model: "moonshotai/kimi-k3",
           reasoningEffort: "high",
+          tools: roleTools(root, "reviewer"),
         });
+        expect(
+          factoryStatus(join(root, ".git/factory")).foreman?.children?.[
+            "T-reviewer"
+          ],
+        ).toEqual({ ticket: "A", role: "reviewer" });
+        expect(
+          execute(
+            { action: "create-thread", ticket: "A", role: "reviewer" },
+            ctx,
+          ),
+        ).rejects.toThrow("already exists");
         expect(models[1]?.instructions).toContain("Do not implement");
         expect(models[1]?.instructions).toContain(
           "the ce-code-review skill's SKILL.md and referenced files in the synced user skill caches",
