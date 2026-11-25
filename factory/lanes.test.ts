@@ -356,6 +356,15 @@ test.each(["light", "main"] as const)(
         ticket: "L1",
         incident: "parked-L1",
         decision: "Operator approved one more repair",
+        humanConfirmation: {
+          userID: "user-human",
+          owner: "T-owner",
+          ticket: "L1",
+          incident: "parked-L1",
+          attempt: 4,
+          base,
+          integrationBase: base,
+        },
       });
       if (blockerLane === "light") {
         expect(await resume.catch(String)).toContain(

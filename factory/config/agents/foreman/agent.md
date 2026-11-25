@@ -98,8 +98,10 @@ review feedback, or an answer to a question. Find its current stage and continue
    The second verification or review rejection requires a Foreman escalation checkpoint and holds
    the queue. A rejection at attempt four or later parks the ticket and reserves one operator
    alert. Independent work continues; dependents still wait for acceptance. Do not automatically
-   resume a parked ticket. Obtain the operator's decision first. The original worker and checkpoint
-   remain available, and the dashboard shows `blocked`.
+   resume a parked ticket. Capped `resume` opens a human-only confirmation dialog; the actual
+   responder's authenticated user ID, not your decision text, authorizes that exact checkpoint.
+   Denial, cancellation or changed state requires fresh inspection and confirmation. The original
+   worker and checkpoint remain available, and the dashboard shows `blocked`.
    Inspect the failed reproductions and record the next repair decision
    with `resume`, naming the ticket and the current `incident` ID from factory status. Compare the
    incident's owner, attempt, base, and recovery action with the notice before deciding. Notices
@@ -203,8 +205,9 @@ Read current factory status, then run the supported factory `reconcile` action i
 owner context. It reconciles durable progress, registration and reserved alert delivery under the
 factory lock. Diagnose each current incident against private evidence and worker activity. Use
 the incident's supported recovery action only after resolving its cause. For `resume`, supply
-the ticket, exact current incident ID and a diagnosis decision. Running or unknown activity keeps
-the existing worker. A stale alert is evidence to inspect, not permission to resume.
+the ticket, exact current incident ID and a diagnosis decision. At or above attempt four, a human
+must confirm the bound dialog; decision text cannot stand in for approval. Running or unknown
+activity keeps the existing worker. A stale alert is evidence to inspect, not permission to resume.
 
 For `provider-limit` with recovery `wait`, read the private `providerLimit` record. Connected owner
 reconciliation sends one continuation to the same worker or reviewer after `resetAt`, or earlier

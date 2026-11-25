@@ -2238,7 +2238,7 @@ function stageText(run: Run) {
 }
 
 function stopNotice(ticket: string, run: Run, notice: StopIncident) {
-  return `Factory stop ${notice.id}. Ticket ${ticket}, attempt ${notice.attempt}, base ${notice.base}. ${stageText(run)} Reason: ${notice.reason}.${notice.cause ? ` Causing ${notice.cause.role} thread: ${notice.cause.thread}.` : ""} Recovery: ${notice.recovery}. Read current factory status and private evidence before deciding. ${notice.recovery === "wait" ? "Connected owner reconciliation reserves one continuation to the same thread after the provider reset. Do not send a separate continuation or retry an uncertain send. Paused factories stay paused." : notice.recovery === "resume" ? `Only the owning Foreman may resume with ticket ${ticket}, incident ${notice.id}, and ${runStage(run).stage === "parked" ? "the operator's decision. Attempt cap reached; do not automatically resume" : "a diagnosis decision"}. A paused factory stays paused.` : "Inspect and resolve this stop; this notice does not authorize resume or grant permission."}`;
+  return `Factory stop ${notice.id}. Ticket ${ticket}, attempt ${notice.attempt}, base ${notice.base}. ${stageText(run)} Reason: ${notice.reason}.${notice.cause ? ` Causing ${notice.cause.role} thread: ${notice.cause.thread}.` : ""} Recovery: ${notice.recovery}. Read current factory status and private evidence before deciding. ${notice.recovery === "wait" ? "Connected owner reconciliation reserves one continuation to the same thread after the provider reset. Do not send a separate continuation or retry an uncertain send. Paused factories stay paused." : notice.recovery === "resume" ? `Only the owning Foreman may resume with ticket ${ticket}, incident ${notice.id}, and ${notice.attempt >= repairAttemptCap ? "authenticated human confirmation in the plugin dialog. Attempt cap reached; decision text is not approval; do not automatically resume" : "a diagnosis decision"}. A paused factory stays paused.` : "Inspect and resolve this stop; this notice does not authorize resume or grant permission."}`;
 }
 
 // Only a wake by the owner or its registered observer, with execution granted, may run the clock.
@@ -2358,6 +2358,55 @@ export function createFactory(
 
   let stateCache: State = { enabled: false, runs: {} };
 
+  function confirmedRepair(
+    request: NonNullable<Parameters<typeof reconcile>[3]>,
+    owner: ThreadID | undefined,
+    expected: Record<string, unknown>,
+  ) {
+    const confirmation = request.humanConfirmation;
+    return (
+      !!confirmation?.userID.trim() &&
+      owner === expected.owner &&
+      Object.entries(expected).every(
+        ([key, value]) =>
+          confirmation[key as keyof typeof confirmation] === value,
+      )
+    );
+  }
+
+  function requireHumanResume(
+    action: string,
+    state: State,
+    owner: ThreadID | undefined,
+    request: Parameters<typeof reconcile>[3],
+  ) {
+    if (action !== "resume" || !request) return;
+    request.signal?.throwIfAborted();
+    const incident = state.runs[request.ticket]?.incident;
+    if (!incident) return;
+    if (incident.attempt < repairAttemptCap && !request.humanConfirmation)
+      return;
+    requireIncident(incident, {
+      id: request.incident,
+      owner: state.owner,
+      ticket: request.ticket,
+      attempt: incident.attempt,
+      base: incident.base,
+    });
+    const expected = {
+      owner: state.owner,
+      ticket: request.ticket,
+      incident: request.incident,
+      attempt: incident.attempt,
+      base: incident.base,
+      integrationBase: git(root, "rev-parse", "HEAD"),
+    };
+    if (!confirmedRepair(request, owner, expected))
+      throw new Error(
+        "Capped resume requires exact authenticated human confirmation",
+      );
+  }
+
   async function reconcile(
     action:
       | "start"
@@ -2368,7 +2417,22 @@ export function createFactory(
       | "resume",
     owner?: ThreadID,
     observe: NativeHost["state"] = host.state,
-    repairRequest?: { ticket: string; decision: string; incident: string },
+    repairRequest?: {
+      ticket: string;
+      decision: string;
+      incident: string;
+      // Trusted plugin-boundary data, never parsed from tool input or persisted as a token.
+      humanConfirmation?: {
+        userID: string;
+        owner: ThreadID;
+        ticket: string;
+        incident: string;
+        attempt: number;
+        base: string;
+        integrationBase: string;
+      };
+      signal?: AbortSignal;
+    },
     tools?: ConnectedTools,
   ) {
     await mkdir(directory, { recursive: true });
@@ -2377,6 +2441,12 @@ export function createFactory(
     let flushNotices = async () => {};
     try {
       await store.init();
+      requireHumanResume(
+        action,
+        factoryStatus(directory),
+        owner,
+        repairRequest,
+      );
       const config = await effectiveConfiguration(root);
       const twoLanes = !!config.lightWorker;
       assertControlCaller(factoryStatus(directory), owner, action);
@@ -2834,6 +2904,8 @@ export function createFactory(
           feedback += `\nRebase onto ${base} before submitting the next candidate.`;
         }
         await verifyRepair(checkpoint);
+        requireHumanResume("resume", state, owner, request);
+        const confirmation = request.humanConfirmation;
         state.runs[ticket] = {
           ...checkpoint,
           ...laneField(blocked),
@@ -2847,6 +2919,7 @@ export function createFactory(
           "repair-resumed",
           JSON.stringify({
             decision,
+            ...(confirmation ? { humanConfirmation: confirmation } : {}),
             attempt: repair.attempt + 1,
             thread: repair.thread,
           }),

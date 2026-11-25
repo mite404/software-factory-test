@@ -1,9 +1,11 @@
 import type {
   PluginAPI,
+  PluginConfirmOptions,
   PluginTools,
   PluginToolContext,
   ThreadMessage,
 } from "@ampcode/plugin";
+import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
@@ -12,10 +14,12 @@ import type { DashboardSnapshot } from "./dashboard";
 import {
   factoryStatus,
   lifecycleStatus,
+  repairAttemptCap,
   runStage,
   stages,
   type Run,
   type State,
+  type StopIncident,
 } from "./persistence";
 import { pipelineSteps } from "./pipeline";
 import {
@@ -104,7 +108,46 @@ function controlReply(state: State, caller: string) {
   );
 }
 
-function repairRequest(input: Record<string, unknown>) {
+async function confirmRepair(
+  root: string,
+  incident: StopIncident,
+  ctx: PluginToolContext,
+) {
+  const binding = {
+    owner: incident.owner,
+    ticket: incident.ticket,
+    incident: incident.id,
+    attempt: incident.attempt,
+    base: incident.base,
+    integrationBase: execFileSync("git", ["-C", root, "rev-parse", "HEAD"], {
+      encoding: "utf8",
+    }).trim(),
+  };
+  ctx.signal?.throwIfAborted();
+  let userID: string | undefined;
+  // Live `amp plugins show-docs` contract; the pinned declarations predate attribution.
+  const options: PluginConfirmOptions & {
+    onAnswered(answer: { responder: { userID: string } | undefined }): void;
+  } = {
+    title: `Resume capped factory ticket ${binding.ticket}?`,
+    message: `Owner: ${binding.owner}\nTicket: ${binding.ticket}\nRejected attempt: ${binding.attempt}\nIncident: ${binding.incident}\nCandidate base: ${binding.base}\nIntegration base: ${binding.integrationBase}\nThis queues one more attempt in the original worker. It does not accept code or start a paused factory.`,
+    requireHuman: true,
+    endTurnOnDecline: true,
+    onAnswered: ({ responder }) => {
+      userID = responder?.userID;
+    },
+  };
+  // No coordinator lock or pending tick is held while a person considers the dialog.
+  const confirmed = await ctx.ui.confirm(options);
+  ctx.signal?.throwIfAborted();
+  if (confirmed !== true || !userID?.trim())
+    throw new Error("Capped resume requires authenticated human confirmation");
+  return { ...binding, userID };
+}
+
+function repairInput(
+  input: Record<string, unknown>,
+): Parameters<ReturnType<typeof createFactory>["tick"]>[3] {
   if (input.action !== "resume" && input.action !== "retry-create")
     return undefined;
   if (
@@ -120,6 +163,23 @@ function repairRequest(input: Record<string, unknown>) {
     decision: input.decision,
     incident: input.incident,
   };
+}
+
+async function repairRequest(
+  input: Record<string, unknown>,
+  saved: State,
+  ctx: PluginToolContext,
+  root: string,
+) {
+  const request = repairInput(input);
+  if (input.action !== "resume" || !request) return request;
+  request.signal = ctx.signal;
+  const incident = saved.runs[request.ticket]?.incident;
+  if (!incident || incident.attempt < repairAttemptCap) return request;
+  if (incident.id !== request.incident || incident.owner !== ctx.thread.id)
+    throw new Error("Resume requires the exact current stop incident");
+  request.humanConfirmation = await confirmRepair(root, incident, ctx);
+  return request;
 }
 
 function resetTime(message: string, observedAt: number) {
@@ -539,7 +599,11 @@ export default function registerFactory(
           description:
             "For record-landing only, explicit old-to-new repository-relative file paths. Rewrites accepted patch headers, never content or upstream paths. Unused sources, unchanged paths, collisions or unproven content refuse without writes. Saved in the landed-outside event. Omitted or empty keeps ordinary proof.",
         },
-        decision: { type: "string" },
+        decision: {
+          type: "string",
+          description:
+            "For resume, a repair diagnosis, not approval. At attempt four or later resume also requires an authenticated human response to the plugin's bound confirmation dialog. Decision text cannot authorize a capped resume.",
+        },
         owner: {
           type: "string",
           pattern: "^T-[a-zA-Z0-9_-]+$",
@@ -579,12 +643,9 @@ export default function registerFactory(
       if (record) return JSON.stringify(await record(input, ctx));
       const action = controlActions.find((action) => action === requested);
       if (!action) throw new Error("Unknown action");
-      const tools = connectedTools(
-        action,
-        factoryStatus(factory.directory),
-        ctx,
-      );
-      const request = repairRequest(input);
+      const saved = factoryStatus(factory.directory);
+      const tools = connectedTools(action, saved, ctx);
+      const request = await repairRequest(input, saved, ctx, root);
       let connected = true;
       const liveTools = tools && {
         call: tools.call.bind(tools),
