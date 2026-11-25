@@ -3942,6 +3942,15 @@ test("four rejections park the worker, release only independent work and require
     ticket: "A",
     incident: notice.id,
     decision: "Operator approved another try",
+    humanConfirmation: {
+      userID: "user-human-contributor",
+      owner: notice.owner,
+      ticket: "A",
+      incident: notice.id,
+      attempt: 4,
+      base: notice.base,
+      integrationBase: f.git("rev-parse", "HEAD"),
+    },
   };
   const reopened = f.factory(() => at);
   const events = factoryEvents(engine.directory);
@@ -3970,6 +3979,7 @@ test("four rejections park the worker, release only independent work and require
   });
   expect(f.git("rev-parse", "HEAD")).toBe(advancedBase);
   expect(advancedBase).not.toBe(notice.base);
+  request.humanConfirmation.integrationBase = advancedBase;
   at += 86_400_000;
   await reopened.tick("reconcile");
   expect(factoryStatus(engine.directory).runs.A).toEqual(state.runs.A);
@@ -4009,19 +4019,75 @@ test("four rejections park the worker, release only independent work and require
     "same tree, unrelated history",
   );
   f.git("reset", "--hard", unrelated);
+  request.humanConfirmation.integrationBase = unrelated;
   expect(
     await reopened
       .tick("resume", "T-owner", f.host.state, request)
       .catch(String),
   ).toMatch(/merge-base/);
   f.git("reset", "--hard", advancedBase);
+  request.humanConfirmation.integrationBase = advancedBase;
   expect(factoryStatus(engine.directory).runs.A).toEqual(state.runs.A);
   expect(factoryEvents(engine.directory)).toEqual(beforeResume);
+  expect(
+    reopened.tick("resume", "T-owner", f.host.state, {
+      ...request,
+      humanConfirmation: undefined,
+    }),
+  ).rejects.toThrow(/human confirmation/);
+  const humanConfirmation = request.humanConfirmation;
+  const approvedRequest = { ...request, humanConfirmation };
+  for (const stale of [
+    { owner: "T-former" as const },
+    { ticket: "B" },
+    { incident: "stale" },
+    { attempt: 3 },
+    { base: advancedBase },
+    { integrationBase: notice.base },
+    { userID: "" },
+  ]) {
+    expect(
+      reopened.tick("resume", "T-owner", f.host.state, {
+        ...request,
+        humanConfirmation: { ...humanConfirmation, ...stale },
+      }),
+    ).rejects.toThrow(/human confirmation/);
+  }
+  const cancelled = new AbortController();
+  expect(
+    reopened.tick(
+      "resume",
+      "T-owner",
+      async () => {
+        cancelled.abort();
+        return "idle";
+      },
+      {
+        ...approvedRequest,
+        signal: cancelled.signal,
+      },
+    ),
+  ).rejects.toThrow();
+  const db = new Database(join(engine.directory, "state.sqlite"));
+  try {
+    db.run(
+      "CREATE TRIGGER fail_resume BEFORE INSERT ON events WHEN NEW.action = 'repair-resumed' BEGIN SELECT RAISE(ABORT, 'fixture resume failure'); END",
+    );
+    expect(
+      reopened.tick("resume", "T-owner", f.host.state, approvedRequest),
+    ).rejects.toThrow(/fixture resume failure/);
+  } finally {
+    db.run("DROP TRIGGER fail_resume");
+    db.close();
+  }
+  expect(factoryStatus(engine.directory).runs.A).toEqual(state.runs.A);
+  expect(factoryEvents(engine.directory)).toEqual(beforeResume);
+  expect(messages).toHaveLength(4);
   const resumed = await reopened.tick(
     "resume",
     "T-owner",
     f.host.state,
-    request,
+    approvedRequest,
   );
   expect(resumed.runs.A).toMatchObject({
     kind: "running",
@@ -4033,6 +4099,20 @@ test("four rejections park the worker, release only independent work and require
   expect(resumed.runs.B).toBeUndefined();
   expect(messages).toHaveLength(5);
   expect(f.counts().creates).toBe(2);
+  expect(
+    f
+      .factory(() => at)
+      .tick("resume", "T-owner", f.host.state, approvedRequest),
+  ).rejects.toThrow();
+  const resumeEvents = factoryEvents(engine.directory)!.filter(
+    (event) => event.action === "repair-resumed",
+  );
+  expect(JSON.parse(resumeEvents.at(-1)!.detail)).toMatchObject({
+    humanConfirmation,
+    attempt: 5,
+    thread: "T-prepared",
+  });
+  expect(messages).toHaveLength(5);
   expect(messages[4]).toContain(`Rebase onto ${advancedBase}`);
   workerGit(f.worktree, "rebase", advancedBase);
   expect(await readFile(join(f.worktree, "src/value"), "utf8")).toBe("4");
@@ -4065,7 +4145,7 @@ test("four rejections park the worker, release only independent work and require
   expect(f.counts().creates).toBe(3);
   expect(notices[0]).toContain("a diagnosis decision");
   expect(notices[1]).toContain("Attempt cap reached");
-  expect(notices[1]).toContain("operator's decision");
+  expect(notices[1]).toContain("authenticated human confirmation");
 }, 30_000);
 
 test("a running gate reads as gating and an interrupted gate reruns exactly once, even after a pause", async () => {
@@ -4400,6 +4480,15 @@ test("owner-authorized repairs retain spending alerts at six and ten on the same
         ticket: "A",
         incident: result.runs.A!.incident!.id,
         decision: "Reviewed failed candidate",
+        humanConfirmation: {
+          userID: "user-human",
+          owner: "T-owner",
+          ticket: "A",
+          incident: result.runs.A!.incident!.id,
+          attempt,
+          base: result.runs.A!.incident!.base,
+          integrationBase: f.git("rev-parse", "HEAD"),
+        },
       });
     } else expect(result.runs.A!.kind).toBe("running");
     await f.factory(clock).tick("reconcile");

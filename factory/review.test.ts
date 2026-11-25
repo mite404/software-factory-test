@@ -179,11 +179,25 @@ async function fixture(
     submit,
     async resume() {
       const state = await factory.tick("reconcile");
+      const incident = state.runs.A?.incident;
       return factory.tick("resume", "T-owner", host.state, {
         ticket: "A",
         incident: state.runs.A?.incident?.id ?? "missing",
         decision:
           "Use the review reproduction to repair the shared value contract",
+        ...(incident && incident.attempt >= 4
+          ? {
+              humanConfirmation: {
+                userID: "user-human",
+                owner: incident.owner,
+                ticket: "A",
+                incident: incident.id,
+                attempt: incident.attempt,
+                base: incident.base,
+                integrationBase: git(root, "rev-parse", "HEAD"),
+              },
+            }
+          : {}),
       });
     },
     observe(value: typeof activity) {

@@ -67,7 +67,7 @@ export const defaultWatchdog: WatchdogPolicy = {
   spendingFirstAttempt: 6,
   spendingInterval: 4,
 };
-/** Rejections at this attempt or later require an operator decision before owner resume. */
+/** Rejections at this attempt or later require authenticated human confirmation before owner resume. */
 export const repairAttemptCap = 4;
 export type Task = {
   id: string;
@@ -719,7 +719,7 @@ export const runLifecycle = {
         exits: [
           {
             action: "resume",
-            when: "the exact incident, operator decision and idle clean original worker validate with no other active work; the clean integration base is unchanged or a descendant, repinned on resume with rebase feedback",
+            when: "authenticated human confirmation bound to the exact owner, ticket, rejected attempt, incident and bases, plus an idle clean original worker validate with no other active work; the clean integration base is unchanged or a descendant, repinned on resume with rebase feedback",
             actor: "operator",
           },
           {

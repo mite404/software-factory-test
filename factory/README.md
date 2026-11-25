@@ -401,8 +401,16 @@ Rejection at attempt four or later sets the run to `parked` and records one oper
 in the same transaction. Parking releases independent tickets; dependents still require `done`.
 Both blocked repairs and parked runs retain the original worker and repair checkpoint.
 The owning Foreman can call `resume` with `ticket`, the current `incident` ID, and a nonempty
-`decision` after inspecting the evidence. This queues the same
-worker at the next attempt. It does not accept code or start a paused factory. Use `start`
+`decision` after inspecting the evidence. At attempt four or later, the plugin also requires a
+human confirmation dialog (`requireHuman: true`). Model-supplied decision text is not approval.
+The platform's authenticated responder user ID is bound to the exact owner, ticket, rejected
+attempt, incident, candidate base and current integration HEAD. Missing attribution, denial,
+cancellation or any changed binding refuses without resuming. The dialog holds no coordinator
+lock. Native resume revalidates the binding and records attribution in `repair-resumed` atomically
+with consuming the incident and advancing the existing checkpoint. It cannot be replayed after
+success or restart, and a failed transaction consumes nothing. The second-rejection Foreman
+checkpoint below the cap is unchanged. This queues the same worker at the next attempt.
+It does not accept code or start a paused factory. Use `start`
 separately when paused. Resumption requires an idle worker and its registered clean worktree.
 Blocked repairs require an unchanged integration base. A parked repair allows a clean descendant
 integration HEAD: resume validates the original incident, atomically repins the checkpoint base,
@@ -1162,7 +1170,7 @@ Reloads reattach reviewers without replacements. Unknown creation or inconclusiv
 parked for operator reconciliation; missing, invalid, blocked, stale, or unavailable verdicts cannot
 land or consume corrections. Issues return to the original worker, with Foreman escalation after
 the second rejection and operator parking at attempt four or later. Owner-only `resume` records
-the next repair decision.
+the next repair decision, with authenticated human confirmation at or above the cap.
 A gate rejection sends the worker the exit status, marked stdout and stderr tails of at most 8,192
 bytes combined cut on line boundaries, and the full log path, or names the precondition that
 prevented the run.
