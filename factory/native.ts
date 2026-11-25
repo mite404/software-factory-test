@@ -1,4 +1,9 @@
-import type { AgentReasoningEffort, PluginTools } from "@ampcode/plugin";
+import type {
+  AgentReasoningEffort,
+  PluginTools,
+  ThreadMessage,
+  ThreadMessagesOptions,
+} from "@ampcode/plugin";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
@@ -204,6 +209,11 @@ export type NativeHost = {
     | { kind: "provider-limit"; limit: ProviderLimit }
   >;
   watch(thread: ThreadID, wake: () => void): void;
+  /** Read original SDK messages without interpreting their prose as native authority. */
+  messages?(
+    thread: ThreadID,
+    options: ThreadMessagesOptions,
+  ): Promise<ThreadMessage[]>;
 };
 
 function currentTools(tools: ConnectedTools | undefined) {
@@ -2027,6 +2037,139 @@ function nudgeTarget(
   return observer && caller === observer ? observer : undefined;
 }
 
+// Persistence validates that repair/checkpoint identities retain this top-level worker thread.
+function runThreads(
+  run: Run,
+): { thread: ThreadID; role: "worker" | "reviewer" }[] {
+  const rows: { thread: ThreadID; role: "worker" | "reviewer" }[] = [];
+  if ("thread" in run && run.thread)
+    rows.push({ thread: run.thread, role: "worker" });
+  if ("review" in run && run.review?.thread)
+    rows.push({ thread: run.review.thread, role: "reviewer" });
+  return rows;
+}
+
+function childRole(state: State, thread: ThreadID) {
+  return (
+    state.foreman?.children?.[thread]?.role ??
+    Object.values(state.runs)
+      .flatMap(runThreads)
+      .find((row) => row.thread === thread)?.role
+  );
+}
+
+function recordChild(
+  state: State,
+  thread: ThreadID,
+  ticket: string,
+  role: "worker" | "reviewer",
+) {
+  state.foreman ??= { notes: [], handoffs: [] };
+  state.foreman.children ??= {};
+  state.foreman.children[thread] = { ticket, role };
+}
+
+/** Resolve capability identity only from native ownership and retained role records. */
+export function threadRole(state: State, thread: ThreadID) {
+  if (state.owner === thread) return "foreman";
+  if (state.foreman?.observer?.thread === thread) return "observer";
+  if (
+    state.foreman?.retiredObservers?.includes(thread) ||
+    state.foreman?.handoffs.some((entry) => entry.from === thread)
+  )
+    return "retired";
+  return childRole(state, thread);
+}
+
+function scopedThread(state: State, owner: ThreadID, target: ThreadID) {
+  assertControlCaller(state, owner, "thread-management");
+  assertOwner(state, owner);
+  if (target === state.owner) return;
+  if (
+    !childRole(state, target) &&
+    target !== state.foreman?.observer?.thread &&
+    !state.foreman?.retiredObservers?.includes(target)
+  )
+    throw new Error(
+      "Outside thread access is unsupported; native owned target required",
+    );
+}
+
+function assertNewThread(
+  state: State,
+  owner: ThreadID | undefined,
+  ticket: string,
+  role: "worker" | "reviewer",
+) {
+  assertOwner(state, owner);
+  const run = state.runs[ticket];
+  if (role === "worker" ? !!run : run?.kind !== "running" || !!run.review)
+    throw new Error(
+      "Thread already exists or native creation is not eligible; inspect current state",
+    );
+}
+
+function retirableThread(state: State, owner: ThreadID, target: ThreadID) {
+  scopedThread(state, owner, target);
+  if (target === state.owner || target === state.foreman?.observer?.thread)
+    throw new Error("Cannot archive the owner or active observer");
+  const historical = state.foreman?.children?.[target];
+  const runs = Object.entries(state.runs)
+    .filter(
+      ([ticket, run]) =>
+        ticket === historical?.ticket ||
+        runThreads(run).some((row) => row.thread === target),
+    )
+    .map(([, run]) => run);
+  if (runs.some((run) => run.kind !== "done" || !run.merge || !!run.incident))
+    throw new Error(
+      "Thread evidence is still required for review, recovery or merge",
+    );
+}
+
+// Observed connected status contract. Unknown ownership, activity or archive state is not safe.
+function archiveObservation(value: unknown, target: ThreadID) {
+  const inspected = object(value);
+  const metadata = object(inspected.metadata);
+  if (
+    metadata.threadID !== target ||
+    metadata.viewerOwnsThread !== true ||
+    typeof metadata.archived !== "boolean"
+  )
+    throw new Error(
+      "Archive requires verified target identity and platform ownership",
+    );
+  if (!metadata.archived && object(inspected.agentState).state !== "idle")
+    throw new Error("Archive requires observed idle activity");
+  return metadata.archived;
+}
+
+async function inspectArchive(target: ThreadID, tools?: ConnectedTools) {
+  const connected = currentTools(tools);
+  if (!connected) throw new Error("Archive requires connected owner tools");
+  return archiveObservation(
+    await connected.call("amp.get_thread_status", { thread: target }),
+    target,
+  );
+}
+
+function recordArchiveOutcome(
+  persistence: ReturnType<typeof openPersistence>,
+  target: ThreadID,
+  outcome: "unknown" | "archived",
+) {
+  const state = persistence.state;
+  const reservation = state.foreman?.archives?.[target];
+  if (!reservation || reservation.outcome === outcome) return;
+  reservation.outcome = outcome;
+  persistence.commit(
+    state,
+    "factory",
+    outcome === "archived" ? "thread-archived" : "thread-archive-unknown",
+    target,
+  );
+}
+
 /** The one caller check for every control action. The observer may only reconcile and read the
  * status summary; status reads stay open to others; workers, reviewers and former owners are
  * refused outside an operator-decided handoff.
@@ -2046,14 +2189,7 @@ export function assertControlCaller(
     );
   }
   if (action === "status" || action === "status-summary") return;
-  if (
-    owner &&
-    Object.values(state.runs).some(
-      (run) =>
-        ("thread" in run && run.thread === owner) ||
-        ("review" in run && run.review?.thread === owner),
-    )
-  )
+  if (owner && childRole(state, owner))
     throw new Error("Workers cannot control the factory");
   if (
     action !== "handoff" &&
@@ -2359,7 +2495,7 @@ export function createFactory(
         ? [`${id}: ${dependency.insight} (${dependency.revision})`]
         : [];
     });
-    return `Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAllowed paths: ${pinned.scope.join(", ")}. Check: ${pinned.verify}.\nDefinition: ${run.definition ?? "legacy unpinned"}.\nDependency evidence: ${insights.join("; ") || "none"}.\n${run.feedback ? `Repair feedback: ${run.feedback}\n` : ""}Use a local commit for the change. Do not push, deploy, create tickets, edit factory files, or delegate.\nForeman: ${stateCache.owner}. Send questions and blockers there with send_thread_message, or the factory control action message-foreman with message text. Messaging does not grant factory control.\nAfter finishing, write JSON to ${join(directory, `${task.id}.report.json`)}: {"attempt":${run.attempt},"kind":"candidate","revision":"<full git HEAD>","insight":"<short verified finding>","summary":"<optional public line>"}. If blocked, use {"attempt":${run.attempt},"kind":"blocked","reason":"<needed decision>"}. Report briefly here too.`;
+    return `Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAllowed paths: ${pinned.scope.join(", ")}. Check: ${pinned.verify}.\nDefinition: ${run.definition ?? "legacy unpinned"}.\nDependency evidence: ${insights.join("; ") || "none"}.\n${run.feedback ? `Repair feedback: ${run.feedback}\n` : ""}Use a local commit for the change. Do not push, deploy, create tickets, edit factory files, or delegate.\nForeman: ${stateCache.owner}. Send questions and blockers with the factory control action message-foreman and message text. Messaging does not grant factory control.\nAfter finishing, write JSON to ${join(directory, `${task.id}.report.json`)}: {"attempt":${run.attempt},"kind":"candidate","revision":"<full git HEAD>","insight":"<short verified finding>","summary":"<optional public line>"}. If blocked, use {"attempt":${run.attempt},"kind":"blocked","reason":"<needed decision>"}. Report briefly here too.`;
   }
 
   let stateCache: State = { enabled: false, runs: {} };
@@ -2440,6 +2576,7 @@ export function createFactory(
       signal?: AbortSignal;
     },
     tools?: ConnectedTools,
+    creation?: { ticket: string; role: "worker" | "reviewer" },
   ) {
     await mkdir(directory, { recursive: true });
     const store = openStore(join(directory, "bookkeeping"));
@@ -2466,6 +2603,21 @@ export function createFactory(
       const state = persistence.state;
       assertWatchdogCaller(state, action, owner, tools);
       restoreTickets(queue, persistence.tickets, state);
+      function requireCreation() {
+        if (!creation) return;
+        assertNewThread(state, owner, creation.ticket, creation.role);
+        if (!state.enabled || !config.execute)
+          throw new Error(
+            "Thread creation requires an enabled executable factory",
+          );
+        const task = queue.find((task) => task.id === creation.ticket);
+        if (!task) throw new Error("Unknown native ticket");
+        if (creation.role === "worker" && !dispatchEligible(task))
+          throw new Error(
+            "Native worker dispatch is held; inspect admission and lane state",
+          );
+      }
+      requireCreation();
       let savedRuns = structuredClone(state.runs);
       function incident(
         ticket: string,
@@ -3557,6 +3709,7 @@ export function createFactory(
           "reviewer",
           review.executor,
         );
+        recordChild(state, review.thread, task.id, "reviewer");
         review.delivery = "queued";
         commit(task.id, "review-created", JSON.stringify(review));
         await watch(review.thread);
@@ -3875,6 +4028,7 @@ export function createFactory(
           requirements: task.brief,
         };
         state.runs[task.id] = run;
+        recordChild(state, thread, task.id, "worker");
         commit(task.id, "created", thread);
         await watch(thread);
         await send(task, run, await prompt(task, run, config));
@@ -3969,20 +4123,28 @@ export function createFactory(
         return laneField(state.runs[task.id] ?? taskLane(task));
       }
 
+      function dispatchEligible(task: Task) {
+        return (
+          task.intake !== "planned" &&
+          !state.runs[task.id] &&
+          task.after.every((id) => state.runs[id]?.kind === "done") &&
+          // A light ticket waits until a loaded definition has the light lane.
+          (!task.lane || !!config.lightWorker) &&
+          !laneHeld(
+            state.runs,
+            taskLane(task).lane ?? "main",
+            "dispatch",
+            twoLanes,
+          )
+        );
+      }
+
       async function dispatchNext() {
+        if (creation?.role === "reviewer") return state;
         const next = queue.find(
           (task) =>
-            task.intake !== "planned" &&
-            !state.runs[task.id] &&
-            task.after.every((id) => state.runs[id]?.kind === "done") &&
-            // A light ticket waits until a loaded definition has the light lane.
-            (!task.lane || !!config.lightWorker) &&
-            !laneHeld(
-              state.runs,
-              taskLane(task).lane ?? "main",
-              "dispatch",
-              twoLanes,
-            ),
+            (!creation || task.id === creation.ticket) &&
+            dispatchEligible(task),
         );
         if (!next || !state.owner) return state;
         if (git(root, "status", "--porcelain"))
@@ -4053,6 +4215,7 @@ export function createFactory(
           return true;
         }
         for (const task of queue) {
+          if (creation && task.id !== creation.ticket) continue;
           const run = state.runs[task.id];
           if (run && reconcileHeld(runLane(run))) continue;
           await reclassifyProviderError(task, run);
@@ -4122,6 +4285,70 @@ export function createFactory(
     } finally {
       await store.close();
     }
+  }
+
+  /** Checked scoped read, preserving SDK pagination and content. @throws On missing authority. */
+  function readThread(
+    target: ThreadID,
+    options: ThreadMessagesOptions,
+    owner: ThreadID,
+  ) {
+    return saveRecord("read-thread", owner, async ({ state }) => {
+      scopedThread(state, owner, target);
+      if (!host.messages)
+        throw new Error("Native transcript reads are unsupported");
+      return host.messages(target, options);
+    });
+  }
+
+  /** Archive only merged, idle owned evidence; uncertain effects stay held across restart.
+   * @throws On unsafe retirement, unavailable observations or an unknown remote outcome.
+   */
+  function archiveThread(
+    target: ThreadID,
+    owner: ThreadID,
+    tools?: ConnectedTools,
+  ) {
+    return saveRecord("archive-thread", owner, async (persistence) => {
+      const state = persistence.state;
+      retirableThread(state, owner, target);
+      const archived = await inspectArchive(target, tools);
+      const prior = state.foreman?.archives?.[target];
+      if (archived) {
+        recordArchiveOutcome(persistence, target, "archived");
+        return { thread: target, archived: true };
+      }
+      if (prior)
+        throw new Error(
+          "Archive outcome requires inspection; remote effect will not be repeated",
+        );
+      retirableThread(factoryStatus(directory), owner, target);
+      state.foreman ??= { notes: [], handoffs: [] };
+      state.foreman.archives ??= {};
+      const reservation = {
+        at: now(),
+        owner,
+        outcome: "sending" as "sending" | "unknown" | "archived",
+      };
+      state.foreman.archives[target] = reservation;
+      persistence.commit(state, "factory", "thread-archive-reserved", target);
+      try {
+        if (!currentTools(tools)) throw new Error("Owner tools disconnected");
+        await tools!.call("amp.update_thread", {
+          thread: target,
+          archived: true,
+        });
+        if (!(await inspectArchive(target, tools)))
+          throw new Error("Archive read-back did not confirm the effect");
+        recordArchiveOutcome(persistence, target, "archived");
+        return { thread: target, archived: true };
+      } catch {
+        recordArchiveOutcome(persistence, target, "unknown");
+        throw new Error(
+          "Archive outcome is unknown; inspect read-back, never retry the effect",
+        );
+      }
+    });
   }
 
   function recordInsight(
@@ -4649,6 +4876,7 @@ export function createFactory(
     tools?: ConnectedTools,
     selectedTicket?: string,
     acceptedInsight?: string,
+    creation?: { ticket: string; role: "worker" | "reviewer" },
   ): Promise<State> {
     // Status reads the committed snapshot without queueing behind a running gate or reconcile.
     if (action === "status")
@@ -4675,10 +4903,23 @@ export function createFactory(
         if (action === "reload" || action === "admit")
           return loadDefinition(action, owner, tools, selectedTicket);
         const config = await effectiveConfiguration(root);
-        if (action === "reconcile") await applyAutomationRequests(owner, tools);
-        if (!retryAdmission(initial, action, !!config.lightWorker))
+        if (action === "reconcile" && !creation)
+          await applyAutomationRequests(owner, tools);
+        if (!retryAdmission(initial, action, !!config.lightWorker)) {
+          if (creation)
+            throw new Error(
+              "Native creation is held; inspect current incidents",
+            );
           return initial;
-        return reconcile(action, owner, observe, repairRequest, tools);
+        }
+        return reconcile(
+          action,
+          owner,
+          observe,
+          repairRequest,
+          tools,
+          creation,
+        );
       });
     pending = result;
     return result;
@@ -4691,6 +4932,8 @@ export function createFactory(
     note,
     handoff,
     observer,
+    readThread,
+    archiveThread,
     directory,
   };
 }

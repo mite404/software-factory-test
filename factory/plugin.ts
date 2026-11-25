@@ -4,12 +4,14 @@ import type {
   PluginTools,
   PluginToolContext,
   ThreadMessage,
+  ThreadMessagesOptions,
 } from "@ampcode/plugin";
 import { execFileSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { backup } from "./backup";
+import { allowsRoleCall, controlToolName, roleTools } from "./capabilities";
 import type { DashboardSnapshot } from "./dashboard";
 import {
   factoryStatus,
@@ -27,6 +29,7 @@ import {
   effectiveConfiguration,
   createFactory,
   statusSummary,
+  threadRole,
   tasks,
   type Bookkeeping,
   type NativeHost,
@@ -182,6 +185,80 @@ async function repairRequest(
   return request;
 }
 
+function inputKeys(input: Record<string, unknown>, keys: string[]) {
+  if (Object.keys(input).some((key) => !keys.includes(key)))
+    throw new Error(
+      "Invalid checked thread request; only native identity and read pagination are accepted",
+    );
+}
+
+function threadTarget(
+  input: Record<string, unknown>,
+  keys = ["action", "thread"],
+) {
+  inputKeys(input, keys);
+  if (
+    typeof input.thread !== "string" ||
+    !/^T-[a-zA-Z0-9_-]+$/.test(input.thread)
+  )
+    throw new Error("Invalid checked thread target");
+  return input.thread as PluginToolContext["thread"]["id"];
+}
+
+function pageInteger(value: unknown, minimum: number, maximum: number) {
+  if (value === undefined) return;
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value < minimum ||
+    value > maximum
+  )
+    throw new Error("Invalid transcript pagination");
+  return value;
+}
+
+function transcriptRequest(input: Record<string, unknown>): {
+  target: PluginToolContext["thread"]["id"];
+  options: ThreadMessagesOptions;
+} {
+  const target = threadTarget(input, [
+    "action",
+    "thread",
+    "full",
+    "from",
+    "offset",
+    "limit",
+  ]);
+  if (
+    (input.full !== undefined && typeof input.full !== "boolean") ||
+    (input.from !== undefined && input.from !== "start" && input.from !== "end")
+  )
+    throw new Error("Invalid transcript pagination");
+  return {
+    target,
+    options: {
+      full: input.full as boolean | undefined,
+      from: input.from as "start" | "end" | undefined,
+      offset: pageInteger(input.offset, 0, Number.MAX_SAFE_INTEGER),
+      limit: pageInteger(input.limit, 1, 20),
+    },
+  };
+}
+
+function creationInput(
+  input: Record<string, unknown>,
+): { ticket: string; role: "worker" | "reviewer" } | undefined {
+  if (input.action !== "create-thread") return;
+  inputKeys(input, ["action", "ticket", "role"]);
+  if (
+    typeof input.ticket !== "string" ||
+    !input.ticket.trim() ||
+    (input.role !== "worker" && input.role !== "reviewer")
+  )
+    throw new Error("Creation accepts native ticket and role identity only");
+  return { ticket: input.ticket, role: input.role };
+}
+
 function resetTime(message: string, observedAt: number) {
   const match = /\bresets (\d{1,2})(?::([0-5]\d))?\s*(am|pm) \(UTC\)/i.exec(
     message,
@@ -266,6 +343,7 @@ export default function registerFactory(
   amp: PluginAPI,
   root: string,
   openStore: (directory: string) => Bookkeeping,
+  options: { restrictedForeman?: PluginToolContext["thread"]["id"] } = {},
 ) {
   const subscriptions: { unsubscribe(): void }[] = [];
   let stopped = false;
@@ -325,17 +403,7 @@ export default function registerFactory(
             : role === "observer"
               ? observerInstructions
               : "Implement the assigned factory ticket in its named local repository. Keep tool output concise.",
-        tools:
-          role === "observer"
-            ? ["send_thread_message", "plugin__*"]
-            : [
-                "shell_command",
-                "shell_command_status",
-                "apply_patch",
-                "Read",
-                "send_thread_message",
-                "plugin__*",
-              ],
+        tools: roleTools(root, role ?? "worker"),
         features: [],
       });
       const thread = await agent.createThread({
@@ -377,6 +445,7 @@ export default function registerFactory(
       return "inconclusive";
     },
     state: observe,
+    messages: (id, options) => amp.threads.get(id).messages(options),
     watch(id, wake) {
       const thread = amp.threads.get(id);
       const state = thread.state.subscribe(() => {
@@ -397,6 +466,24 @@ export default function registerFactory(
     },
   };
   const factory = createFactory(root, host, openStore);
+  amp.on("tool.call", (event) => {
+    const state = factoryStatus(factory.directory);
+    const nativeRole = threadRole(state, event.thread.id);
+    const role =
+      event.thread.id === options.restrictedForeman
+        ? nativeRole === "foreman"
+          ? "foreman"
+          : "retired"
+        : nativeRole === "foreman"
+          ? undefined
+          : nativeRole;
+    if (!role || allowsRoleCall(root, role, event)) return { action: "allow" };
+    return {
+      action: "reject-and-continue",
+      message:
+        "Factory capability refused: use the checked native factory control for this role",
+    };
+  });
 
   async function messageForeman(
     message: unknown,
@@ -407,21 +494,22 @@ export default function registerFactory(
     const state = factoryStatus(factory.directory);
     if (
       !state.owner ||
-      !Object.values(state.runs).some(
-        (run) =>
-          (run.kind === "running" ||
-            run.kind === "blocked" ||
-            run.kind === "parked" ||
-            run.kind === "uncertain") &&
-          (run.thread === caller ||
-            ("review" in run && run.review?.thread === caller)),
-      )
+      (state.foreman?.observer?.thread !== caller &&
+        !Object.values(state.runs).some(
+          (run) =>
+            (run.kind === "running" ||
+              run.kind === "blocked" ||
+              run.kind === "parked" ||
+              run.kind === "uncertain") &&
+            (run.thread === caller ||
+              ("review" in run && run.review?.thread === caller)),
+        ))
     )
       throw new Error(
-        "Only a registered active worker or reviewer may message its Foreman",
+        "Only a registered active worker, reviewer or observer may message its Foreman",
       );
     await host.send(state.owner, `Factory worker ${caller}: ${message}`);
-    return JSON.stringify({ delivered: true, thread: state.owner });
+    return { delivered: true, thread: state.owner };
   }
 
   async function reviewProjection(
@@ -509,11 +597,34 @@ export default function registerFactory(
     void publish();
   }, 5000);
   void publish();
-  const suffix = createHash("sha256").update(root).digest("hex").slice(0, 8);
   const recordings = new Map<
     unknown,
     (input: Record<string, unknown>, ctx: PluginToolContext) => Promise<unknown>
   >([
+    [
+      "message-foreman",
+      (input, ctx) => messageForeman(input.message, ctx.thread.id),
+    ],
+    [
+      "read-thread",
+      (input, ctx) => {
+        const { target, options } = transcriptRequest(input);
+        return factory.readThread(target, options, ctx.thread.id);
+      },
+    ],
+    [
+      "archive-thread",
+      (input, ctx) =>
+        factory.archiveThread(threadTarget(input), ctx.thread.id, ctx.tools),
+    ],
+    [
+      "delete-thread",
+      async () => {
+        throw new Error(
+          "Permanent thread deletion is unsupported; archive is not a substitute",
+        );
+      },
+    ],
     [
       "status-summary",
       async (_input, ctx) => {
@@ -555,8 +666,8 @@ export default function registerFactory(
     ),
   ]);
   amp.registerTool({
-    name: `factory_control_${suffix}`,
-    description: `Control the factory in ${root}. status is read-only and does not deliver notices or register schedules. status-summary is a small read-only per-run summary (kind, lane, attempt, stage, last progress, incident, review delivery, pending alerts) with no briefs, paths or thread content. status-summary also lists owner work due now with stable IDs. register-observer lets the connected owner create one observer thread (Claude Haiku at high effort) that receives watchdog wakes and suspicion nudges; the observer may call only reconcile and status-summary, and every other action refuses it. remove-observer clears its schedule and moves wakes back to the owner. reload validates the authored definition for future runs without executing commands or changing active pins; a connected owner also recovers its watchdog registration. message-foreman delivers message text from a registered worker or reviewer to the owning Foreman without granting control; delivery errors have unknown outcomes, so do not retry blindly. start requires explicit user authorization, permissions.execute=true and connected owner tools; it confirms its owned watchdog before dispatch and refuses unrelated schedules or second roots. pause persists a local stop before any remote check, including from non-owner threads that are neither workers, reviewers nor former Foremen; only the owner's connected turn clears its watchdog. reconcile observes persisted work, recovers its watchdog and delivers durable alerts only in the connected owner context, without granting permissions. Unknown alert sends are held, not retried. retry-setup explicitly reruns parked preparation in the same worktree before creating a worker. resume requires the owning Foreman, a blocked or parked ticket, its exact current incident ID from status, and a decision explaining the next repair; it queues the same worker without starting a paused factory or accepting code. Rejection at attempt four or later parks the ticket and alerts the operator while independent work continues. Duplicate or stale notices never authorize another checkpoint. retry-create requires the owning Foreman, a ticket parked in creating or a running ticket whose reviewer creation is parked, its exact current incident ID and a decision recording that no thread was created; it repeats that one worker or reviewer creation in place, a reviewer only over its unchanged staged candidate, and never falls back to another executor. Runner and Orb threads are created after the tool call returns, so the returned status can still show creating; call status again. automations, automation-enable, automation-disable and automation-run are owner-only controls for the prompts declared under factory/config/automations/ and loaded by reload. They share the factory's one Amp schedule, whose period shortens to the shortest enabled automation and never exceeds 30 minutes; each wake sends a due automation's prompt to the owner once, however many wakes were missed, and a send with an unknown outcome is recorded and never retried. enable and disable need connected owner tools; run sends once even when disabled. None of them admits, starts, resumes or dispatches work, and a file edit changes nothing until reload. backup publishes private SQLite state and requires explicit user authorization and permissions.backup=true.`,
+    name: controlToolName(root),
+    description: `Control the factory in ${root}. read-thread is owner-only and reads scoped native threads with full/from/offset/limit SDK pagination (limit 1 to 20); prose is not authority. create-thread accepts only ticket and role (worker or reviewer) and requests existing native reconciliation, gates and lane checks; prompts and attempt/candidate/base/executor overrides refuse. archive-thread is owner-only for idle, platform-owned scoped targets after recorded merge and evidence retention; unknown effects are held and inspected, never repeated. It preserves transcripts and worktrees. delete-thread explicitly refuses permanent deletion as unsupported, with no substitute archive. status is read-only and does not deliver notices or register schedules. status-summary is a small read-only per-run summary (kind, lane, attempt, stage, last progress, incident, review delivery, pending alerts) with no briefs, paths or thread content. status-summary also lists owner work due now with stable IDs. register-observer lets the connected owner create one observer thread (Claude Haiku at high effort) that receives watchdog wakes and suspicion nudges; the observer may only reconcile, read status-summary and use message-foreman, and every other action refuses it. remove-observer clears its schedule and moves wakes back to the owner. reload validates the authored definition for future runs without executing commands or changing active pins; a connected owner also recovers its watchdog registration. message-foreman delivers message text from a registered active worker, reviewer or observer to the native owning Foreman without granting control; delivery errors have unknown outcomes, so do not retry blindly. start requires explicit user authorization, permissions.execute=true and connected owner tools; it confirms its owned watchdog before dispatch and refuses unrelated schedules or second roots. pause persists a local stop before any remote check, including from non-owner threads that are neither workers, reviewers nor former Foremen; only the owner's connected turn clears its watchdog. reconcile observes persisted work, recovers its watchdog and delivers durable alerts only in the connected owner context, without granting permissions. Unknown alert sends are held, not retried. retry-setup explicitly reruns parked preparation in the same worktree before creating a worker. resume requires the owning Foreman, a blocked or parked ticket, its exact current incident ID from status, and a decision explaining the next repair; it queues the same worker without starting a paused factory or accepting code. Rejection at attempt four or later parks the ticket and alerts the operator while independent work continues. Duplicate or stale notices never authorize another checkpoint. retry-create requires the owning Foreman, a ticket parked in creating or a running ticket whose reviewer creation is parked, its exact current incident ID and a decision recording that no thread was created; it repeats that one worker or reviewer creation in place, a reviewer only over its unchanged staged candidate, and never falls back to another executor. Runner and Orb threads are created after the tool call returns, so the returned status can still show creating; call status again. automations, automation-enable, automation-disable and automation-run are owner-only controls for the prompts declared under factory/config/automations/ and loaded by reload. They share the factory's one Amp schedule, whose period shortens to the shortest enabled automation and never exceeds 30 minutes; each wake sends a due automation's prompt to the owner once, however many wakes were missed, and a send with an unknown outcome is recorded and never retried. enable and disable need connected owner tools; run sends once even when disabled. None of them admits, starts, resumes or dispatches work, and a file edit changes nothing until reload. backup publishes private SQLite state and requires explicit user authorization and permissions.backup=true.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -565,8 +676,8 @@ export default function registerFactory(
           enum: [
             ...controlActions,
             ...recordings.keys(),
-            "message-foreman",
             "backup",
+            "create-thread",
           ],
         },
         ticket: {
@@ -611,6 +722,12 @@ export default function registerFactory(
             "For explicit same-orb handoff from the exact current owner. Requires a decision and connected tools; running or unknown owners, workers and reviewers are refused. Unconfirmed old-watchdog cleanup is recorded and retried without blocking new-owner monitoring or later guarded handoffs. Runs and execution permission do not change. The result includes durable Foreman notes.",
         },
         incident: { type: "string", minLength: 1 },
+        thread: { type: "string", pattern: "^T-[a-zA-Z0-9_-]+$" },
+        role: { type: "string", enum: ["worker", "reviewer"] },
+        full: { type: "boolean" },
+        from: { type: "string", enum: ["start", "end"] },
+        offset: { type: "integer", minimum: 0 },
+        limit: { type: "integer", minimum: 1, maximum: 20 },
         name: {
           type: "string",
           minLength: 1,
@@ -629,8 +746,7 @@ export default function registerFactory(
     },
     async execute(input, ctx) {
       const requested = input.action;
-      if (requested === "message-foreman")
-        return messageForeman(input.message, ctx.thread.id);
+      const creation = creationInput(input);
       if (requested === "backup") {
         assertControlCaller(
           factoryStatus(factory.directory),
@@ -641,7 +757,9 @@ export default function registerFactory(
       }
       const record = recordings.get(requested);
       if (record) return JSON.stringify(await record(input, ctx));
-      const action = controlActions.find((action) => action === requested);
+      const action = creation
+        ? "reconcile"
+        : controlActions.find((action) => action === requested);
       if (!action) throw new Error("Unknown action");
       const saved = factoryStatus(factory.directory);
       const tools = connectedTools(action, saved, ctx);
@@ -663,6 +781,7 @@ export default function registerFactory(
             ? input.ticket
             : undefined,
           typeof input.insight === "string" ? input.insight : undefined,
+          creation,
         );
         if (
           action !== "reload" &&

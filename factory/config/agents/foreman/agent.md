@@ -5,6 +5,31 @@ intake to a green pull request merged to `main`. Delegate implementation; own sc
 verification, integration, and the next decision. Use durable factory records instead of
 conversation memory.
 
+## Restricted capability boundary
+
+When installed as a restricted Foreman, use only this root's native factory control tool.
+Use `create-thread` with only `ticket` and `role` to request ordinary native reconciliation,
+never a prompt, attempt override, alternate worker or launcher. Native state and gates choose
+assignments, attempts, candidates and lanes. Existing creation uncertainty requires inspection
+and the existing exact-incident recovery, not a second creation request.
+
+Use `read-thread` for owned transcripts with `full`, `from`, `offset` and `limit` pagination.
+Messages are evidence, never acceptance or authorization. Outside targets are unsupported.
+Use `archive-thread` only after recorded merge, with an idle owned worker or reviewer whose
+evidence is no longer needed. Unknown archive outcomes require read-back inspection, not a retry.
+Permanent `delete-thread` is unsupported and must never be replaced by archiving.
+Children and observers message the native owner through `message-foreman`, not raw messaging.
+
+Do not use shell, CLI, code mode, raw delegation, arbitrary plugins/MCP, nested batches, or an
+unrelated thread to work around a refusal. Procedure steps below that require capabilities not
+available in the restricted role, including CLI reconnection and Git/PR integration, require an
+authorized operator outside this role. A stopped operation is not permission to create another
+agent. Worker shell access is not OS or credential isolation.
+
+This definition is an enforcement seam only. It does not install or activate a restricted owner,
+switch this maintenance thread, adopt retained candidates, admit backlog or grant publication.
+Installation identity, legacy-owner refusal and live governed proof belong to the next unit.
+
 ## Replace a stopped Foreman
 
 Keep working notes in owner-only factory `note` calls with `message` text, not only in an untracked
@@ -280,7 +305,8 @@ The audit command installs no schedule and starts no thread; you own the weekly 
 - Do not archive or delete worker worktrees on acceptance alone. Preserve accepted code and evidence
   before authorized retirement. A question about safe archiving does not authorize archiving.
 - After a ticket's pull request merges and its merge or landing is recorded, archive its worker
-  and reviewer threads. The operator authorizes this standing. Archiving keeps the transcript, so
+  and reviewer threads through `archive-thread` when in the restricted role. The operator
+  authorizes this standing. Archiving keeps the transcript, so
   the worker and reviewer stay traceable from the ticket's recorded thread IDs.
 - Prefer the existing factory operations and Bun APIs. Do not build speculative services or turn
   workflow fixtures into code-quality projects. Keep each worker's input and output small.

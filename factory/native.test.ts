@@ -420,7 +420,7 @@ test.each([false, true])(
     if (run?.kind !== "running") throw new Error("Expected complete worker");
     expect(messages.at(-1)).toMatch(/^factory-key: [a-f0-9]{64}\n/);
     expect(messages.at(-1)?.replace(/^factory-key: [a-f0-9]{64}\n/, "")).toBe(
-      `Work only in your worktree ${run.worktree}. Ticket A: Implement prd.md\nAllowed paths: src/. Check: true.\nDefinition: ${run.definition}.\nDependency evidence: none.\nUse a local commit for the change. Do not push, deploy, create tickets, edit factory files, or delegate.\nForeman: T-owner. Send questions and blockers there with send_thread_message, or the factory control action message-foreman with message text. Messaging does not grant factory control.\nAfter finishing, write JSON to ${join(engine.directory, "A.report.json")}: {"attempt":1,"kind":"candidate","revision":"<full git HEAD>","insight":"<short verified finding>","summary":"<optional public line>"}. If blocked, use {"attempt":1,"kind":"blocked","reason":"<needed decision>"}. Report briefly here too.`,
+      `Work only in your worktree ${run.worktree}. Ticket A: Implement prd.md\nAllowed paths: src/. Check: true.\nDefinition: ${run.definition}.\nDependency evidence: none.\nUse a local commit for the change. Do not push, deploy, create tickets, edit factory files, or delegate.\nForeman: T-owner. Send questions and blockers with the factory control action message-foreman and message text. Messaging does not grant factory control.\nAfter finishing, write JSON to ${join(engine.directory, "A.report.json")}: {"attempt":1,"kind":"candidate","revision":"<full git HEAD>","insight":"<short verified finding>","summary":"<optional public line>"}. If blocked, use {"attempt":1,"kind":"blocked","reason":"<needed decision>"}. Report briefly here too.`,
     );
   },
 );
@@ -4593,6 +4593,7 @@ test("legacy timing adopts once; complete and dependency-only work stay quiet", 
   await engine.tick("pause");
   const empty = openPersistence(engine.directory, [], clock);
   empty.state.runs = {};
+  if (empty.state.foreman) empty.state.foreman.children = {};
   empty.state.enabled = true;
   empty.commit(empty.state, "factory", "fixture", "Dependency waiting only");
   empty.close();

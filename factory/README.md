@@ -727,8 +727,9 @@ observer's registration is confirmed. Every connected owner reconcile repeats th
 read-back, so a failed or interrupted clear is retried and `monitor.problem` stays until the
 clear is confirmed. Pause clears both.
 
-The observer may call only `reconcile` and `status-summary`; the one caller check refuses every
-other action from it before any state change. Its reconcile has no connected tools, so it never
+The observer may call only `reconcile`, `status-summary` and the checked `message-foreman`
+delivery; the one caller check refuses every other control action before any state change.
+Its reconcile has no connected tools, so it never
 changes schedules or sends user alerts; the owner's connected turns still do. `status-summary`
 returns per-run ticket, kind, lane, attempt, stage, last progress time from the lifecycle stage,
 incident ID and reason, and review delivery. Its `due` list names the owner-only work a connected
@@ -1604,6 +1605,64 @@ looping movement. **Back up now** is intentionally disabled until its backend is
 
 The current screen shows ticket IDs and review labels, available thread links, and accepted revision
 hashes. PR metadata, conversation history, and evidence browsing remain backlog work.
+
+## Restricted role capabilities and checked threads
+
+`factory/capabilities.ts` defines an installation seam, not an installed policy.
+`restrictedForeman(root, model)` returns an agent definition with exactly this root's factory
+control tool and no shell, raw thread, delegation, plugin wildcard or arbitrary MCP tools.
+The adapter's optional trusted `restrictedForeman` thread ID binds interception to that identity.
+It does not claim ownership, change modes, create a Foreman, install anything or activate policy
+for an existing maintenance owner. Installation identity, legacy-owner refusal and live governed
+fixture proof belong to the following enforcement unit.
+
+Native child creation selects exact tools by role. Workers and reviewers retain `Read`, patching
+and shell execution/status/termination for implementation and review reports. Observers have only
+the root's control tool. Every selection explicitly excludes both `tool_search` and `code_exec`:
+the installed SDK otherwise adds these deferred MCP routes even with an explicit include list.
+The `tool.call` guard derives child roles from native runs, including retained repair/checkpoint
+identities, and the `foreman.children` identities saved atomically with new native creations.
+Rejected or replaced reviewers remain governed and scoped to their ticket across restart; no
+role is inferred from a missing report or prompt. Legacy current runs stay readable without
+adopting historical candidates. Unknown calls, direct delegation, arbitrary plugins/MCP and
+batch wrappers are refused
+before execution. Rejecting a whole batch also rejects forbidden nested calls. Child controls
+permit only `message-foreman`; observers additionally retain reconcile and the bounded summary.
+Retired identities refuse all governed calls. Unrelated threads keep their existing behavior.
+This is application capability control, not OS, filesystem or credential isolation: a worker's
+legitimate shell can still access its environment. F028 owns that separate boundary.
+
+The factory control tool supplies these typed, owner-only thread requests:
+
+- `create-thread` accepts only `ticket` and `role` (`worker` or `reviewer`). It requests native
+  reconciliation for that identity, not an alternate launcher. Native state supplies attempts,
+  assignments, candidate, model, executor and lane. Worker dispatch uses the existing eligibility
+  and lane checks; a held lane creates nothing. Reviewer requests use ordinary candidate gates
+  and staging. Paused or execution-disabled factories refuse. Existing or uncertain creations
+  refuse replacement requests; inspect and use the existing exact-incident recovery instead.
+  Prompts, attempt/base/candidate/executor overrides are refused, including on direct invocation.
+- `read-thread` accepts an owned `thread`, plus SDK `full`, `from` (`start` or `end`), `offset`
+  and `limit` (1 to 20). Pagination and original content are preserved. Prose cannot grant
+  authority or acceptance. Current owner and registered worker/reviewer/observer targets are in
+  scope; arbitrary outside access is explicitly unsupported, not approved by model-written text.
+- `archive-thread` accepts only an owned `thread`. It refuses the current owner, active observer,
+  unmerged worker/reviewer evidence, and any target still required for review or recovery.
+  Connected platform inspection must prove the exact target, viewer ownership and idle activity.
+  Failed or unrecognized observations never mean idle. Identity is rechecked under the existing
+  native lock. Archive reserves a durable effect before calling observed `amp.update_thread`
+  with `{thread, archived: true}`; it never removes a worktree or transcript. Read-back through
+  `amp.get_thread_status` must confirm `metadata.threadID`, `viewerOwnsThread` and `archived`.
+  A lost acknowledgement or failed read-back is unknown, not permission to repeat. Subsequent
+  requests inspect the result without repeating the effect, including across restart. An
+  unchanged inspection writes no event. No approval wait or model-supplied decision is used.
+- `delete-thread` explicitly refuses permanent deletion as unsupported. It never substitutes
+  archive, deletes evidence, or changes native counters or lifecycle state.
+
+Contracts were inspected through installed `amp plugins show-docs`, `show-agent-options --json`
+and connected `amp.get_thread_status` / `amp.update_thread` descriptions. The status metadata
+shape was also observed in a connected read. Unit tests simulate effects; they do not prove a
+live installed policy or successful platform archiving. Authenticated capped resume, normal
+review/rejection gates and native incident recovery remain unchanged.
 
 ## Checks
 

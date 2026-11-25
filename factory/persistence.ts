@@ -1119,6 +1119,17 @@ export type State = {
     };
     /** Removed observer threads; they keep no control right of any kind. */
     retiredObservers?: ThreadID[];
+    /** Recorded with native creation; rejected/replaced reviews retain their scope and role. */
+    children?: Record<string, { ticket: string; role: "worker" | "reviewer" }>;
+    /** Reserved before the remote archive; uncertain effects are inspected, never repeated. */
+    archives?: Record<
+      string,
+      {
+        at: number;
+        owner: ThreadID;
+        outcome: "sending" | "unknown" | "archived";
+      }
+    >;
   };
   /** Per-automation clock state, keyed by name; set from the loaded definition on reload. */
   automations?: Record<string, AutomationRecord>;
@@ -1922,9 +1933,24 @@ function validateAutomations(value: unknown) {
       throw new Error("Invalid factory automations");
 }
 
-function validateForeman(value: unknown) {
+function validateChildren(value: unknown, runs: unknown) {
+  if (value === undefined) return;
+  for (const [id, entry] of Object.entries(record(value))) {
+    const child = record(entry);
+    if (
+      !thread(id) ||
+      typeof child.ticket !== "string" ||
+      !Object.hasOwn(record(runs), child.ticket) ||
+      !["worker", "reviewer"].includes(String(child.role))
+    )
+      throw new Error("Invalid factory child identity");
+  }
+}
+
+function validateForeman(value: unknown, runs: unknown) {
   if (value !== undefined) {
     const foreman = record(value);
+    validateChildren(foreman.children, runs);
     if (
       !Array.isArray(foreman.notes) ||
       !foreman.notes.every((value: unknown) => {
@@ -1943,7 +1969,17 @@ function validateForeman(value: unknown) {
           ["pending", "cleared", "unreachable"].includes(String(handoff.clear))
         );
       }) ||
-      !validObservers(foreman)
+      !validObservers(foreman) ||
+      (foreman.archives !== undefined &&
+        !Object.entries(record(foreman.archives)).every(([id, value]) => {
+          const archive = record(value);
+          return (
+            thread(id) &&
+            timestamp(archive.at) &&
+            thread(archive.owner) &&
+            ["sending", "unknown", "archived"].includes(String(archive.outcome))
+          );
+        }))
     )
       throw new Error("Invalid Foreman records");
   }
@@ -1975,7 +2011,7 @@ function stateRecord(value: unknown): State {
     (state.owner !== undefined && !thread(state.owner))
   )
     throw new Error("Invalid factory state");
-  validateForeman(state.foreman);
+  validateForeman(state.foreman, state.runs);
   validateMonitor(state.monitor);
   validateAutomations(state.automations);
   if (
