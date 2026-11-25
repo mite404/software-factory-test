@@ -10,15 +10,24 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { backup } from "./backup";
-import { allowsRoleCall, controlToolName, roleTools } from "./capabilities";
+import {
+  allowsRoleCall,
+  controlToolName,
+  restrictedForeman,
+  roleTools,
+} from "./capabilities";
 import type { DashboardSnapshot } from "./dashboard";
 import {
+  factoryDefinition,
   factoryStatus,
   lifecycleStatus,
   repairAttemptCap,
   runStage,
+  runCheckpoint,
   stages,
+  type DefinitionPin,
   type Run,
   type State,
   type StopIncident,
@@ -338,14 +347,84 @@ const activities = {
   DashboardSnapshot["tasks"][number]["activity"]
 >;
 
-/** Register the repository-local native dispatch adapter. Setup supplies the unchanged store. */
+function retainedLaneDigest(run: Run) {
+  const checkpoint = runCheckpoint(run)!;
+  if (
+    checkpoint.lane === "light" ||
+    ("workerModel" in checkpoint &&
+      checkpoint.workerModel &&
+      checkpoint.workerModel !== "openai/gpt-6.1-sol")
+  )
+    throw new Error("Retained worker does not match the governed Sol lane");
+  const digest = checkpoint.definition ?? run.definition;
+  if ("thread" in checkpoint && checkpoint.thread && !digest)
+    throw new Error("Retained lane identity is unavailable");
+  return digest;
+}
+
+function requireGovernedLanes(
+  directory: string,
+  configNow: Awaited<ReturnType<typeof effectiveConfiguration>>,
+) {
+  const pins: DefinitionPin[] = [configNow];
+  for (const run of Object.values(factoryStatus(directory).runs)) {
+    if (run.kind === "done") continue;
+    const digest = retainedLaneDigest(run);
+    if (digest) {
+      const pinned = factoryDefinition(directory, digest);
+      if (!pinned) throw new Error("Retained lane identity is unavailable");
+      pins.push(pinned);
+    }
+  }
+  if (
+    pins.some(
+      (pin) =>
+        pin.workerModel !== "openai/gpt-6.1-sol" ||
+        pin.workerEffort !== "medium" ||
+        pin.lightWorker ||
+        !pin.review ||
+        pin.providerLimit?.mode === "fallback",
+    )
+  )
+    throw new Error(
+      "Governed execution requires one Sol 6.1 medium lane and native review",
+    );
+}
+
+/**
+ * Register the repository-local native dispatch adapter. Setup supplies the unchanged store.
+ * @throws On unsupported governed mode registration or invalid native storage.
+ */
 export default function registerFactory(
   amp: PluginAPI,
   root: string,
   openStore: (directory: string) => Bookkeeping,
-  options: { restrictedForeman?: PluginToolContext["thread"]["id"] } = {},
+  options: {
+    /** Trusted maintenance seam; never accepted from control input. */
+    restrictedForeman?: PluginToolContext["thread"]["id"];
+    /** Generated source digest enables installed enforcement, not maintenance-owner migration. */
+    policy?: string;
+  } = {},
 ) {
   const subscriptions: { unsubscribe(): void }[] = [];
+  const foreman = restrictedForeman(root, "openai/gpt-6.1-sol");
+  const definition = {
+    ...foreman,
+    name: `factory-policy-${options.policy}`,
+    instructions: `${foreman.instructions}\nGoverned root: ${root}\nLoaded policy: ${options.policy}`,
+    reasoningEffort: "medium" as const,
+  };
+  const registeredAgent = options.policy
+    ? amp.createAgent(definition).definition
+    : undefined;
+  if (registeredAgent)
+    subscriptions.push(
+      amp.registerAgentMode({
+        key: "factory-foreman",
+        label: "Factory Foreman",
+        agent: registeredAgent,
+      }),
+    );
   let stopped = false;
   let publishing = false;
   // Amp refuses a runner or Orb thread while a tool call of this plugin is in flight, so such a
@@ -385,7 +464,42 @@ export default function registerFactory(
     return "unknown";
   }
 
+  async function policyIdentity(owner?: PluginToolContext["thread"]["id"]) {
+    if (!options.policy)
+      throw new Error("Loaded policy is legacy unrestricted; refresh required");
+    if (!owner)
+      throw new Error("Governed execution requires an owner identity");
+    // Observed SDK contract: current agent definition, not display metadata or tool input.
+    const actual = (await amp.threads.get(owner).agent()).definition;
+    if (actual.kind !== "agent-definition")
+      throw new Error(
+        "Legacy built-in owner cannot activate governed execution",
+      );
+    if (!isDeepStrictEqual(actual, registeredAgent))
+      throw new Error(
+        "Owner agent does not match the loaded restricted policy",
+      );
+    const configNow = await effectiveConfiguration(root);
+    requireGovernedLanes(factory.directory, configNow);
+    return {
+      policy: options.policy,
+      root,
+      owner,
+      execute: configNow.execute,
+      workerModel: configNow.workerModel,
+      workerEffort: configNow.workerEffort,
+      capacity: 1,
+      review: configNow.review,
+      agent: actual,
+    };
+  }
+
   const host: NativeHost = {
+    requireExecution: options.policy
+      ? async (owner) => {
+          await policyIdentity(owner);
+        }
+      : undefined,
     async create(
       parentThreadID,
       model,
@@ -394,6 +508,7 @@ export default function registerFactory(
       executor = "local",
     ) {
       if (executor !== "local") await outsideToolCalls();
+      if (options.policy) await policyIdentity(parentThreadID);
       const agent = amp.createAgent({
         model,
         reasoningEffort,
@@ -470,13 +585,15 @@ export default function registerFactory(
     const state = factoryStatus(factory.directory);
     const nativeRole = threadRole(state, event.thread.id);
     const role =
-      event.thread.id === options.restrictedForeman
-        ? nativeRole === "foreman"
-          ? "foreman"
-          : "retired"
-        : nativeRole === "foreman"
-          ? undefined
-          : nativeRole;
+      options.policy && nativeRole === "foreman"
+        ? "foreman"
+        : event.thread.id === options.restrictedForeman
+          ? nativeRole === "foreman"
+            ? "foreman"
+            : "retired"
+          : nativeRole === "foreman"
+            ? undefined
+            : nativeRole;
     if (!role || allowsRoleCall(root, role, event)) return { action: "allow" };
     return {
       action: "reject-and-continue",
@@ -601,6 +718,27 @@ export default function registerFactory(
     unknown,
     (input: Record<string, unknown>, ctx: PluginToolContext) => Promise<unknown>
   >([
+    [
+      "policy-status",
+      async (_input, ctx) => {
+        const state = factoryStatus(factory.directory);
+        assertControlCaller(state, ctx.thread.id, "status");
+        try {
+          return {
+            verified: true,
+            ...(await policyIdentity(state.owner ?? ctx.thread.id)),
+          };
+        } catch (error) {
+          return {
+            verified: false,
+            policy: options.policy ?? null,
+            root,
+            owner: state.owner ?? null,
+            reason: String(error),
+          };
+        }
+      },
+    ],
     [
       "message-foreman",
       (input, ctx) => messageForeman(input.message, ctx.thread.id),

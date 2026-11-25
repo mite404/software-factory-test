@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import type { CreateAgentConfig, PluginAPI } from "@ampcode/plugin";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   cp,
@@ -16,6 +17,7 @@ import { join, resolve } from "node:path";
 import { configuration, createFactory, type NativeHost } from "./native";
 import { startDashboard } from "./dashboard";
 import { openPersistence } from "./persistence";
+import { controlToolName } from "./capabilities";
 
 const installer = resolve(import.meta.dir, "setup-factory.ts");
 
@@ -369,6 +371,38 @@ test("refresh rebuilds only the adapter in two repositories", async () => {
         ).status,
       ).toBe(0);
       const plugin = join(root, ".amp/plugins/software-factory.js");
+      let modes = 0;
+      let dispose = () => {};
+      const generated = await import(plugin);
+      generated.default({
+        createAgent(config: CreateAgentConfig) {
+          return { definition: { kind: "agent-definition", ...config } };
+        },
+        registerAgentMode(mode: { key: string; agent: CreateAgentConfig }) {
+          modes++;
+          expect(mode).toMatchObject({
+            key: "factory-foreman",
+            agent: {
+              model: "openai/gpt-6.1-sol",
+              reasoningEffort: "medium",
+              features: [],
+              tools: {
+                include: [controlToolName(root)],
+                exclude: ["tool_search", "code_exec"],
+              },
+            },
+          });
+          return { unsubscribe() {} };
+        },
+        registerTool() {},
+        on() {},
+        logger: { log() {} },
+        onDispose(fn: () => void) {
+          dispose = fn;
+        },
+      } as unknown as PluginAPI);
+      dispose();
+      expect(modes).toBe(1);
       const config = join(root, ".factory.json");
       const saved = await Bun.file(config).json();
       expect(saved.review).toBe(name === "first");
@@ -392,7 +426,12 @@ test("refresh rebuilds only the adapter in two repositories", async () => {
 
       expect(run().stdout).toContain("SETUP UNCHANGED");
       expect(run(["--check"]).status).toBe(0);
+      const installed = await Bun.file(plugin).text();
+      await writeFile(plugin, installed + "// changed bundle\n");
+      expect(run(["--check"]).status).toBe(1);
       await writeFile(plugin, "obsolete\n");
+      expect(run(["--check"]).status).toBe(1);
+      expect(run().status).toBe(1);
       expect(run(["--refresh"]).status).toBe(0);
       expect(await Bun.file(plugin).text()).toContain(
         "Sequential local factory dispatch",

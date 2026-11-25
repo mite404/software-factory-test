@@ -182,6 +182,8 @@ export type Bookkeeping = {
 
 /** Remote operations only; local state, commands, and verification stay real in tests. */
 export type NativeHost = {
+  /** Require supported platform identity before governed execution. @throws On unknown or unrestricted ownership. */
+  requireExecution?(owner: ThreadID | undefined): Promise<void>;
   /** Create a worker; omitted effort preserves Amp's model default. */
   create(
     parent: ThreadID,
@@ -4408,6 +4410,15 @@ export function createFactory(
     return result;
   }
 
+  async function requireExecution(
+    action: string,
+    owner?: ThreadID,
+    savedOwner?: ThreadID,
+  ) {
+    if (action === "pause") return;
+    await host.requireExecution?.(savedOwner ?? owner);
+  }
+
   /** Explicit same-storage takeover, without dispatch or changes to worker checkpoints.
    * @throws On stale ownership, active/unknown owner, disconnected tools or unsafe pending effects.
    */
@@ -4435,6 +4446,7 @@ export function createFactory(
             owner,
             watchdogFingerprint(root, directory),
           );
+          await requireExecution("handoff", owner);
           const activity = await observe(state.owner!);
           if (activity === "running" || activity === "unknown")
             throw new Error("Handoff refuses a running or unknown owner");
@@ -4903,6 +4915,7 @@ export function createFactory(
         if (action === "reload" || action === "admit")
           return loadDefinition(action, owner, tools, selectedTicket);
         const config = await effectiveConfiguration(root);
+        await requireExecution(action, owner, initial.owner);
         if (action === "reconcile" && !creation)
           await applyAutomationRequests(owner, tools);
         if (!retryAdmission(initial, action, !!config.lightWorker)) {

@@ -1,5 +1,7 @@
 import { expect, spyOn, test } from "bun:test";
 import type {
+  AgentDefinition,
+  CreateAgentConfig,
   PluginAPI,
   PluginConfirmOptions,
   PluginToolContext,
@@ -18,14 +20,284 @@ import {
   factoryRecords,
   enqueueAutomationRequest,
   openPersistence,
+  type DefinitionPin,
   type lifecycleStatus,
   type Run,
   type State,
 } from "./persistence";
-import { watchdogFixture } from "./bookkeeping.fixture";
+import { openStore, watchdogFixture } from "./bookkeeping.fixture";
+import { watchdogFingerprint } from "./watchdog";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
+
+test("installed policy refuses legacy, unknown and mismatched owners across recovery without changing native state", async () => {
+  const root = await mkdtemp(join(tmpdir(), "factory-installed-policy-"));
+  const directory = join(root, ".git/factory");
+  let dispose = () => {};
+  let execute!: (
+    input: Record<string, unknown>,
+    ctx: PluginToolContext,
+  ) => Promise<unknown>;
+  let registered!: AgentDefinition;
+  let actual: AgentDefinition | undefined = {
+    kind: "builtin-agent",
+    mode: "medium",
+  };
+  let start!: (event: unknown, ctx: unknown) => Promise<unknown>;
+  let recovery = Promise.withResolvers<void>();
+  const ctx = {
+    thread: { id: "T-owner" },
+    tools: watchdogFixture().tools,
+  } as unknown as PluginToolContext;
+  const load = () =>
+    registerFactory(
+      {
+        logger: {
+          log(message: string) {
+            if (message === "factory recovery failed") recovery.resolve();
+          },
+        },
+        createAgent(config: CreateAgentConfig) {
+          return {
+            definition: {
+              ...config,
+              kind: "agent-definition",
+              instructions: config.instructions ?? "",
+              // Exercise a platform-derived default, not a config pass-through.
+              owner: { type: "user" as const },
+            },
+          };
+        },
+        registerAgentMode(mode: { agent: AgentDefinition }) {
+          registered = mode.agent;
+          return { unsubscribe() {} };
+        },
+        registerTool(tool: { execute: typeof execute }) {
+          execute = tool.execute;
+        },
+        on(name: string, handler: typeof start) {
+          if (name === "agent.start") start = handler;
+        },
+        onDispose(fn: () => void) {
+          dispose = fn;
+        },
+        threads: {
+          get() {
+            return {
+              async agent() {
+                if (!actual) throw new Error("identity unavailable");
+                return { definition: actual };
+              },
+            };
+          },
+        },
+      } as unknown as PluginAPI,
+      root,
+      openStore,
+      { policy: "observed-source-identity" },
+    );
+  try {
+    git(root, "init", "-q");
+    await writeFile(join(root, "prd.md"), "# Fixture\n");
+    await writeFile(join(root, ".factory-tickets.json"), "[]\n");
+    await writeFile(
+      join(root, ".factory.json"),
+      JSON.stringify({
+        version: 1,
+        prd: "prd.md",
+        tickets: ".factory-tickets.json",
+        verify: "true",
+        scope: ["src/"],
+        mode: "bug-finding",
+        workerModel: "openai/gpt-6.1-sol",
+        workerEffort: "medium",
+        review: true,
+        capacity: 1,
+        permissions: { execute: true, publish: false, externalTickets: false },
+      }),
+    );
+    const storage = openPersistence(directory, []);
+    storage.commit(
+      {
+        enabled: true,
+        owner: "T-owner",
+        runs: {},
+        monitor: {
+          fingerprint: watchdogFingerprint(root, directory),
+          schedule: "installed",
+          notifications: [],
+        },
+      },
+      "factory",
+      "fixture",
+      "existing owner",
+    );
+    storage.close();
+    const before = factoryStatus(directory);
+    const events = factoryEvents(directory);
+    load();
+    await recovery.promise;
+    for (const identity of [
+      actual,
+      undefined,
+      {
+        ...registered,
+        tools: "all",
+      } as AgentDefinition,
+    ]) {
+      actual = identity;
+      for (const action of [
+        "start",
+        "reconcile",
+        "retry-setup",
+        "retry-create",
+        "resume",
+      ]) {
+        const failure = await execute(
+          { action, ticket: "A", decision: "repair", incident: "exact" },
+          ctx,
+        ).then(
+          () => "UNEXPECTED SUCCESS",
+          (error: unknown) => String(error),
+        );
+        expect(failure).toContain(
+          !identity
+            ? "identity unavailable"
+            : identity.kind === "builtin-agent"
+              ? "Legacy built-in owner"
+              : "does not match",
+        );
+      }
+      expect(
+        JSON.parse(String(await execute({ action: "policy-status" }, ctx)))
+          .verified,
+      ).toBe(false);
+      await start({ thread: ctx.thread }, { tools: ctx.tools });
+      expect(factoryStatus(directory)).toEqual(before);
+      expect(factoryEvents(directory)).toEqual(events);
+    }
+    dispose();
+    actual = { kind: "builtin-agent", mode: "medium" };
+    recovery = Promise.withResolvers<void>();
+    load();
+    await recovery.promise;
+    const takeover = await execute(
+      { action: "handoff", owner: "T-owner", decision: "replace legacy owner" },
+      { ...ctx, thread: { ...ctx.thread, id: "T-replacement" } },
+    ).catch((error: unknown) => String(error));
+    expect(takeover).toContain("Legacy built-in owner");
+    expect(factoryStatus(directory)).toEqual(before);
+    expect(factoryEvents(directory)).toEqual(events);
+    actual = registered;
+    expect(
+      JSON.parse(String(await execute({ action: "policy-status" }, ctx))),
+    ).toMatchObject({
+      verified: true,
+      root,
+      owner: "T-owner",
+      policy: "observed-source-identity",
+      execute: true,
+      workerModel: "openai/gpt-6.1-sol",
+      workerEffort: "medium",
+      capacity: 1,
+      review: true,
+    });
+    expect(factoryStatus(directory)).toEqual(before);
+    expect(factoryEvents(directory)).toEqual(events);
+    expect(registered).toMatchObject({
+      model: "openai/gpt-6.1-sol",
+      reasoningEffort: "medium",
+      features: [],
+      tools: {
+        include: [controlToolName(root)],
+        exclude: ["tool_search", "code_exec"],
+      },
+    });
+    const configPath = join(root, ".factory.json");
+    const savedConfig = await readFile(configPath, "utf8");
+    for (const change of [
+      { review: false },
+      { workerEffort: "high" },
+      {
+        providerLimit: {
+          mode: "fallback",
+          reviewerModel: "anthropic/claude-sonnet-4.6",
+        },
+      },
+    ]) {
+      await writeFile(
+        configPath,
+        JSON.stringify({ ...JSON.parse(savedConfig), ...change }),
+      );
+      const identity = JSON.parse(
+        String(await execute({ action: "policy-status" }, ctx)),
+      );
+      expect(identity).toMatchObject({ verified: false });
+      expect(identity.reason).toContain("one Sol 6.1 medium lane");
+      expect(factoryStatus(directory)).toEqual(before);
+      expect(factoryEvents(directory)).toEqual(events);
+    }
+    await writeFile(configPath, savedConfig);
+    const started = JSON.parse(String(await execute({ action: "start" }, ctx)));
+    expect(started).toMatchObject({
+      enabled: true,
+      owner: "T-owner",
+      runs: {},
+    });
+    for (const [index, effort] of (
+      [undefined, "high", "medium"] as const
+    ).entries()) {
+      const retained = openPersistence(directory, []);
+      const pin: DefinitionPin = {
+        digest: String(index + 1).repeat(64),
+        scope: ["src/"],
+        verify: "true",
+        review: true,
+        workerModel: "openai/gpt-6.1-sol",
+        instructions: "Retained fixture",
+        tickets: join(root, ".factory-tickets.json"),
+        // JSON persistence omits undefined, as older effort-less pins did.
+        workerEffort: effort,
+      };
+      retained.definition(pin);
+      retained.commit(
+        {
+          ...retained.state,
+          runs: {
+            A: {
+              kind: "uncertain",
+              thread: "T-worker",
+              reason: "retained legacy worker",
+              definition: pin.digest,
+            },
+          },
+        },
+        "A",
+        "fixture",
+        "retained lane pin",
+      );
+      retained.close();
+      const saved = factoryStatus(directory);
+      const savedEvents = factoryEvents(directory);
+      const identity = JSON.parse(
+        String(await execute({ action: "policy-status" }, ctx)),
+      );
+      expect(identity.verified).toBe(effort === "medium");
+      if (effort !== "medium") {
+        const refusal = await execute({ action: "start" }, ctx).catch(
+          (error: unknown) => String(error),
+        );
+        expect(refusal).toContain("one Sol 6.1 medium lane");
+      }
+      expect(factoryStatus(directory)).toEqual(saved);
+      expect(factoryEvents(directory)).toEqual(savedEvents);
+    }
+  } finally {
+    dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("registered workers cannot reach alternate tools through the public adapter", async () => {
   const root = await mkdtemp(join(tmpdir(), "factory-capabilities-"));
