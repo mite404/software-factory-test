@@ -10,9 +10,9 @@ const mergeQuery = `query($owner:String!,$repo:String!,$pr:Int!,$endCursor:Strin
           totalCount pageInfo { hasNextPage endCursor }
           nodes {
             __typename
-            ... on CheckRun { name status conclusion detailsUrl completedAt startedAt
+            ... on CheckRun { id name status conclusion detailsUrl completedAt startedAt
               checkSuite { workflowRun { workflow { name } } } }
-            ... on StatusContext { context state targetUrl }
+            ... on StatusContext { id context state targetUrl }
           }
         } }
       } } }
@@ -47,6 +47,40 @@ function row(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error("Malformed GitHub pull request evidence");
   return { ...value };
+}
+
+function nonempty(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function validCheckFields(check: Record<string, unknown>) {
+  if (check.__typename === "CheckRun")
+    return (
+      nonempty(check.name) &&
+      nonempty(check.status) &&
+      (check.conclusion === null || nonempty(check.conclusion))
+    );
+  return (
+    check.__typename === "StatusContext" &&
+    nonempty(check.context) &&
+    nonempty(check.state)
+  );
+}
+
+/** Recognize saved check fields, including older evidence recorded without an ID. */
+export function validMergeCheck(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const check: Record<string, unknown> = { ...value };
+  return (
+    (check.id === undefined || nonempty(check.id)) && validCheckFields(check)
+  );
+}
+
+/** Return whether a validated check is explicitly green. */
+export function greenMergeCheck(check: Record<string, unknown>): boolean {
+  return check.__typename === "CheckRun"
+    ? check.status === "COMPLETED" && check.conclusion === "SUCCESS"
+    : check.__typename === "StatusContext" && check.state === "SUCCESS";
 }
 
 function pullRow(page: unknown) {
@@ -85,18 +119,50 @@ function pullHead(page: unknown) {
 function checkPage(rollup: unknown, morePages: boolean) {
   const contexts =
     rollup === null
-      ? { totalCount: 0, pageInfo: { hasNextPage: false }, nodes: [] }
+      ? {
+          totalCount: 0,
+          pageInfo: { hasNextPage: false, endCursor: null },
+          nodes: [],
+        }
       : row(row(rollup).contexts);
   const { totalCount: total, nodes } = contexts;
+  const { hasNextPage, endCursor } = row(contexts.pageInfo);
   if (
     typeof total !== "number" ||
     !Number.isSafeInteger(total) ||
     total < 0 ||
     !Array.isArray(nodes) ||
-    row(contexts.pageInfo).hasNextPage !== morePages
+    hasNextPage !== morePages
   )
     throw new Error("Incomplete GitHub check evidence");
-  return { total, checks: nodes.map(row) };
+  if (morePages && nodes.length === 0)
+    throw new Error("Invalid GitHub check pagination cursor");
+  return { total, checks: nodes.map(row), endCursor };
+}
+
+function validateCheckCursor(
+  page: ReturnType<typeof checkPage>,
+  cursors: Set<string>,
+) {
+  if (page.total === 0 && page.checks.length === 0 && page.endCursor === null)
+    return;
+  if (
+    !page.checks.length ||
+    !nonempty(page.endCursor) ||
+    cursors.has(page.endCursor)
+  )
+    throw new Error("Invalid GitHub check pagination cursor");
+  cursors.add(page.endCursor);
+}
+
+function collectCheckIDs(checks: Record<string, unknown>[], ids: Set<string>) {
+  for (const check of checks) {
+    if (!validMergeCheck(check))
+      throw new Error(`Malformed GitHub check ${String(check.__typename)}`);
+    if (!nonempty(check.id)) throw new Error("Missing GitHub check ID");
+    if (ids.has(check.id)) throw new Error(`Duplicate check ID ${check.id}`);
+    ids.add(check.id);
+  }
 }
 
 /** Read and attribute every check to the observed PR head, without writing to GitHub.
@@ -142,12 +208,19 @@ export function readPullRequest(
   if (!Array.isArray(pages) || !pages.length)
     throw new Error("Incomplete GitHub check evidence");
   const { rollup, ...snapshot } = pullHead(pages[0]);
-  const { total, checks } = checkPage(rollup, pages.length > 1);
+  const first = checkPage(rollup, pages.length > 1);
+  const { total, checks } = first;
+  const ids = new Set<string>();
+  const cursors = new Set<string>();
+  validateCheckCursor(first, cursors);
+  collectCheckIDs(checks, ids);
   for (let index = 1; index < pages.length; index++) {
     const { rollup, ...pull } = pullHead(pages[index]);
     const page = checkPage(rollup, index < pages.length - 1);
     if (!isDeepStrictEqual(snapshot, pull) || total !== page.total)
       throw new Error("GitHub pull request evidence changed during pagination");
+    validateCheckCursor(page, cursors);
+    collectCheckIDs(page.checks, ids);
     checks.push(...page.checks);
   }
   if (checks.length !== total)

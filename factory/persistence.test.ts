@@ -932,6 +932,65 @@ test("merge records validate on save and reopen without changing legacy runs", a
   }
 });
 
+const failedMergeCheck = {
+  __typename: "CheckRun",
+  name: "quality",
+  status: "COMPLETED",
+  conclusion: "FAILURE",
+};
+
+test.each([
+  { name: "empty object", checks: [{}], accepted: false },
+  {
+    name: "invalid status context",
+    checks: [{ __typename: "StatusContext", context: "quality" }],
+    accepted: false,
+  },
+  {
+    name: "failed check without exception",
+    checks: [failedMergeCheck],
+    accepted: false,
+  },
+  {
+    name: "failed check with valid exception",
+    checks: [failedMergeCheck],
+    accepted: true,
+    exception: { decision: "Operator approved", reason: "quality failed" },
+  },
+  {
+    name: "malformed check with exception",
+    checks: [{}],
+    accepted: false,
+    exception: { decision: "Operator approved", reason: "quality failed" },
+  },
+])("merge storage replay: $name", async ({ checks, accepted, exception }) => {
+  const f = await fixture();
+  const storage = openPersistence(f.directory, queue);
+  storage.commit(parked, "D", "fixture", "accepted");
+  storage.close();
+  const merge = {
+    pr: 42,
+    commit: "a".repeat(40),
+    at: "2026-11-15T12:34:56.000Z",
+    evidence: {
+      head: "b".repeat(40),
+      checks,
+      ...(exception ? { exception } : {}),
+    },
+  };
+  const db = new Database(join(f.directory, "state.sqlite"));
+  try {
+    db.run("UPDATE runs SET data = ? WHERE ticket = 'D'", [
+      JSON.stringify({ ...parked.runs.D, merge }),
+    ]);
+  } finally {
+    db.close();
+  }
+  const replay = () => factoryStatus(f.directory).runs.D;
+  if (accepted) expect(replay()).toMatchObject({ merge });
+  else expect(replay).toThrow(/invalid factory merge/i);
+});
+
 test("planning refresh cannot grant admission or rewrite admitted scope", async () => {
   const f = await fixture();
   const planned = {

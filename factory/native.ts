@@ -37,7 +37,7 @@ import {
 import definitionSchema from "./definition.schema.json";
 import type { Executor } from "./executor";
 import type { DeliveryIntent } from "./delivery";
-import type { readPullRequest } from "./github";
+import { greenMergeCheck, type readPullRequest } from "./github";
 import { parseWorkerReport, workerReportExamples } from "./worker-report";
 import {
   deliverAlerts,
@@ -1072,17 +1072,7 @@ function parseLandingRequest(value: unknown) {
 
 function checkRefusal(checks: Record<string, unknown>[]) {
   if (!checks.length) return "No checks observed on the PR head";
-  const failed = checks.find((check) =>
-    check.__typename === "CheckRun"
-      ? check.status !== "COMPLETED" ||
-        check.conclusion !== "SUCCESS" ||
-        typeof check.name !== "string" ||
-        !check.name.trim()
-      : check.__typename !== "StatusContext" ||
-        check.state !== "SUCCESS" ||
-        typeof check.context !== "string" ||
-        !check.context.trim(),
-  );
+  const failed = checks.find((check) => !greenMergeCheck(check));
   if (failed)
     return `Check ${String(failed.name ?? failed.context ?? failed.__typename)} is not green (${String(failed.status ?? failed.state)} / ${String(failed.conclusion)})`;
 }
@@ -1100,7 +1090,7 @@ function mergeEvidence(
   const parents = git(root, "show", "-s", "--format=%P", commit)
     .split(/\s+/)
     .filter(Boolean);
-  if (parents.length === 2 && parents[1] !== head)
+  if (parents[1] !== undefined && parents[1] !== head)
     throw new Error("Merge commit second parent does not match the PR head");
   const reason =
     parents.length !== 2

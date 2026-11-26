@@ -1235,7 +1235,8 @@ For `record-merge`, GitHub must identify the PR as merged at the supplied commit
 have exactly two parents, with the second equal to the PR head. The GitHub read must identify the
 commit its checks belong to and return the complete rollup for that same head. At least one check
 must be present. Every check run must be `COMPLETED` with `SUCCESS`, and every status context must
-be `SUCCESS`. Duplicate names are evaluated separately. A refusal leaves the ticket accepted.
+be `SUCCESS`. Duplicate names with distinct check IDs are evaluated separately. Repeated IDs or
+invalid pagination make the evidence unusable. A refusal leaves the ticket accepted.
 
 After explicit operator approval, pass a nonempty `decision` to record an exception for a failed
 check policy or a nonstandard parent count. This does not waive upstream or patch proof, PR

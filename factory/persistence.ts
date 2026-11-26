@@ -14,6 +14,7 @@ import { validCron } from "./cron";
 import { validReview, type Review } from "./review";
 import { validExecutor, type Executor } from "./executor";
 import { validDeliveryIntent, type DeliveryIntent } from "./delivery";
+import { greenMergeCheck, validMergeCheck } from "./github";
 import type { Actor, pipelineSteps } from "./pipeline";
 import type { Check } from "./config";
 
@@ -1676,15 +1677,12 @@ function validMergeEvidence(value: unknown) {
     typeof evidence.head === "string" &&
     /^[a-f0-9]{40}$/.test(evidence.head) &&
     Array.isArray(evidence.checks) &&
-    evidence.checks.every(
-      (check: unknown) =>
-        check !== null && typeof check === "object" && !Array.isArray(check),
-    ) &&
+    evidence.checks.every(validMergeCheck) &&
     Object.keys(evidence).every((key) =>
       ["head", "checks", "exception"].includes(key),
     ) &&
     (evidence.exception === undefined
-      ? evidence.checks.length > 0
+      ? evidence.checks.length > 0 && evidence.checks.every(greenMergeCheck)
       : validMergeException(evidence.exception))
   );
 }
