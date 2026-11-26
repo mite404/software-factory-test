@@ -2486,7 +2486,12 @@ async function damageCandidate(
   if (gate === "revision") {
     await writeFile(
       reportPath,
-      JSON.stringify({ kind: "candidate", attempt: 1, revision: base }),
+      JSON.stringify({
+        kind: "candidate",
+        attempt: 1,
+        revision: base,
+        insight: "Verified candidate",
+      }),
     );
   } else if (gate === "dirty") {
     await writeFile(join(worktree, "src/value"), "dirty");
@@ -2506,6 +2511,7 @@ async function damageCandidate(
         kind: "candidate",
         attempt: 1,
         revision: git(worktree, "rev-parse", "HEAD"),
+        insight: "Verified candidate",
       }),
     );
   }
@@ -2771,7 +2777,12 @@ test.each([
       const reportPath = join(root, ".git/factory/A.report.json");
       await writeFile(
         reportPath,
-        JSON.stringify({ kind: "candidate", attempt: 1, revision }),
+        JSON.stringify({
+          kind: "candidate",
+          attempt: 1,
+          revision,
+          insight: "Verified candidate",
+        }),
       );
       const report = await readFile(reportPath, "utf8");
       disconnected = true;
@@ -2857,6 +2868,7 @@ test.each([
               kind: "candidate",
               attempt: 2,
               revision: git(worktree, "rev-parse", "HEAD"),
+              insight: "Verified candidate",
             }),
           );
           expect((await control("reconcile")).runs.A).toMatchObject({
@@ -2910,6 +2922,7 @@ test.each([
             kind: "candidate",
             attempt,
             revision,
+            insight: "Verified candidate",
           }),
         );
       }
@@ -3337,15 +3350,15 @@ test("setup recovery control preserves durable failure and compatible observatio
     const report = join(directory, "A.report.json");
     await writeFile(report, "not-json");
     const invalidReport = await wake({ thread: { id: "T-owner" } }, ctx);
-    expect(invalidReport).toMatchObject({
-      message: {
-        display: true,
-        content: expect.stringContaining("Factory reconciliation failed."),
-      },
-    });
-    expect(JSON.stringify(invalidReport)).not.toContain(
-      "Monitored execution is not confirmed",
+    expect(JSON.stringify(invalidReport ?? null)).not.toContain(
+      "Factory reconciliation failed.",
     );
+    expect((await control("status")).runs.A).toMatchObject({
+      kind: "running",
+      thread: "T-worker",
+      attempt: 2,
+      rejectedBy: "report",
+    });
     await rm(report);
     workerActivity = "running";
     const beforePause = toolCalls;

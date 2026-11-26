@@ -515,13 +515,17 @@ test("a factory-wide brief refusal holds both lanes", async () => {
   try {
     await f.start();
     f.activity.set("T-2", "running");
-    const report = join(f.directory, "M1.report.json");
-    await f.submit("M1", "main", "main\n");
-    const empty = {
-      ...JSON.parse(await readFile(report, "utf8")),
+    const revision = await f.submit("M1", "main", "main\n");
+    git(f.root, "merge", "--ff-only", revision);
+    const legacy = openPersistence(f.directory, []);
+    legacy.state.runs.M1 = {
+      kind: "done",
+      revision,
+      thread: "T-1",
       insight: " ",
     };
-    await writeFile(report, JSON.stringify(empty));
+    legacy.commit(legacy.state, "M1", "accepted", revision);
+    legacy.close();
     expect((await f.tick()).runs.M2).toMatchObject({
       kind: "blocked",
       incident: { reason: "brief-incomplete" },

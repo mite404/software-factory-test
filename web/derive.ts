@@ -8,6 +8,7 @@ import type {
   AutomationAction,
   AutomationRequest,
   CheckStatus,
+  Run,
   Stage,
   StopIncident,
   stages as declaredStages,
@@ -124,7 +125,7 @@ export type FeedTask = DashboardSnapshot["tasks"][number] & {
   actor?: Actor | null; // who must act now; null is nobody
   clearsAt?: string | null; // when a provider limit clears, if known
   step?: number | null; // index into pipelineSteps where the run sits; null before one exists
-  rejectedBy?: "gate" | "review" | "merge" | null; // the step that rejected the last attempt
+  rejectedBy?: Extract<Run, { kind: "running" }>["rejectedBy"] | null;
   summary?: string | null; // curated public one-line outcome, set at acceptance
   // The last gate's per-check results (a flat verify is one check); null before any gate returned.
   checks?: { attempt: number; results: CheckStatus[] } | null;
@@ -366,6 +367,7 @@ const STOPPED = new Set(["escalated", "parked", "blocked", "uncertain"]);
 const REASONS: Record<StopIncident["reason"], string> = {
   "verification-rejected":
     "Verification rejected the repaired candidate; it waits for a decision.",
+  "report-invalid": "The builder submitted an invalid report.",
   "gate-failed": "The pinned gate failed.",
   "review-rejected": "Cold review rejected the candidate.",
   "worker-blocked": "The builder reported that it is blocked.",

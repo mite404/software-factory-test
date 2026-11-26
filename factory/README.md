@@ -489,15 +489,22 @@ status. `activity` (`working`, `idle`, `blocked` or `null`) is the live observat
 in flight, and the page says that word, or else the status the `stages` list declares for the
 run's `stage`. A dashboard observation saved before `activity` existed has none, so it reads as
 unobserved. Stop notices name the stage and its actor. The worker report's `insight` stays private.
+A worker writes one JSON object to its `<ticket>.report.json`. Both report kinds require the
+current positive integer `attempt`. A `candidate` requires a full 40-digit hexadecimal Git
+`revision` and a nonblank `insight`. The factory keeps at most the first 1,000 characters of
+`insight`. A `blocked` report requires a nonblank `reason`. New acceptance evidence excludes
+unknown keys. A valid report for a different attempt is ignored. A malformed report names the
+invalid field in private repair feedback and follows the existing same-worker rejection and
+escalation rules. Reconciliation does not reject the same unchanged malformed file twice.
 A report may add an explicitly public `summary`; acceptance curates it like a title with
 `publicSummary` (one line, at most 120 characters, refused if it holds a path, URL or thread ID)
 and saves only the result on the done run. The feed publishes that field or `null`; landings and
 older runs omit it.
 A first rejection sends the same worker back with no stop. `reject` saves the failed attempt as
 `rejectedAttempt` and records a `rejected` event whose detail is
-`{ reason, attempt, evidence }`: `gate-failed`, `review-rejected` or `target-changed` (a merge
-rejection) from `rejectionReasons`, the failed attempt, and the private gate log or verdict that
-the audit reads. Until the repair message is sent, the feed reads the ticket as `working` and
+`{ reason, attempt, evidence }`: `report-invalid`, `gate-failed`, `review-rejected` or
+`target-changed` (a merge rejection) from `rejectionReasons`, the failed attempt, and private
+evidence. Until the repair message is sent, the feed reads the ticket as `working` and
 publishes `repair: { reason, attempt }`. It is `null` otherwise, so delivery and acceptance clear
 it, and a later resume, whose attempt has moved past `rejectedAttempt`, never reuses it. The page
 words every reason code in one fixed sentence.
@@ -641,7 +648,7 @@ clean candidate, the normal path gates it again once; otherwise the run is rejec
 usual and never reads `gating`. A gate has no effect outside its worktree. The `status` action reads
 the committed snapshot without queueing behind a running reconcile, so it reports `gating` while a
 gate runs. Each commit stamps `stageAt` on every run whose stage changed. `reject` records
-`rejectedBy` as `gate`, `review` or `merge` (a rebase conflict), and acceptance records
+`rejectedBy` as `report`, `gate`, `review` or `merge` (a rebase conflict), and acceptance records
 `acceptedAt`. Runs saved before these fields open unchanged and read `stageAt` as unknown.
 
 ### Provider limit policy

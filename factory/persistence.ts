@@ -146,11 +146,12 @@ type PipelineStep = (typeof pipelineSteps)[number]["id"];
 /** The public reason code a first rejection by each step records; a merge rejection is a moved
  * target the candidate did not replay onto. */
 export const rejectionReasons = {
+  report: "report-invalid",
   gate: "gate-failed",
   review: "review-rejected",
   merge: "target-changed",
 } as const satisfies Record<
-  "gate" | "review" | "merge",
+  Extract<PipelineStep, "report" | "gate" | "review" | "merge">,
   StopIncident["reason"]
 >;
 export type StopIncident = {
@@ -160,10 +161,10 @@ export type StopIncident = {
   cause?: { thread: ThreadID; role: "worker" | "reviewer" };
   base: string;
   attempt: number;
-  // `gate-failed` and `review-rejected` are never saved on an incident: a first rejection that
-  // sends the same worker back records them on its `rejected` event.
+  // First-rejection reason codes belong to the `rejected` event, not a stop incident.
   reason:
     | "verification-rejected"
+    | "report-invalid"
     | "gate-failed"
     | "review-rejected"
     | "worker-blocked"
@@ -215,7 +216,9 @@ export type Run = (
         deadline?: number;
       };
       /** The pipeline step that rejected the previous attempt. */
-      rejectedBy?: Extract<PipelineStep, "gate" | "review" | "merge">;
+      rejectedBy?: keyof typeof rejectionReasons;
+      /** Identity of the malformed write, so reconciling it again costs no attempt. */
+      rejectedReport?: string;
       /** Absent before a gate returns; a flat `verify` gate records one required check `verify`. */
       checks?: CheckResults;
       /** The attempt a first rejection sent back to this worker, saved by that rejection. */
@@ -1154,7 +1157,7 @@ type Event = { at: string; ticket: string; action: string; detail: string };
 
 /** Closed outcomes per evidence kind; anything else is refused at write and read. */
 export const evidenceOutcomes = {
-  report: ["candidate"],
+  report: ["candidate", "candidate-typed"],
   gate: ["gate-passed", "gate-failed", "post-gate-changed"],
   "gate-rerun": ["gate-passed", "gate-failed", "post-gate-changed"],
   review: ["pass", "issues"],
@@ -1504,9 +1507,10 @@ function validStageFacts(run: Record<string, unknown>): boolean {
   return (
     (run.gate === undefined || validGateMarker(record(run.gate))) &&
     validCheckResults(run.checks) &&
-    [undefined, "gate", "review", "merge"].includes(
-      run.rejectedBy as string | undefined,
+    [undefined, ...Object.keys(rejectionReasons)].some(
+      (step) => step === run.rejectedBy,
     ) &&
+    (run.rejectedReport === undefined || validDigest(run.rejectedReport)) &&
     (run.rejectedAttempt === undefined || positiveInteger(run.rejectedAttempt))
   );
 }

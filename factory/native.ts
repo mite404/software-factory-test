@@ -10,6 +10,7 @@ import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import {
   lstat,
   mkdir,
+  open,
   readdir,
   readFile,
   unlink,
@@ -35,6 +36,7 @@ import {
 import definitionSchema from "./definition.schema.json";
 import type { Executor } from "./executor";
 import type { DeliveryIntent } from "./delivery";
+import { parseWorkerReport, workerReportExamples } from "./worker-report";
 import {
   deliverAlerts,
   dueAlerts,
@@ -1243,7 +1245,7 @@ function allowedChanges(
 
 function candidate(
   run: Extract<Run, { kind: "running" }>,
-  report: Record<string, unknown>,
+  report: CandidateSubmission,
   scope: string[],
 ) {
   const revision = git(run.worktree, "rev-parse", "HEAD");
@@ -1699,15 +1701,20 @@ function evidenceFor(
   });
 }
 
+function reportContent(report: CandidateSubmission) {
+  const { legacyDigest: _, ...fields } = report;
+  return JSON.stringify(fields);
+}
+
 function reportEvidence(
   run: Extract<Run, { kind: "running" }>,
   revision: string,
-  report: Record<string, unknown>,
+  report: CandidateSubmission,
 ) {
   return evidenceFor(run, revision)(
     "report",
-    "candidate",
-    JSON.stringify(report),
+    "candidate-typed",
+    reportContent(report),
     run.workerModel ?? "unknown",
   );
 }
@@ -1716,10 +1723,10 @@ function reportEvidence(
 // when reviewed, a passing verdict. Callers pass rows already bound to the attempt and revision.
 function landingProven(
   proof: (Omit<Evidence, "content"> & { sha256: string; intact: boolean })[],
-  report: Record<string, unknown>,
+  report: CandidateSubmission,
   reviewed: boolean,
 ) {
-  const digest = sha256(JSON.stringify(report));
+  const digest = sha256(reportContent(report));
   const proven = (kinds: Evidence["kind"][], outcome: string) =>
     proof.some(
       (item) =>
@@ -1727,7 +1734,12 @@ function landingProven(
     );
   return (
     proof.some(
-      (item) => item.intact && item.kind === "report" && item.sha256 === digest,
+      (item) =>
+        item.intact &&
+        item.kind === "report" &&
+        ((item.outcome === "candidate-typed" && item.sha256 === digest) ||
+          (item.outcome === "candidate" &&
+            item.sha256 === report.legacyDigest)),
     ) &&
     proven(["gate", "gate-rerun"], "gate-passed") &&
     (!reviewed || proven(["review"], "pass"))
@@ -1769,7 +1781,7 @@ async function candidateEvidence(
   directory: string,
   task: Task,
   run: Extract<Run, { kind: "running" }>,
-  report: Record<string, unknown>,
+  report: CandidateSubmission,
   config: Awaited<ReturnType<typeof configuration>>,
   gate: {
     started: (pid: number, timeoutMs: number) => void;
@@ -1841,11 +1853,33 @@ async function candidateEvidence(
   };
 }
 
-async function currentReport(directory: string, task: Task, attempt: number) {
+type CandidateSubmission = Extract<
+  ReturnType<typeof parseWorkerReport>,
+  { kind: "candidate" }
+>;
+
+async function currentReport(
+  directory: string,
+  task: Task,
+  attempt?: number,
+  rejectedReport?: string,
+) {
   const path = join(directory, `${task.id}.report.json`);
-  if (!existsSync(path)) return null;
-  const report = object(JSON.parse(await readFile(path, "utf8")));
-  return report.attempt === attempt ? report : null;
+  const file = await open(path).catch((error: unknown) => {
+    if ((error as { code?: string }).code === "ENOENT") return null;
+    throw error;
+  });
+  if (!file) return null;
+  try {
+    const source = await file.readFile("utf8");
+    const report = parseWorkerReport(source, attempt);
+    if (report?.kind !== "malformed") return report;
+    const { ino, mtimeNs } = await file.stat({ bigint: true });
+    const fingerprint = sha256(`${ino}:${mtimeNs}:${source}`);
+    return fingerprint === rejectedReport ? null : { ...report, fingerprint };
+  } finally {
+    await file.close();
+  }
 }
 
 function incidentCheckpoint(
@@ -2497,8 +2531,9 @@ export function createFactory(
         ? [`${id}: ${dependency.insight} (${dependency.revision})`]
         : [];
     });
+    const { candidate, blocked } = workerReportExamples(run.attempt);
     return `Read and apply the poteto-mode skill within these restrictions: ~/.cache/amp/{global-skills,global-skill-manifests}/ampcode.com/user/poteto-mode*/SKILL.md.
-Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAllowed paths: ${pinned.scope.join(", ")}. Check: ${pinned.verify}.\nDefinition: ${run.definition ?? "legacy unpinned"}.\nDependency evidence: ${insights.join("; ") || "none"}.\n${run.feedback ? `Repair feedback: ${run.feedback}\n` : ""}Use a local commit for the change. Do not push, deploy, create tickets, edit factory files, or delegate.\nForeman: ${stateCache.owner}. Send questions and blockers with the factory control action message-foreman and message text. Messaging does not grant factory control.\nAfter finishing, write JSON to ${join(directory, `${task.id}.report.json`)}: {"attempt":${run.attempt},"kind":"candidate","revision":"<full git HEAD>","insight":"<short verified finding>","summary":"<optional public line>"}. If blocked, use {"attempt":${run.attempt},"kind":"blocked","reason":"<needed decision>"}. Report briefly here too.`;
+Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAllowed paths: ${pinned.scope.join(", ")}. Check: ${pinned.verify}.\nDefinition: ${run.definition ?? "legacy unpinned"}.\nDependency evidence: ${insights.join("; ") || "none"}.\n${run.feedback ? `Repair feedback: ${run.feedback}\n` : ""}Use a local commit for the change. Do not push, deploy, create tickets, edit factory files, or delegate.\nForeman: ${stateCache.owner}. Send questions and blockers with the factory control action message-foreman and message text. Messaging does not grant factory control.\nAfter finishing, write JSON to ${join(directory, `${task.id}.report.json`)}: ${candidate}. If blocked, use ${blocked}. Report briefly here too.`;
   }
 
   let stateCache: State = { enabled: false, runs: {} };
@@ -2933,7 +2968,10 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
       async function preflightCheckpoint(
         task: Task,
         blocked: Extract<Run, { kind: "blocked" | "parked" }>,
-        preflight: Record<string, unknown>,
+        preflight: Extract<
+          Awaited<ReturnType<typeof currentReport>>,
+          { kind: "blocked" }
+        >,
       ): Promise<Extract<Run, { kind: "running" }>> {
         if (!blocked.thread) throw new Error("No resumable worker checkpoint");
         const base = text(persistence!.lastEvent(task.id, "creating"));
@@ -2964,6 +3002,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
       async function legacyRepairCheckpoint(
         task: Task,
         blocked: Extract<Run, { kind: "blocked" | "parked" }>,
+        report: Awaited<ReturnType<typeof currentReport>>,
       ): Promise<Extract<Run, { kind: "running" }>> {
         if (!blocked.thread)
           throw new Error("No resumable verification checkpoint");
@@ -2972,15 +3011,15 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           persistence!.lastEvent(task.id, "review-created"),
           verdict,
         );
-        const report = (await currentReport(directory, task, 2)) ?? {};
         if (
+          report?.kind !== "candidate" ||
+          report.attempt !== 2 ||
           !Object.entries({
             ticket: task.id,
             attempt: 2,
             model: reviewerModel(config.workerModel),
             revision: report.revision,
           }).every(([key, value]) => review[key] === value) ||
-          report.kind !== "candidate" ||
           report.revision !==
             git(join(directory, "worktrees", task.id), "rev-parse", "HEAD") ||
           persistence!.lastEvent(task.id, "created") !== blocked.thread ||
@@ -3006,10 +3045,10 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           blocked.repair ??
           (blocked.kind === "blocked" ? blocked.checkpoint : undefined);
         if (saved) return saved;
-        const preflight = await currentReport(directory, task, 1);
-        return preflight?.kind === "blocked"
-          ? preflightCheckpoint(task, blocked, preflight)
-          : legacyRepairCheckpoint(task, blocked);
+        const report = await currentReport(directory, task);
+        return report?.kind === "blocked" && report.attempt === 1
+          ? preflightCheckpoint(task, blocked, report)
+          : legacyRepairCheckpoint(task, blocked, report);
       }
       async function verifyRepair(repair: Extract<Run, { kind: "running" }>) {
         if ((await observe(repair.thread)) !== "idle")
@@ -3291,7 +3330,10 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         run: Extract<Run, { kind: "running" }>,
         message: string,
       ) {
-        if (run.feedback) await verifyRepair(run);
+        const automaticReportRepair =
+          run.rejectedBy === "report" &&
+          run.rejectedAttempt === run.attempt - 1;
+        if (run.feedback && !automaticReportRepair) await verifyRepair(run);
         run.deliveryIntent = deliveryIntent(
           task,
           run.attempt,
@@ -3331,7 +3373,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
       async function rebaseCandidate(
         task: Task,
         run: Extract<Run, { kind: "running" }>,
-        report: Record<string, unknown>,
+        report: CandidateSubmission,
         revision: string,
       ): Promise<unknown> {
         const target = git(root, "rev-parse", "HEAD");
@@ -3440,7 +3482,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
       async function accept(
         task: Task,
         run: Extract<Run, { kind: "running" }>,
-        report: Record<string, unknown>,
+        report: CandidateSubmission,
         revision: string,
         log: string,
       ) {
@@ -3486,10 +3528,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           workerModel: run.workerModel,
           review: run.review,
           checks: run.checks,
-          insight:
-            typeof report.insight === "string"
-              ? report.insight.slice(0, 1000)
-              : "",
+          insight: report.insight,
           ...publicSummary(report.summary),
         };
         commit(task.id, "accepted", revision);
@@ -3498,7 +3537,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
       async function checkCandidate(
         task: Task,
         run: Extract<Run, { kind: "running" }>,
-        report: Record<string, unknown>,
+        report: CandidateSubmission,
       ) {
         const { revision, log, feedback, rerunLog, outcome, result } =
           await candidateEvidence(directory, task, run, report, config, {
@@ -3592,6 +3631,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           run.rejectedAttempt = run.attempt;
           run.attempt++;
           run.delivery = "queued";
+          if (rejectedBy === "report") run.feedback = feedback;
           commit(task.id, "rejected", JSON.stringify(rejected));
         } else {
           state.runs[task.id] = {
@@ -3610,15 +3650,15 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
             "verification-rejected",
             cause,
           );
+          return;
         }
-        if (state.runs[task.id]?.kind === "running") {
-          await send(
-            task,
-            run,
-            `Verification rejected attempt ${run.attempt - 1}. Evidence: ${feedback}. Repair the candidate and submit report attempt ${run.attempt}.\n${await prompt(task, run, config)}`,
-          );
-          return state;
-        }
+        if (rejectedBy === "report") return settleWorkerDelivery(task, run);
+        await send(
+          task,
+          run,
+          `Verification rejected attempt ${run.attempt - 1}. Evidence: ${feedback}. Repair the candidate and submit report attempt ${run.attempt}.\n${await prompt(task, run, config)}`,
+        );
+        return state;
       }
 
       async function deliverReview(
@@ -3649,7 +3689,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
       async function beginReview(
         task: Task,
         run: Extract<Run, { kind: "running" }>,
-        report: Record<string, unknown>,
+        report: CandidateSubmission,
         revision: string,
         log: string,
       ) {
@@ -3898,9 +3938,27 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
             "review",
             `${verdict.evidence}${reviewedAdvisory(task, run, review)}`,
           );
-        const report = await currentReport(directory, task, run.attempt);
+        await acceptReviewedCandidate(task, run, review);
+      }
+
+      async function acceptReviewedCandidate(
+        task: Task,
+        run: Extract<Run, { kind: "running" }>,
+        review: Review,
+      ) {
+        const report = await currentReport(
+          directory,
+          task,
+          run.attempt,
+          run.rejectedReport,
+        );
         if (
-          !report ||
+          report?.kind === "malformed" &&
+          (await observe(run.thread)) === "idle"
+        )
+          return rejectReport(task, run, report);
+        if (
+          report?.kind !== "candidate" ||
           candidate(run, report, runDefinition(run, config, directory).scope)
             .revision !== review.revision
         )
@@ -3951,6 +4009,24 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         return state;
       }
 
+      function rejectReport(
+        task: Task,
+        run: Extract<Run, { kind: "running" }>,
+        report: Extract<
+          Awaited<ReturnType<typeof currentReport>>,
+          { kind: "malformed" }
+        >,
+      ) {
+        run.rejectedReport = report.fingerprint;
+        delete run.review;
+        return reject(
+          task,
+          run,
+          `Invalid worker report: ${report.field}`,
+          "report",
+        );
+      }
+
       async function settle(
         task: Task,
         run: Extract<Run, { kind: "running" }>,
@@ -3972,23 +4048,27 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           return;
         }
         finishRebase(task, run);
-        const report = await currentReport(directory, task, run.attempt);
+        const report = await currentReport(
+          directory,
+          task,
+          run.attempt,
+          run.rejectedReport,
+        );
         if (!report) return;
+        if (report.kind === "malformed") return rejectReport(task, run, report);
         if (report.kind === "blocked") {
           state.runs[task.id] = {
             kind: "blocked",
             definition: run.definition,
             thread: run.thread,
-            reason: text(report.reason),
+            reason: report.reason,
             checkpoint: run,
             executor: run.executor,
             ...laneField(run),
           };
-          commit(task.id, "blocked", text(report.reason));
+          commit(task.id, "blocked", report.reason);
           return;
         }
-        if (report.kind !== "candidate")
-          throw new Error("Invalid worker report");
         return checkCandidate(task, run, report);
       }
 
