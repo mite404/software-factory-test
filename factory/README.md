@@ -872,15 +872,17 @@ schedule or notification calls.
 **Foreman-observed cross-thread contract, 2026-11-16 at about 03:25 UTC.** The connected Foreman
 inspected tool signatures and made read-only calls from
 `T-01a1d839-1f2a-7163-aca7-ff36ee2ba954`. `get_schedule`, `set_schedule`, `update_schedule`, and
-`clear_schedule` each accept an optional `{thread: "T-..."}` target instead of the caller. Each
-thread has at most one schedule or trigger. Clear takes no schedule ID and removes the target
-thread's linked registration, so inspection must establish ownership first.
+`clear_schedule` each accept an optional `{thread: "T-..."}` target instead of the caller. The
+current hosted API allows several schedules: `set_schedule` adds one, `get_schedule` can return
+a list, and `clear_schedule` can take a schedule ID. The factory only manages a uniquely
+identified watchdog and updates its cadence by ID rather than creating a second registration.
 
 `get_schedule({thread: "T-01a1e1de-5d05-7143-8002-040650c600c4"})` returned null for an archived
 worker without a schedule. Targeting the Foreman returned the full record with ID
 `71cd8841-c79d-54a2-9d84-83580b36c81f`, the matching `targetThreadID`, title
 `Factory watchdog 89f80aca...`, `enabled`, `nextRunAt`, and `prompt`. These replies establish the
-targeted-read shape. The fixture copies the optional target and one-registration-per-thread rule.
+targeted-read shape. The fixture copies the optional target and rejects a second create on a
+thread. It checks the factory's single-watchdog invariant, not hosted add/list behavior.
 Cross-thread clear and plugin bridge wrapping have not been observed live. The Foreman's live
 takeover proof must exercise a fingerprinted old registration and confirm the clear by read-back;
 a paused transfer with two empty schedules cannot prove cross-thread clearing.
