@@ -14,12 +14,65 @@ import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import configSchema from "./config.schema.json";
 import { validCron } from "./cron";
+import definitionSchema from "./definition.schema.json";
 
 /** The repository-relative directory that holds one file per agent, runner and the shared settings. */
 export const configDirectory = "factory/config";
 
 type Files = Map<string, Buffer>;
 type Data = Record<string, unknown>;
+const hookSchema = definitionSchema.properties.hooks;
+const hookInput = hookSchema.items.properties;
+const hookName = new RegExp(hookInput.name.pattern);
+
+/** One fixed local effect for a supported Amp event, with no shell or path input. */
+export type NativeHook = {
+  event: "agent.start";
+  action: "create-marker";
+  name: string;
+  timeoutMs: number;
+};
+
+function validHookTimeout(value: unknown) {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= hookInput.timeoutMs.minimum &&
+    value <= hookInput.timeoutMs.maximum
+  );
+}
+
+function validHookName(value: unknown) {
+  return typeof value === "string" && hookName.exec(value)?.[0] === value;
+}
+
+/** Validate the same declaration for authored definitions and stored pins. */
+export function validNativeHooks(
+  value: unknown,
+): value is NativeHook[] | undefined {
+  if (value === undefined) return true;
+  if (!Array.isArray(value) || value.length > hookSchema.maxItems) return false;
+  return value.every((item: unknown) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+    const hook = item as Data;
+    return (
+      Object.keys(hook).every((key) => Object.hasOwn(hookInput, key)) &&
+      hook.event === hookInput.event.const &&
+      hook.action === hookInput.action.const &&
+      validHookName(hook.name) &&
+      validHookTimeout(hook.timeoutMs)
+    );
+  });
+}
+
+/** Validate the optional hook field before pinning it. @throws On invalid declarations. */
+export function parseNativeHooks(value: unknown) {
+  if (validNativeHooks(value)) return value;
+  throw new Error(
+    "Invalid hooks: expected at most one bounded agent.start create-marker declaration",
+  );
+}
+
 export type VerificationCapability = {
   /** External executable, resolved in the same login shell as the check. */
   tool: string;

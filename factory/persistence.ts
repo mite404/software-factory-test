@@ -10,7 +10,12 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { validVerificationCapability, type Automation } from "./config";
+import {
+  validNativeHooks,
+  validVerificationCapability,
+  type Automation,
+  type NativeHook,
+} from "./config";
 import { validCron } from "./cron";
 import { validReview, type Review } from "./review";
 import { validExecutor, type Executor } from "./executor";
@@ -137,7 +142,12 @@ export type DefinitionPin = {
   watchdog?: WatchdogPolicy;
   providerLimit?: ProviderLimitPolicy;
   setup?: { command: string; timeoutMs: number };
+  /** Accepted native hook declarations; never treated as execution permission. */
+  hooks?: NativeHook[];
 };
+type HookOutcome =
+  "refused" | "succeeded" | "failed" | "timed-out" | "uncertain";
+
 export type ProviderLimit = {
   message: string;
   observedAt: number;
@@ -2120,6 +2130,7 @@ function definitionFields(value: unknown) {
     pin.scope.every(text) &&
     typeof pin.review === "boolean" &&
     typeof pin.instructions === "string" &&
+    validNativeHooks(pin.hooks) &&
     gateAndWatchdog(pin) &&
     workerSettings(pin)
   );
@@ -2896,6 +2907,10 @@ export function openPersistence(
       }
       definitionTables(db);
       automationRequestTable(db);
+      db.run(`CREATE TABLE IF NOT EXISTS native_hook_attempts (
+        id TEXT PRIMARY KEY, definition TEXT NOT NULL, owner TEXT NOT NULL,
+        outcome TEXT NOT NULL CHECK (outcome IN
+          ('claimed', 'refused', 'succeeded', 'failed', 'timed-out', 'uncertain')))`);
       db.run(`CREATE TABLE IF NOT EXISTS evidence (ticket TEXT NOT NULL,
         attempt INTEGER NOT NULL CHECK (attempt > 0), kind TEXT NOT NULL,
         revision TEXT NOT NULL, definition TEXT, tool TEXT NOT NULL, outcome TEXT NOT NULL,
@@ -2917,8 +2932,52 @@ export function openPersistence(
       if (sync) applyTicketSync(db, queue, state, now, sync);
       return state;
     })();
+    function hookEvent(id: string, outcome: HookOutcome | "claimed") {
+      saveEvent(db, {
+        at: new Date(now()).toISOString(),
+        ticket: "factory",
+        action: `hook-${outcome}`,
+        detail: id,
+      });
+    }
     return {
       state,
+      /** Reserve the native event once across owners, reloads and restarts. @throws On failed I/O. */
+      claimHook(id: string, definition: string, owner: ThreadID) {
+        return db.transaction(() => {
+          const result = db
+            .query(
+              "INSERT INTO native_hook_attempts VALUES (?, ?, ?, 'claimed') ON CONFLICT (id) DO NOTHING",
+            )
+            .run(id, definition, owner);
+          if (!result.changes) return false;
+          hookEvent(id, "claimed");
+          return true;
+        })();
+      },
+      /** Settle a claimed event before publishing its outcome. @throws On a missing claim or failed I/O. */
+      settleHook(id: string, outcome: HookOutcome) {
+        db.transaction(() => {
+          const result = db
+            .query(
+              "UPDATE native_hook_attempts SET outcome = ? WHERE id = ? AND outcome = 'claimed'",
+            )
+            .run(outcome, id);
+          if (!result.changes) throw new Error("Missing unsettled hook claim");
+          hookEvent(id, outcome);
+        })();
+      },
+      /** Under the executor's same store lock, mark abandoned claims uncertain. @throws On failed I/O. */
+      recoverHooks() {
+        db.transaction(() => {
+          const interrupted = db
+            .query<{ id: string }, []>(
+              "UPDATE native_hook_attempts SET outcome = 'uncertain' WHERE outcome = 'claimed' RETURNING id",
+            )
+            .all();
+          for (const { id } of interrupted) hookEvent(id, "uncertain");
+        })();
+      },
       lessonProject: db
         .query<{ project: string }, []>(
           "SELECT project FROM lesson_project WHERE id = 1",

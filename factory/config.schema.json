@@ -39,6 +39,9 @@
         "verify": {
           "$ref": "definition.schema.json#/properties/verify"
         },
+        "hooks": {
+          "$ref": "definition.schema.json#/properties/hooks"
+        },
         "permissions": {
           "$ref": "definition.schema.json#/properties/permissions"
         },

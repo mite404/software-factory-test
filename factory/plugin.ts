@@ -1109,6 +1109,11 @@ export default function registerFactory(
     const state = factoryStatus(factory.directory);
     if (!state.owner || state.owner !== event.thread.id) return {};
     try {
+      await factory.nativeHook(event);
+    } catch (error) {
+      amp.logger.log("factory native hook failed", String(error));
+    }
+    try {
       const reconciled = await factory.tick(
         "reconcile",
         event.thread.id,
