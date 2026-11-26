@@ -409,7 +409,7 @@ test("a failed schedule change that leaves the old provider-reset anchor stays u
   let sets = 0;
   const tools = {
     async call(name: string, input: Record<string, unknown>) {
-      if (name === "amp.set_schedule") {
+      if (name === "amp.set_schedule" || name === "amp.update_schedule") {
         sets++;
         if (failSets) throw new Error("set lost before applying");
       }
@@ -500,7 +500,7 @@ test("an applied but unconfirmed reset anchor never holds back an enabled automa
         loseReadback = false;
         throw new Error("Lost read-back");
       }
-      if (name === "amp.set_schedule") sets++;
+      if (name === "amp.set_schedule" || name === "amp.update_schedule") sets++;
       return fixture.tools.call(name, input);
     },
   };
@@ -579,7 +579,7 @@ test("a pending anchor that was never confirmed cannot hide behind the last conf
   let sets = 0;
   const tools = {
     async call(name: string, input: Record<string, unknown>) {
-      if (name === "amp.set_schedule") sets++;
+      if (name === "amp.set_schedule" || name === "amp.update_schedule") sets++;
       return fixture.tools.call(name, input);
     },
   };

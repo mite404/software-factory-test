@@ -54,6 +54,49 @@ test("planning metadata cannot drop monitoring for an existing active run", asyn
   expect(state.monitor?.schedule).toBe("cleared");
 });
 
+test("F045 repair: the owned watchdog retimes 30 to 1 to 30 without creating another schedule", async () => {
+  const state: State = { enabled: true, owner: "T-owner", runs: {} };
+  const fixture = watchdogFixture();
+  const { tools } = fixture;
+  const sync = () =>
+    reconcileSchedule(
+      "/TEST/project",
+      "/TEST/git",
+      state,
+      [{ id: "A", brief: "Private", after: [] }],
+      tools,
+      () => {},
+    );
+  const blocked = { kind: "blocked", reason: "Waiting" } as const;
+  state.runs.A = blocked;
+  await sync();
+  const id = fixture.schedules.get("T-owner")!.id;
+  expect(typeof id).toBe("string");
+  const expectPeriod = async (period: number) => {
+    expect(fixture.schedules.size).toBe(1);
+    expect(await tools.call("amp.get_schedule", {})).toMatchObject({
+      id,
+      trigger: {
+        schedule: `DTSTART:19700101T000000Z\nRRULE:FREQ=MINUTELY;INTERVAL=${period}`,
+      },
+    });
+  };
+  await expectPeriod(30);
+  state.runs.A = {
+    kind: "running",
+    base: "abc",
+    worktree: "/TEST/worktree",
+    thread: "T-worker",
+    attempt: 1,
+    delivery: "sent",
+  };
+  await sync();
+  await expectPeriod(1);
+  state.runs.A = blocked;
+  await sync();
+  await expectPeriod(30);
+});
+
 test("owned schedule converges after lost create/clear acknowledgments and preserves conflicts", async () => {
   const directory = await mkdtemp(join(tmpdir(), "factory-schedule-"));
   const storage = openPersistence(directory, []);
@@ -81,6 +124,7 @@ test("owned schedule converges after lost create/clear acknowledgments and prese
       }
       if (name === "amp.clear_schedule") {
         clears++;
+        await fixture.tools.call(name, input);
         actual = null;
         if (loseInspection) readsUnavailable = true;
         throw new Error("Lost clear acknowledgment");
@@ -128,6 +172,7 @@ test("owned schedule converges after lost create/clear acknowledgments and prese
     ).toMatch(/second factory root/);
     expect(other.monitor?.schedule).toBe("conflict");
     expect(creates).toBe(1);
+    fixture.schedules.delete("T-owner");
     actual = null;
     loseInspection = true;
     expect(await sync().catch(String)).toMatch(/inspection/);
@@ -313,7 +358,7 @@ test.each([false, true])(
     let sets = 0;
     const tools: PluginTools = {
       async call(name, input) {
-        if (name === "amp.set_schedule") {
+        if (name === "amp.set_schedule" || name === "amp.update_schedule") {
           sets++;
           if (fail) {
             fail = false;

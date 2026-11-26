@@ -3156,6 +3156,7 @@ test("connected status detects a suspected reviewer stall from recorded replies"
   const fixture = watchdogFixture();
   let sample = threadStatusLive.samples[0];
   let threadID = "T-reviewer";
+  let statusUnavailable = false;
   const ctx = {
     thread: { id: "T-owner" },
     tools: {
@@ -3163,6 +3164,7 @@ test("connected status detects a suspected reviewer stall from recorded replies"
         if (name !== "amp.get_thread_status")
           return fixture.tools.call(name, input);
         reads.push(input.thread);
+        if (statusUnavailable) throw new Error("Connected status unavailable");
         return { ...sample, metadata: { threadID } };
       },
     },
@@ -3252,7 +3254,7 @@ test("connected status detects a suspected reviewer stall from recorded replies"
           get(id: string) {
             return {
               state: {
-                get: () => "running",
+                get: () => (statusUnavailable ? "error" : "running"),
                 subscribe: () => ({ unsubscribe() {} }),
               },
               title: {
@@ -3319,6 +3321,12 @@ test("connected status detects a suspected reviewer stall from recorded replies"
     } finally {
       await dashboard.stop(true);
     }
+    statusUnavailable = true;
+    await control(observer);
+    expect(factoryStatus(directory).runs.A?.incident).toEqual(stopped.incident);
+    await control(offline);
+    expect(factoryStatus(directory).runs.A?.incident).toEqual(stopped.incident);
+    statusUnavailable = false;
     sample = threadStatusLive.samples[1];
     await control(observer);
     expect(factoryStatus(directory).runs.A?.incident).toBeUndefined();
@@ -3330,7 +3338,7 @@ test("connected status detects a suspected reviewer stall from recorded replies"
       thread: "T-worker",
       review: { thread: "T-reviewer", worktree: reviewTree },
     });
-    expect(reads).toEqual(Array(5).fill("T-reviewer"));
+    expect(reads).toEqual(Array(6).fill("T-reviewer"));
     expect(sends).toEqual(["T-owner"]);
     expect(fixture.schedules.size).toBe(0);
   } finally {

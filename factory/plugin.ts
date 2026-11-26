@@ -332,19 +332,25 @@ function connectedSample(agentState: ReturnType<typeof record>) {
     return { kind: "sample", state, updatedAt } as const;
 }
 
+type SampleMode = Parameters<NativeHost["state"]>[1];
+
 function reportedActivity(
   value: unknown,
   id: string,
-  sample?: true,
+  sample: SampleMode,
 ): Awaited<ReturnType<NativeHost["state"]>> {
   const result = record(value);
   if (!result) return "unknown";
   const threadID = record(result.metadata)?.threadID;
-  if (threadID !== undefined && threadID !== id) return "unknown";
+  if (otherThread(threadID, id, sample)) return "unknown";
   const agentState = record(result.agentState);
   const observed =
     sample && threadID === id ? connectedSample(agentState) : undefined;
   return observed ?? reportedFallback(agentState, threadID === id);
+}
+
+function otherThread(threadID: unknown, id: string, sample: SampleMode) {
+  return threadID !== id && (threadID !== undefined || sample === "held-stall");
 }
 
 function reportedFallback(
@@ -474,7 +480,7 @@ export default function registerFactory(
   async function readConnected(
     id: Parameters<NativeHost["state"]>[0],
     tools: PluginTools,
-    sample?: true,
+    sample: SampleMode,
   ) {
     try {
       return reportedActivity(
@@ -490,9 +496,11 @@ export default function registerFactory(
   async function observe(
     id: Parameters<NativeHost["state"]>[0],
     tools?: PluginTools & { isConnected?(): boolean },
-    sample?: true,
+    sample?: SampleMode,
     samplesOnly = false,
   ) {
+    if (sample === "held-stall")
+      return observeHeldStall(id, tools, samplesOnly);
     const local = await readLocal(id);
     const needsFallback = local === "error" || local === undefined;
     if (
@@ -503,6 +511,21 @@ export default function registerFactory(
       return local ?? "unknown";
     const reported = await readConnected(id, tools, sample);
     return selectObservation(local, reported, samplesOnly, needsFallback);
+  }
+
+  async function observeHeldStall(
+    id: Parameters<NativeHost["state"]>[0],
+    tools: (PluginTools & { isConnected?(): boolean }) | undefined,
+    samplesOnly: boolean,
+  ) {
+    if (!tools || tools.isConnected?.() === false) return "unknown";
+    const reported = await readConnected(id, tools, "held-stall");
+    if (
+      samplesOnly &&
+      (typeof reported !== "object" || reported.kind !== "sample")
+    )
+      return "unknown";
+    return reported ?? "unknown";
   }
 
   function selectObservation(
@@ -613,7 +636,7 @@ export default function registerFactory(
       }
       return "inconclusive";
     },
-    state: (id) => observe(id),
+    state: (id, sample) => observe(id, undefined, sample),
     messages: (id, options) => amp.threads.get(id).messages(options),
     watch(id, wake) {
       const thread = amp.threads.get(id);
@@ -844,8 +867,8 @@ export default function registerFactory(
     [
       "handoff",
       (input, ctx) =>
-        factory.handoff(input, ctx.thread.id, ctx.tools, (id) =>
-          observe(id, ctx.tools),
+        factory.handoff(input, ctx.thread.id, ctx.tools, (id, sample) =>
+          observe(id, ctx.tools, sample),
         ),
     ],
     ...automationActions.map(

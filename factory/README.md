@@ -780,8 +780,9 @@ while eligible work can start or a run needs stall checks. Otherwise it wakes ev
 or sooner if an enabled automation needs it. The 30-minute suspicion threshold is unchanged. The
 stable SHA-256 fingerprint binds the software factory identity, root and Git storage directory.
 Ownership uses the fingerprint in the title or prompt, not the prompt wording or echoed settings.
-Repeated start accepts its owned, enabled registration. An owned schedule with changed recurrence,
-run mode or enabled state is drifted, not foreign: it stays safe to clear, but is not reported as
+Repeated start accepts its owned, enabled registration. The factory retimes a known minutely rule
+in place by its owned schedule ID and confirms it by read-back. An unsupported recurrence, run
+mode or enabled state is drifted, not foreign: it stays safe to clear, but is not reported as
 installed. Inspect those settings before further execution; pause can clear it before a new start.
 An unrelated schedule or second root is never replaced; start visibly refuses monitored execution.
 Other owner actions report the registration problem without blocking incident recovery. When

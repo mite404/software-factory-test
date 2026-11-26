@@ -1,5 +1,6 @@
 import type { Bookkeeping, NativeHost } from "./native";
 import type { PluginTools } from "@ampcode/plugin";
+import { randomUUID } from "node:crypto";
 
 /** Inject lost delivery responses without creating threads or contacting Amp. */
 export function deliveryFixture(outcome: string) {
@@ -52,19 +53,17 @@ export function watchdogFixture(
       switch (name) {
         case "amp.get_schedule":
           return schedules.get(target) ?? null;
+        case "amp.update_schedule":
+          return updateFixtureSchedule(schedules, input);
         case "amp.set_schedule":
+          if (schedules.has(target))
+            throw new Error("Thread already has a schedule");
           schedules.set(target, {
-            id: "TEST-schedule",
+            id: randomUUID(),
             title: input.title,
             prompt: input.prompt,
             targetThreadID: target,
-            trigger: {
-              provider: "schedule",
-              schedule: String(input.schedule).startsWith("DTSTART:")
-                ? input.schedule
-                : `DTSTART:19700101T000000Z\n${String(input.schedule)}`,
-              scheduleLabel: input.schedule_label,
-            },
+            trigger: scheduleTrigger(input),
             runMode: input.run_mode,
             enabled: true,
             disabledReason: null,
@@ -86,6 +85,36 @@ export function watchdogFixture(
     },
   };
   return { tools, notifications, schedules };
+}
+
+function updateFixtureSchedule(
+  schedules: Map<string, Record<string, unknown>>,
+  input: Record<string, unknown>,
+) {
+  const target = [...schedules.entries()].find(
+    ([, record]) => record.id === input.schedule_id,
+  );
+  if (!target) throw new Error("Unknown schedule_id");
+  const [thread, existing] = target;
+  const updated = {
+    ...existing,
+    title: input.title,
+    prompt: input.prompt,
+    trigger: scheduleTrigger(input),
+    runMode: input.run_mode,
+  };
+  schedules.set(thread, updated);
+  return updated;
+}
+
+function scheduleTrigger(input: Record<string, unknown>) {
+  return {
+    provider: "schedule",
+    schedule: String(input.schedule).startsWith("DTSTART:")
+      ? input.schedule
+      : `DTSTART:19700101T000000Z\n${String(input.schedule)}`,
+    scheduleLabel: input.schedule_label,
+  };
 }
 
 /** Test double for external bookkeeping; factory Git and SQLite operations remain real. */

@@ -216,7 +216,7 @@ export type Run = (
       stallSample?: ThreadSample & {
         thread: ThreadID;
         attempt: number;
-        fingerprint: string;
+        fingerprint?: string;
         observedAt: number;
         since: number;
       };
@@ -1479,9 +1479,13 @@ function validStallSample(value: unknown) {
     thread(sample.thread) &&
     positiveInteger(sample.attempt) &&
     ["running_tools", "streaming", "idle"].includes(String(sample.state)) &&
-    validDigest(sample.fingerprint) &&
+    optionalFingerprint(sample.fingerprint) &&
     stallTimes(sample.updatedAt, sample.since, sample.observedAt)
   );
+}
+
+function optionalFingerprint(value: unknown) {
+  return value === undefined || validDigest(value);
 }
 
 function stallTimes(updatedAt: unknown, since: unknown, observedAt: unknown) {

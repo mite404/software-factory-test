@@ -1,12 +1,14 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import {
   chmod,
   copyFile,
   mkdtemp,
   mkdir,
   readFile,
+  rename,
   rm,
   symlink,
   writeFile,
@@ -3528,6 +3530,7 @@ test("paused foreign schedule preserves notices and exact-incident resume", asyn
     notices.push(message);
   };
   const foreign = { title: "Unrelated reminder", prompt: "Preserve me" };
+  await tools.call("amp.clear_schedule", {});
   await tools.call("amp.set_schedule", foreign);
   expect((await sync("pause")).enabled).toBe(false);
   expect(notices).toEqual([expect.stringContaining(incident.id)]);
@@ -3721,6 +3724,65 @@ test("a later unchanged tools sample opens one suspected stop and real edits res
   expect(factoryStatus(engine.directory).runs.A?.incident).toBeUndefined();
   expect(initial).toMatchObject({ thread: "T-prepared", attempt: 1 });
   expect(f.counts()).toEqual({ creates: 1, sends: 1 });
+});
+
+test("F045 repair: connected progress survives an unreadable worktree and restart", async () => {
+  const f = await preparationFixture(() => "");
+  let at = 181_000;
+  let updatedAt = 0;
+  const observe: NativeHost["state"] = async () => ({
+    kind: "sample",
+    state: "running_tools",
+    updatedAt,
+  });
+  const { tools } = watchdogFixture();
+  let engine = createFactory(f.root, f.host, openStore, () => at);
+  const sync = async (action: "start" | "reconcile" = "reconcile") =>
+    (await engine.tick(action, "T-owner", observe, undefined, tools)).runs.A
+      ?.incident;
+  await sync("start");
+  await sync();
+  expect(await sync()).toMatchObject({ reason: "disconnected" });
+  const moved = `${f.worktree}-unavailable`;
+  await rename(f.worktree, moved);
+  try {
+    updatedAt = 1_000;
+    expect(await sync()).toBeUndefined();
+  } finally {
+    await rename(moved, f.worktree);
+  }
+  engine = createFactory(f.root, f.host, openStore, () => at);
+  expect(await sync()).toBeUndefined();
+  at += 60_000;
+  expect(await sync()).toBeUndefined();
+  at += 120_000;
+  expect(await sync()).toMatchObject({ reason: "disconnected" });
+});
+
+test("F045 repair: a tracked binary edit over 3 MB remains observable", async () => {
+  const f = await preparationFixture(() => "");
+  let at = 1_000;
+  const { tools } = watchdogFixture();
+  const observe: NativeHost["state"] = async () => ({
+    kind: "sample",
+    state: "running_tools",
+    updatedAt: 1_000,
+  });
+  const engine = createFactory(f.root, f.host, openStore, () => at);
+  const sync = async (action: "start" | "reconcile" = "reconcile") =>
+    (await engine.tick(action, "T-owner", observe, undefined, tools)).runs.A
+      ?.incident;
+  await sync("start");
+  const binary = join(f.worktree, "binary.dat");
+  await writeFile(binary, Buffer.alloc(4_000_000));
+  execFileSync("git", ["-C", f.worktree, "add", "binary.dat"]);
+  execFileSync("git", ["-C", f.worktree, "commit", "-qm", "Track binary"]);
+  await writeFile(binary, randomBytes(4_000_000));
+  expect(await sync()).toBeUndefined();
+  at += 180_000;
+  expect(await sync()).toMatchObject({ reason: "disconnected" });
+  await writeFile(binary, randomBytes(4_000_000));
+  expect(await sync()).toBeUndefined();
 });
 
 test("watchdog bounds suspicion across reload, diagnostics, unknown activity and read-only reads", async () => {

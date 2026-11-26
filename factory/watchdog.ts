@@ -241,6 +241,31 @@ function satisfied(
     : ["missing", "conflict"].includes(current);
 }
 
+function ownedScheduleId(schedule: Record<string, unknown>) {
+  if (typeof schedule.id !== "string" || !schedule.id)
+    throw new WatchdogUnavailable(
+      "Owned watchdog did not report a schedule ID",
+    );
+  return schedule.id;
+}
+
+function assertWritableRegistration(
+  current: ReturnType<typeof registration>,
+  monitor: NonNullable<State["monitor"]>,
+) {
+  if (current === "conflict") {
+    monitor.schedule = "conflict";
+    delete monitor.pendingThread;
+    throw new WatchdogUnavailable(
+      "Thread already has an unrelated schedule or a second factory root; preserve it",
+    );
+  }
+  if (current === "drifted")
+    throw new WatchdogUnavailable(
+      "Owned watchdog configuration drifted; inspect recurrence, run mode and enabled state",
+    );
+}
+
 function monitorState(
   state: State,
   fingerprint: string,
@@ -273,13 +298,18 @@ async function changeRegistration(
   wakeAt: number | undefined,
   target: ThreadID | undefined,
   at: number,
+  scheduleId?: string,
 ) {
   // Omitting the thread keeps the owner's own registration call exactly as observed.
   const thread = target ? { thread: target } : {};
   const minutes = Number(expected.interval);
   await tools
     .call(
-      wanted ? "amp.set_schedule" : "amp.clear_schedule",
+      wanted
+        ? scheduleId
+          ? "amp.update_schedule"
+          : "amp.set_schedule"
+        : "amp.clear_schedule",
       wanted
         ? {
             title: expected.title,
@@ -293,7 +323,7 @@ async function changeRegistration(
                 ? `Every ${minutes} minutes`
                 : `Provider reset, then every ${minutes} minutes`,
             run_mode: "existing",
-            ...thread,
+            ...(scheduleId ? { schedule_id: scheduleId } : thread),
           }
         : thread,
     )
@@ -532,35 +562,31 @@ export async function reconcileSchedule(
   try {
     await clearPreviousOwners(state, tools, save, at);
     if (state.enabled && !execute) return;
-    const current = registration(
-      await readSchedule(tools, observer),
-      expected,
-      wakeAt,
-      at,
-    );
-    if (current === "conflict" && wanted) {
-      monitor.schedule = "conflict";
-      delete monitor.pendingThread;
-      throw new WatchdogUnavailable(
-        "Thread already has an unrelated schedule or a second factory root; preserve it",
-      );
-    }
-    if (current === "drifted" && wanted)
-      throw new WatchdogUnavailable(
-        "Owned watchdog configuration drifted; inspect recurrence, run mode and enabled state",
-      );
+    const observed = await readSchedule(tools, observer);
+    const current = registration(observed, expected, wakeAt, at);
+    if (wanted) assertWritableRegistration(current, monitor);
     if (satisfied(current, wanted, monitor.wakeAt, wakeAt)) {
       await clearOwnerSchedule(state, tools, fingerprint);
       settleMonitor(monitor, settled, save);
       return;
     }
+    const scheduleId =
+      wanted && observed ? ownedScheduleId(observed) : undefined;
     monitor.schedule = "checking";
     monitor.pendingThread = thread;
     save();
     // SQLite intent is not a remote receipt. Always inspect, even after a successful call.
     if (
       !satisfied(
-        await changeRegistration(tools, expected, wanted, wakeAt, observer, at),
+        await changeRegistration(
+          tools,
+          expected,
+          wanted,
+          wakeAt,
+          observer,
+          at,
+          scheduleId,
+        ),
         wanted,
       )
     )

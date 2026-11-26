@@ -209,7 +209,7 @@ export type NativeHost = {
   state(
     this: void,
     thread: ThreadID,
-    sample?: true,
+    sample?: true | "held-stall",
   ): Promise<
     | "idle"
     | "running"
@@ -920,17 +920,7 @@ async function worktreeFingerprint(worktree: string) {
     hash.update(git(worktree, "rev-parse", "HEAD"));
     hash.update(status);
     for (const diff of [[], ["--cached"]]) {
-      hash.update(
-        git(
-          worktree,
-          "diff",
-          "--binary",
-          "--no-ext-diff",
-          "--no-textconv",
-          ...diff,
-          "HEAD",
-        ),
-      );
+      await hashDiff(hash, worktree, diff);
       hash.update("\0");
     }
     for (const entry of status.split("\0")) {
@@ -949,6 +939,30 @@ async function worktreeFingerprint(worktree: string) {
     // A missing or unreadable worktree is not evidence that it stayed unchanged.
     return undefined;
   }
+}
+
+async function hashDiff(
+  hash: ReturnType<typeof createHash>,
+  worktree: string,
+  flags: string[],
+) {
+  const process = Bun.spawn(
+    [
+      "git",
+      "-C",
+      worktree,
+      "diff",
+      "--binary",
+      "--no-ext-diff",
+      "--no-textconv",
+      ...flags,
+      "HEAD",
+    ],
+    { stdout: "pipe", stderr: "ignore" },
+  );
+  for await (const chunk of process.stdout) hash.update(chunk);
+  if ((await process.exited) !== 0)
+    throw new Error("Could not read the worktree diff");
 }
 
 function descends(root: string, base: string, revision: string) {
@@ -3918,10 +3932,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         run: Extract<Run, { kind: "running" }>,
         thread: ThreadID,
       ) {
-        const observation = await observe(
-          thread,
-          run.incident?.providerLimit ? undefined : true,
-        );
+        const observation = await observe(thread, stallReadMode(run.incident));
         const activity = await sampleActivity(task, run, thread, observation);
         if (run.incident?.reason === "disconnected" && !explicitStop(activity))
           return "unknown";
@@ -3929,6 +3940,15 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           return "unknown";
         if (await providerWait(task, run, thread, activity)) return "unknown";
         return typeof activity === "object" ? "unknown" : activity;
+      }
+
+      function stallReadMode(
+        incident: Extract<Run, { kind: "running" }>["incident"],
+      ) {
+        if (incident?.providerLimit) return;
+        return incident?.reason === "disconnected"
+          ? ("held-stall" as const)
+          : (true as const);
       }
 
       function explicitStop(activity: Activity) {
@@ -3992,25 +4012,17 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
             suspectStall(id, run, at - prior.since);
           return;
         }
-        if (!fingerprint) {
-          if (activity === "idle" || changedStatus(prior, activity, updatedAt))
-            recordStallProgress(id, run, undefined, !!prior);
+        if (!fingerprint && prior && !changedStatus(prior, activity, updatedAt))
           return;
-        }
-        recordStallProgress(
-          id,
-          run,
-          {
-            thread,
-            attempt: run.attempt,
-            state: activity,
-            updatedAt,
-            fingerprint,
-            observedAt: at,
-            since: prior ? at : updatedAt,
-          },
-          !!prior,
-        );
+        recordStallProgress(id, run, {
+          thread,
+          attempt: run.attempt,
+          state: activity,
+          updatedAt,
+          fingerprint,
+          observedAt: at,
+          since: stallSince(prior, activity, updatedAt, fingerprint, at),
+        });
       }
 
       type StallSample = NonNullable<
@@ -4034,9 +4046,23 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         fingerprint: string | undefined,
       ) {
         return (
+          fingerprint !== undefined &&
           !changedStatus(prior, activity, updatedAt) &&
           prior.fingerprint === fingerprint
         );
+      }
+
+      function stallSince(
+        prior: StallSample | undefined,
+        activity: ThreadSample["state"],
+        updatedAt: number,
+        fingerprint: string | undefined,
+        at: number,
+      ) {
+        if (!prior) return fingerprint ? updatedAt : at;
+        if (!prior.fingerprint && !changedStatus(prior, activity, updatedAt))
+          return prior.since;
+        return at;
       }
 
       function assignmentSample(
@@ -4052,11 +4078,9 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
       function recordStallProgress(
         id: string,
         run: Extract<Run, { kind: "running" }>,
-        sample: typeof run.stallSample,
-        hadSample: boolean,
+        sample: StallSample,
       ) {
-        if (sample) run.stallSample = sample;
-        else delete run.stallSample;
+        run.stallSample = sample;
         if (run.incident?.reason === "disconnected") {
           delete run.incident;
           commit(
@@ -4064,8 +4088,8 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
             "stall-cleared",
             "Connected status or worktree progress observed",
           );
-        } else if (sample || hadSample) {
-          commit(id, "stall-observed", sample?.state ?? "worktree unavailable");
+        } else {
+          commit(id, "stall-observed", sample.state);
         }
       }
 

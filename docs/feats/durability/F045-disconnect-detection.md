@@ -47,9 +47,12 @@ On each connected reconcile, for each running worker or reviewer, read connected
 worktree fingerprint (HEAD, porcelain status, and changed file contents). Open a `disconnected` stop
 only when a later reconcile sees the same `running_tools` state with the same `updatedAt`, the same
 fingerprint, and the stall window has reached `disconnectMs` (180 000 ms by default). Start the
-window at `updatedAt` on the first sample and at the observation time after progress. The one
-watchdog schedule wakes every minute during work that can need stall checks. The existing
-30-minute suspicion nudge is unchanged.
+window at `updatedAt` on the first sample with a readable tree and at the observation time after
+progress. Connected progress still resets the window when the worktree cannot be read. It survives
+restart, and no missing fingerprint counts as unchanged. The watchdog is retimed in place by
+schedule ID to one minute during work that can need stall checks. The 30-minute suspicion nudge
+is unchanged.
+Tracked binary diffs stream into the fingerprint rather than depending on a fixed output buffer.
 
 The stop keeps the same worker, thread, worktree, and attempt. `reconnect` names an operator
 decision, not a factory action. A later connected sample with a new `updatedAt`, a changed
