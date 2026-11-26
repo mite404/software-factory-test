@@ -604,6 +604,34 @@ The owner reads private content with `evidenceContent(directory, ticket, sha256)
 digests the ticket never recorded and missing or corrupt files. Evidence files are not included
 in private backup yet.
 
+### Phase lessons
+
+At phase completion, the owning Foreman can call `record-lesson` with a `lesson` object:
+
+- `ticket`, `phase`, `sourceThread`, `revision`, and `attempt` identify the source. The source
+  thread must belong to the ticket. SQLite supplies the project identity.
+- `scope` names affected repository-relative paths. End directory paths in `/`.
+- `evidence` lists one to four retained SHA-256 digests from that ticket, attempt, and revision.
+  The factory checks the bytes and requires a passing gate digest for `findings`.
+- `findings`, `failedApproaches`, and `questions` take up to two single-line entries each, with
+  at least one entry across the three lists. The Foreman checks that each finding follows from
+  the cited proof. Never submit credentials, logs, or transcripts. Input checks reject oversized
+  or multiline summaries, transcript markers, and common credential formats.
+
+The same phase and source revision can be recorded again with identical content, but not changed
+in place. To correct a finding, record a new revision with the same ticket, phase, and scope. Set
+`supersedes` to the old lesson ID. `list-lessons` with `ticket` shows both sources to the owning
+Foreman. Neither action accepts a ticket or releases its dependents.
+
+The worker handoff includes at most three current, intact lessons from direct dependencies or
+matching paths. To opt into path matching, set `lessonScope` on the authored ticket row. The
+factory pins those paths when it creates the worker. The paths do not grant edit permissions.
+An enabled factory also sends a newly recorded finding once to an affected worker already in
+the build stage. The factory reserves that message before calling Amp. An unknown active send
+is reported and is not retried blindly. An interrupted handoff that Amp confirms was not delivered
+rechecks its reserved lessons before resending. Supersession cannot retract messages a worker
+already received. Failed approaches and questions stay in private history.
+
 ### Lifecycle stages
 
 `runStage` in `persistence.ts` names every ticket's stage and who must act. Status, the dashboard

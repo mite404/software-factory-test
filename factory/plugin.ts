@@ -857,6 +857,14 @@ export default function registerFactory(
       "record-landing",
       (input, ctx) => factory.recordLanding(input, ctx.thread.id),
     ],
+    [
+      "record-lesson",
+      (input, ctx) => factory.recordLesson(input.lesson, ctx.thread.id),
+    ],
+    [
+      "list-lessons",
+      (input, ctx) => factory.listLessons(input.ticket, ctx.thread.id),
+    ],
     ["note", (input, ctx) => factory.note(input.message, ctx.thread.id)],
     [
       "register-observer",
@@ -909,6 +917,37 @@ export default function registerFactory(
           minLength: 1,
           description:
             "For owner-only record-insight, verified evidence for an already done ticket whose insight is empty. Cannot replace existing nonempty evidence. Repeating the same value is a no-op. Then owner reload releases dependent brief refusals for rechecking without dispatching or starting a paused factory.",
+        },
+        lesson: {
+          type: "object",
+          description:
+            "For owner-only record-lesson at phase completion. Supply concise, credential-free summaries and evidence digests for the exact attempt and revision. A lesson does not accept code or dispatch work. Use list-lessons with ticket to inspect private history.",
+          properties: {
+            ticket: { type: "string" },
+            phase: { type: "string" },
+            sourceThread: { type: "string" },
+            revision: { type: "string" },
+            attempt: { type: "integer", minimum: 1 },
+            scope: { type: "array", items: { type: "string" } },
+            evidence: { type: "array", items: { type: "string" } },
+            findings: { type: "array", items: { type: "string" } },
+            failedApproaches: { type: "array", items: { type: "string" } },
+            questions: { type: "array", items: { type: "string" } },
+            supersedes: { type: "string" },
+          },
+          required: [
+            "ticket",
+            "phase",
+            "sourceThread",
+            "revision",
+            "attempt",
+            "scope",
+            "evidence",
+            "findings",
+            "failedApproaches",
+            "questions",
+          ],
+          additionalProperties: false,
         },
         pr: {
           type: "integer",

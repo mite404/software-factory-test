@@ -431,6 +431,167 @@ Work only in your worktree ${run.worktree}. Ticket A: Implement prd.md\nAllowed 
   },
 );
 
+test.each([false, true])(
+  "phase lessons reach only relevant workers (recover interrupted handoff: %s)",
+  async (interrupted) => {
+    const f = await preparationFixture(() => "");
+    const config = await Bun.file(join(f.root, ".factory.json")).json();
+    delete config.setup;
+    delete config.setupTimeoutMs;
+    await writeFile(join(f.root, ".factory.json"), JSON.stringify(config));
+    const queue = [
+      { id: "A", brief: "Source", after: [] },
+      { id: "B", brief: "Dependent", after: ["A"], lessonScope: ["src/ui/"] },
+      {
+        id: "C",
+        brief: "Unrelated",
+        after: [],
+        lessonScope: ["src/auth-old/"],
+      },
+      {
+        id: "D",
+        brief: "Affected",
+        after: [],
+        lessonScope: ["src/auth/guard.ts"],
+      },
+    ];
+    await writeFile(join(f.root, "tickets.json"), JSON.stringify(queue));
+    f.git("add", ".");
+    f.git("commit", "-qm", "lesson fixture");
+    const revision = f.git("rev-parse", "HEAD");
+    const messages: { thread: string; message: string }[] = [];
+    let refuseHandoff = interrupted;
+    const host: NativeHost = {
+      async create() {
+        return "T-B";
+      },
+      async send(thread, message) {
+        if (thread === "T-B" && refuseHandoff) {
+          refuseHandoff = false;
+          throw new Error("Interrupted before delivery");
+        }
+        messages.push({ thread, message });
+      },
+      async lookupDelivery() {
+        return "absent";
+      },
+      async state() {
+        return "running";
+      },
+      watch() {},
+    };
+    let engine = createFactory(f.root, host, openStore);
+    const saved = openPersistence(engine.directory, queue);
+    saved.state.owner = "T-owner";
+    saved.state.enabled = true;
+    for (const task of queue.filter(({ id }) => id !== "B")) {
+      saved.state.runs[task.id] = {
+        kind: "running",
+        base: revision,
+        worktree: f.root,
+        thread: `T-${task.id}`,
+        attempt: 1,
+        delivery: "sent",
+        lessonScope: task.lessonScope,
+      };
+    }
+    saved.commit(saved.state, "A", "gate-returned", revision, [
+      {
+        attempt: 1,
+        kind: "gate",
+        definition: null,
+        revision,
+        outcome: "gate-passed",
+        tool: "true",
+        content: "auth check passed",
+      },
+    ]);
+    const evidence = saved.proof("A", 1, revision).map(({ sha256 }) => sha256);
+    saved.close();
+    const lesson = {
+      ticket: "A",
+      phase: "gate",
+      sourceThread: "T-A",
+      revision,
+      attempt: 1,
+      scope: ["src/auth/"],
+      evidence,
+      findings: ["Run the auth guard before opening a session."],
+      failedApproaches: ["Opening the session first failed."],
+      questions: ["Does the CLI share the guard?"],
+    };
+    expect(engine.recordLesson(lesson, "T-D")).rejects.toThrow();
+    const original = await engine.recordLesson(lesson, "T-owner");
+    expect(factoryStatus(engine.directory).runs.A?.kind).toBe("running");
+    expect(factoryStatus(engine.directory).runs.B).toBeUndefined();
+    engine = createFactory(f.root, host, openStore);
+    await engine.recordLesson(lesson, "T-owner");
+    expect(messages.map(({ thread }) => thread)).toEqual(["T-D"]);
+
+    const landed = openPersistence(engine.directory, []);
+    for (const id of ["A", "C", "D"])
+      landed.state.runs[id] = {
+        kind: "done",
+        revision,
+        insight: "Accepted separately.",
+        thread: `T-${id}`,
+      };
+    landed.commit(landed.state, "A", "accepted", revision);
+    landed.close();
+    const { tools } = watchdogFixture();
+    const reconcile = () =>
+      engine.tick("reconcile", "T-owner", host.state, undefined, tools);
+    let dependent = lesson;
+    if (interrupted) {
+      await reconcile().catch(() => {});
+      expect(factoryStatus(engine.directory).runs.B).toMatchObject({
+        delivery: "sending",
+      });
+      const replacementRevision = "d".repeat(40);
+      const proof = openPersistence(engine.directory, []);
+      proof.record("A", [
+        {
+          attempt: 1,
+          kind: "gate",
+          definition: null,
+          tool: "true",
+          outcome: "gate-passed",
+          revision: replacementRevision,
+          content: "corrected auth check",
+        },
+      ]);
+      dependent = {
+        ...lesson,
+        revision: replacementRevision,
+        evidence: proof
+          .proof("A", 1, replacementRevision)
+          .map(({ sha256 }) => sha256),
+        findings: ["Run the auth guard after opening a session."],
+      };
+      proof.close();
+      await engine.recordLesson(
+        { ...dependent, supersedes: original.lesson.id },
+        "T-owner",
+      );
+      engine = createFactory(f.root, host, openStore);
+      await reconcile();
+    }
+    await reconcile();
+    const taught = messages.filter(({ message }) =>
+      message.includes("Phase lesson "),
+    );
+    expect(taught.map(({ thread }) => thread)).toEqual(["T-D", "T-B"]);
+    expect(taught[0]?.message).toContain(lesson.findings[0]!);
+    const handoff = taught[1]?.message;
+    expect(handoff).toContain(dependent.findings[0]!);
+    expect(handoff).toContain(dependent.revision);
+    expect(handoff).toContain(dependent.evidence[0]!);
+    expect(handoff).not.toContain(lesson.failedApproaches[0]!);
+    expect(handoff).not.toContain(lesson.questions[0]!);
+    if (interrupted) expect(handoff).not.toContain(lesson.findings[0]!);
+  },
+);
+
 test("brief refusal repairs accepted empty evidence through owner control actions only", async () => {
   const f = await preparationFixture(() => "");
   const config = await Bun.file(join(f.root, ".factory.json")).json();

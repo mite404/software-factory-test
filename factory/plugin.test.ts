@@ -2453,6 +2453,47 @@ async function recordedMergeFixture(action: string, mapped = false) {
     const recorded = await readFile(join(directory, "state.sqlite"));
     await execute(insight, owner);
     expect(await readFile(join(directory, "state.sqlite"))).toEqual(recorded);
+    {
+      const storage = openPersistence(directory, []);
+      storage.record("legacy", [
+        {
+          attempt: 1,
+          kind: "gate",
+          revision,
+          definition: null,
+          tool: "true",
+          outcome: "gate-passed",
+          content: "fixture gate passed",
+        },
+      ]);
+      const evidence = storage
+        .proof("legacy", 1, revision)
+        .map(({ sha256 }) => sha256);
+      storage.close();
+      const lesson = {
+        ticket: "legacy",
+        phase: "gate",
+        sourceThread: done.thread,
+        revision,
+        attempt: 1,
+        scope: ["src/"],
+        evidence,
+        findings: [canary],
+        failedApproaches: [],
+        questions: [],
+      };
+      const list = { action: "list-lessons", ticket: "legacy" };
+      await execute({ action: "record-lesson", lesson }, owner);
+      expect(JSON.parse((await execute(list, owner)) as string)).toMatchObject([
+        lesson,
+      ]);
+      expect(
+        execute(list, {
+          thread: { id: "T-stranger" },
+        } as unknown as PluginToolContext),
+      ).rejects.toThrow();
+      expect(JSON.stringify(await status())).not.toContain(canary);
+    }
     const body = await status();
     expect(body.enabled).toBe(true);
     expect(factoryStatus(directory).runs.queued).toEqual(queued);

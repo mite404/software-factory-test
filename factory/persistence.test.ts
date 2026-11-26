@@ -32,6 +32,92 @@ import {
 const roots: string[] = [];
 const queue = [{ id: "A", brief: "Repair value", after: [] }];
 
+test("phase lessons retain replaced sources and refuse unproven or unsafe summaries", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "factory-lessons-"));
+  roots.push(directory);
+  const storage = openPersistence(directory, queue);
+  const source = {
+    project: "test-project",
+    ticket: "A",
+    phase: "gate",
+    sourceThread: "T-worker-A",
+    revision: "a".repeat(40),
+    attempt: 1,
+    scope: ["src/auth/"],
+    findings: ["Scope account lookups by tenant."],
+    failedApproaches: ["Filtering after pagination missed matching rows."],
+    questions: ["Does the migration backfill the tenant column?"],
+  };
+  try {
+    const proof = (revision: string) => {
+      storage.record("A", [
+        {
+          attempt: 1,
+          kind: "gate",
+          tool: "bun test",
+          definition: null,
+          outcome: "gate-passed",
+          revision,
+          content: `Verified ${revision}`,
+        },
+      ]);
+      return storage.proof("A", 1, revision).map((item) => item.sha256);
+    };
+    const original = { ...source, evidence: proof(source.revision) };
+    const id = storage.recordLesson(original).id;
+    expect(storage.recordLesson(original).id).toBe(id);
+    expect(() =>
+      storage.recordLesson({ ...original, findings: ["Changed in place."] }),
+    ).toThrow(/conflict/i);
+    const revision = "b".repeat(40);
+    expect(() => storage.recordLesson({ ...original, revision })).toThrow(
+      /evidence/i,
+    );
+    const replacement = {
+      ...original,
+      revision,
+      evidence: proof(revision),
+      supersedes: id,
+    };
+    for (const item of [
+      { findings: ["API_KEY=fixture-not-a-real-secret"] },
+      {
+        findings: [
+          "User: What happened?\nAssistant: Here is the full transcript.",
+        ],
+      },
+      { transcript: "private transcript" },
+    ])
+      expect(() => storage.recordLesson({ ...replacement, ...item })).toThrow(
+        /lesson/i,
+      );
+    storage.recordLesson({
+      ...replacement,
+      findings: ["Scope both lookups and pagination by tenant."],
+    });
+  } finally {
+    storage.close();
+  }
+  const restarted = openPersistence(directory, []);
+  try {
+    const history = restarted.lessons(source.project, "A");
+    expect(history).toHaveLength(2);
+    expect(history[0]).toMatchObject(source);
+    expect(history[1]).toMatchObject({ supersedes: history[0]!.id });
+    const matching = (project: string, scope: string[]) =>
+      restarted
+        .relevantLessons(project, "B", [], scope, "T-B")
+        .map((lesson) => lesson.revision);
+    expect(matching(source.project, ["src/auth/index.ts"])).toEqual([
+      "b".repeat(40),
+    ]);
+    expect(matching(source.project, ["src/authentication.ts"])).toEqual([]);
+    expect(matching("other-project", ["src/auth/index.ts"])).toEqual([]);
+  } finally {
+    restarted.close();
+  }
+});
+
 test("lifecycle walking names every exitless stop and validates recoveries and persisted reasons", async () => {
   const table = lifecycleStatus();
   const actions = new Set([
