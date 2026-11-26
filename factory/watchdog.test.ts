@@ -102,7 +102,7 @@ test("owned schedule converges after lost create/clear acknowledgments and prese
     await sync();
     expect(actual).toMatchObject({
       trigger: {
-        schedule: "DTSTART:19700101T000000Z\nRRULE:FREQ=MINUTELY;INTERVAL=30",
+        schedule: "DTSTART:19700101T000000Z\nRRULE:FREQ=MINUTELY;INTERVAL=1",
       },
       runMode: "existing",
       enabled: true,
@@ -237,7 +237,7 @@ test.each([
   {
     patch: {
       trigger: {
-        schedule: "DTSTART:20261114T143900Z\r\nRRULE:INTERVAL=30;FREQ=MINUTELY",
+        schedule: "DTSTART:20261114T143900Z\r\nRRULE:INTERVAL=1;FREQ=MINUTELY",
       },
     },
     healthy: true,

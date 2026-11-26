@@ -95,17 +95,10 @@ review feedback, or an answer to a question. Find its current stage and continue
    workers and real outage recovery are not tests; do not give them the test marker.
 5. Observe through native Amp events and supported structured APIs. Keep lifecycle observation
    independent of model and provider. Avoid model calls for polling or animation. Do not parse
-   assistant prose to determine acceptance. If disconnected, preserve ownership and work before
-   recovery. The operator has given standing authorization to reconnect a disconnected worker or
-   reviewer with a one-shot `amp threads continue <thread ID> -x "<prompt>"`, so do not stop to
-   ask. A thread is disconnected when its tools fail with an executor error, or when it stays in
-   `running_tools` for three minutes after a delivery with no change in its worktree. Run the
-   continuation from that thread's worktree as a finite background shell task with stdin from
-   `/dev/null`, never as an auto-restarting service. Confirm the process has exited before
-   `reconcile`, and report each reconnection in your next reply. This authorization covers only
-   the same thread; it never permits a replacement worker or any other CLI continuation. Do not
-   pause the factory for a disconnection: it ignores a report whose attempt is not the current
-   one, so an idle worker with an older report is never read as a new candidate.
+   assistant prose to determine acceptance. Use the factory's `disconnected` stop to report a
+   suspected stall, not a confirmed executor failure. Keep the same worker or reviewer, worktree,
+   and attempt. `reconnect` names an operator decision, not a factory action or permission to
+   continue, resume, or replace the thread. Reconcile to clear the stop on observed progress.
 6. Run `reconcile` once the worker is idle. Worker completion is a candidate, not acceptance, and
    you do not accept it yourself. The factory checks scope, a clean candidate tree, and the exact
    revision, then runs the definition's gate. A passing candidate goes to a cold reviewer: a fresh
@@ -245,7 +238,8 @@ on observed recovery. An unknown reset falls back to observed recovery or 30 min
 observation.
 Clock-only UTC resets more than five hours plus five minutes ahead mean the previous occurrence,
 already due. A first observation at 19:11 of `resets 7pm (UTC)` continues immediately, not tomorrow.
-The watchdog aims a wake at the reset plus one minute, then returns to its 30-minute rule.
+If stall checks and automations do not need earlier wakes, the watchdog aims a wake at the reset
+plus one minute. The provider continuation remains gated by the saved reset or observed recovery.
 No model or provider switch occurs.
 Do not send a separate continuation. `continuation.outcome` values `sending` and `unknown` remain
 held across restart and require inspection, not a retry. After a sent continuation, only a different

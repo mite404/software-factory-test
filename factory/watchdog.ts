@@ -34,10 +34,10 @@ function wantsClock(state: State, queue: Task[], automations: Automations) {
   );
 }
 
-// The clock's period: the shortest any enabled automation needs, never longer than the watchdog's.
-function clockMinutes(automations: Automations) {
+// The single clock uses the shortest interval needed by stall checks or enabled automations.
+function clockMinutes(automations: Automations, checkingStalls: boolean) {
   return Math.min(
-    watchdogMinutes,
+    checkingStalls ? 1 : watchdogMinutes,
     ...enabledAutomations(automations).map((record) =>
       shortestGapMinutes(record.schedule),
     ),
@@ -497,11 +497,24 @@ export async function reconcileSchedule(
   const title = `Factory watchdog ${fingerprint}`;
   const prompt = schedulePrompt(title, root, !!observer);
   const wanted = wantsClock(state, queue, automations);
+  const checkingStalls = queue.some((task) => {
+    const run = state.runs[task.id];
+    if (run)
+      return (
+        run.kind === "preparing" ||
+        run.kind === "creating" ||
+        (run.kind === "running" && !run.incident?.providerLimit)
+      );
+    return (
+      task.intake !== "planned" &&
+      task.after.every((id) => state.runs[id]?.kind === "done")
+    );
+  });
   const expected = {
     fingerprint,
     title,
     prompt,
-    interval: clockMinutes(automations),
+    interval: clockMinutes(automations, checkingStalls),
   };
   const settled = wanted ? "installed" : "cleared";
   const resets = Object.values(state.runs).flatMap((run) => {
@@ -510,10 +523,10 @@ export async function reconcileSchedule(
     const due = providerResetAt(limit);
     return due > at ? [due + 60_000] : [];
   });
-  // An enabled automation needs wakes before any reset, so it keeps the schedule unanchored; the
-  // continuation stays gated by its own reset time at whichever wake follows it.
+  // Stall checks and automations need wakes before a reset. Provider continuation still waits
+  // for its own reset when the watchdog is not anchored to it.
   const wakeAt =
-    resets.length && !enabledAutomations(automations).length
+    resets.length && !checkingStalls && !enabledAutomations(automations).length
       ? Math.min(...resets)
       : undefined;
   try {

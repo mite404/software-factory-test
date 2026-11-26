@@ -1196,14 +1196,17 @@ test("the control override wins until a reload changes the authored value", asyn
   expect((await f.control("automations"))[0]!.enabled).toBe(false);
 });
 
-test("enabling shortens the one schedule, disabling restores 30 minutes, and an unrelated schedule is refused", async () => {
+test("one schedule uses the shortest active interval and preserves unrelated registrations", async () => {
   const f = await engine(
     { pulse: automationFile("*/5 * * * *", false) },
     admitted,
   );
   await f.tick("start");
-  expect(f.interval()).toBe("30");
+  expect(f.interval()).toBe("1");
   await f.control("automation-enable", "pulse");
+  expect(f.interval()).toBe("1");
+  f.host.state = async () => "error";
+  await f.tick("reconcile");
   expect(f.interval()).toBe("5");
   expect(f.fixture.schedules.size).toBe(1);
   // A repeat changes nothing and writes no event.

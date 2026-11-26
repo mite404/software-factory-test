@@ -299,8 +299,8 @@ reload with the same value keeps it. `start` and `reload` fit the schedule in th
 
 There is one clock. The factory keeps its single Amp schedule and every connected owner wake,
 or observer wake when an observer is registered, checks which enabled automations are due. No
-automation has its own Amp schedule. The schedule's period is the shortest gap any enabled
-automation needs, never more than the watchdog's 30 minutes. While an automation is enabled a
+automation has its own Amp schedule. The schedule uses the shortest interval needed by enabled
+automations or stall checks, capped at the watchdog's 30 minutes. While an automation is enabled a
 started factory holds the schedule even with no active work, and with none enabled the schedule
 follows work as before. The change goes through the watchdog reconcile, so its conflict,
 drift and unknown-outcome handling apply unchanged: an unrelated schedule on the thread is
@@ -563,11 +563,11 @@ running or idle activity after any reservation clears the incident even without 
 so subscription wakes can settle reports and verdicts. A later error then opens a new incident.
 Other errors and approval requests follow their existing stop path, not a provider-recovery event.
 
-The owned watchdog targets the earliest pending reset plus one minute, using a UTC `DTSTART` and
-the existing 30-minute RRULE. With no parsed reset, it targets observation plus 31 minutes.
-The next connected reconciliation after the deadline restores the ordinary rule. Registration
-still inspects receipts, rejects drift in recurrence, run mode or enabled state, and preserves
-unrelated schedules.
+When stall checks and automations do not need earlier wakes, the owned watchdog targets the
+earliest pending reset plus one minute, using a UTC `DTSTART` and the existing 30-minute RRULE.
+With no parsed reset, it targets observation plus 31 minutes. The next connected reconciliation
+after the deadline restores the ordinary rule. Registration still inspects receipts, rejects
+drift in recurrence, run mode or enabled state, and preserves unrelated schedules.
 An unapplied anchor change is retried on the next read, not mistaken for configuration drift.
 `monitor.wakeAt` records only the confirmed anchor, separately from the pending schedule effect.
 UTC and TZID anchors are compared at the requested instant, including daylight-saving offsets.
@@ -621,6 +621,7 @@ feed and stop notices all read it; nothing else maps run kinds to stages. Run ki
 | `escalated`    | Two rejections; Foreman diagnosis                 | foreman       |
 | `parked`       | Attempt cap reached; operator decision            | operator      |
 | `rate-limited` | Waiting for a provider limit to clear             | computer      |
+| `disconnected` | Suspected stall on the same worker or reviewer    | operator      |
 | `blocked`      | Any other stop                                    | foreman       |
 | `uncertain`    | An unknown delivery outcome                       | foreman       |
 | `accepted`     | Accepted locally; merge not recorded              | foreman       |
@@ -701,7 +702,7 @@ by cost.
 Serialized lifecycle reconciliation also checks a progress watchdog. The optional definition setting
 `watchdog` contains positive safe integers `suspicionMs` (default 1800000), `spendingFirstAttempt`
 (default 6), and `spendingInterval` (default 4). All three are required when the setting is
-supplied.
+supplied. `disconnectMs` is optional and defaults to 180000, including for older pins.
 Policy is pinned with each run; older definition pins use these defaults. No separate configuration
 file is needed.
 
@@ -774,8 +775,9 @@ reconciliation.
 Only curated ticket ID, attempt, alert kind and episode appear in push/email text, never private
 briefs, observed thread titles or failure reports.
 
-Authorized `start` installs one existing-thread watchdog, every 30 minutes (shorter while an
-automation is enabled; see Scheduled automations), before dispatch. The
+Authorized `start` installs one existing-thread watchdog before dispatch. It wakes every minute
+while eligible work can start or a run needs stall checks. Otherwise it wakes every 30 minutes,
+or sooner if an enabled automation needs it. The 30-minute suspicion threshold is unchanged. The
 stable SHA-256 fingerprint binds the software factory identity, root and Git storage directory.
 Ownership uses the fingerprint in the title or prompt, not the prompt wording or echoed settings.
 Repeated start accepts its owned, enabled registration. An owned schedule with changed recurrence,
@@ -1444,16 +1446,20 @@ left alone, so repeated setup and refresh runs leave every byte unchanged. `--ch
 missing runtime copy or a missing or conflicting declaration and writes nothing. Setup does not
 start any service.
 
-## Recover a disconnected worker
+## Inspect a suspected worker or reviewer stall
 
-Use the factory control tool's `reconcile` action after reloading the plugin. Native Amp state stays
-the primary observation. If the native read fails, an explicit control invocation can use
-`amp.get_thread_status` through its invocation context. The adapter trusts only structured results
-whose `metadata.threadID` matches the worker and whose `agentState.state` is recognized.
+Connected reconciliation samples `amp.get_thread_status` for the delivered worker or reviewer.
+The sample must name the matching thread and contain a recognized state and timestamp. The factory
+saves each changed sample with a hash of the worktree's HEAD, status, and changed file contents.
+A later identical `running_tools` sample at or past three minutes opens a `disconnected` stop.
+If the worktree changes, the stall clock starts over at the time the factory sees the change.
+At the default cadence, the stop can open on the next connected wake after the threshold, not
+exactly at three minutes. Unavailable status or worktree evidence cannot open a stop.
 
-Unavailable or invalid observations remain unknown. The factory retains the running record,
-attempt, report, worktree, and thread for a later reconciliation. Unknown observations never imply
-idle or acceptance. Background recovery has no invocation context and cannot use this fallback.
+This is a suspected stall, not a confirmed executor failure. The stop keeps the same thread,
+attempt, and worktree. A changed timestamp, worktree, or transition out of `running_tools` in a
+connected sample clears the stop. `reconnect` names an operator decision. The factory does not
+reconnect or replace a thread, and it does not classify unobserved executor-error replies.
 
 Server-confirmed idle candidates still require the existing revision, allowed-path, clean-tree,
 verification, and integration checks. Idle without a report is not acceptance. Status and pause do

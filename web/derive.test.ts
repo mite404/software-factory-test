@@ -689,6 +689,19 @@ test("event rows keep cursor order, exact ticket filters and safe thread links",
   expect(eventRows(events, "AB")[0]?.href).toBeNull();
 });
 
+test("a suspected stall names the stop without showing a failure or a repair handoff", () => {
+  const stopped = feedAt(FRAMES.length - 1);
+  const working = feedAt(FRAMES.length - 2);
+  const view = derive(working, stopped, NOW);
+  expect(view.tickets.at(-1)).toMatchObject({
+    lifecycle: "disconnected · operator",
+    reason: expect.stringContaining("A stall is suspected, not confirmed."),
+  });
+  expect(view.tickets.at(-1)?.steps).not.toContain("fail");
+  expect(view.backRow).toBe(0);
+  expect(derive(stopped, working, NOW).startRow).toBe(0);
+});
+
 test("the page says the word its stage declares, unless a live activity or a stop says more", () => {
   const word = (task: Partial<FeedTask>) =>
     derive(
@@ -708,6 +721,7 @@ test("the page says the word its stage declares, unless a live activity or a sto
     gating: "unknown",
     reviewing: "unknown",
     "rate-limited": "unknown",
+    disconnected: "blocked",
     escalated: "blocked",
     parked: "blocked",
     blocked: "blocked",
@@ -1273,7 +1287,7 @@ test("every reason code prints one fixed sentence on the sheet and the banner, n
       "review-rejected",
     ]),
   ] as NonNullable<FeedTask["stop"]>["reason"][];
-  expect(codes).toHaveLength(15);
+  expect(codes).toHaveLength(16);
   const sentences = codes.map((reason) => {
     const view = derive(
       null,

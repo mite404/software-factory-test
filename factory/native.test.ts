@@ -3644,6 +3644,85 @@ test.each(["start", "pause"] as const)(
   },
 );
 
+test("a later unchanged tools sample opens one suspected stop and real edits restart the window", async () => {
+  const f = await preparationFixture(() => "");
+  const fixture = watchdogFixture();
+  let at = 1000;
+  let updatedAt = at;
+  let activity: "running_tools" | "streaming" | "idle" = "running_tools";
+  const observe: NativeHost["state"] = async (_thread, sample) =>
+    sample ? { kind: "sample", state: activity, updatedAt } : "running";
+  let engine = createFactory(f.root, f.host, openStore, () => at);
+  const sync = (action: "start" | "reconcile" = "reconcile") =>
+    engine.tick(action, "T-owner", observe, undefined, fixture.tools);
+  const currentIncident = async () => (await sync()).runs.A?.incident;
+  const initial = (await sync("start")).runs.A;
+  expect(await fixture.tools.call("amp.get_schedule", {})).toMatchObject({
+    trigger: {
+      schedule: "DTSTART:19700101T000000Z\nRRULE:FREQ=MINUTELY;INTERVAL=1",
+    },
+  });
+  const tracked = join(f.worktree, "prd.md");
+  const scratch = join(f.worktree, "new-file");
+  await writeFile(tracked, "first draft");
+  await writeFile(scratch, "first draft");
+  await sync();
+  engine = createFactory(f.root, f.host, openStore, () => at);
+  at = 180_000;
+  expect(await currentIncident()).toBeUndefined();
+  at = 182_000;
+  const stopped = (await sync()).runs.A!;
+  expect(stopped.incident).toMatchObject({
+    reason: "disconnected",
+    recovery: "reconnect",
+    cause: { role: "worker", thread: "T-prepared" },
+  });
+  expect(runStage(stopped).stage).toBe("disconnected");
+  const events = factoryEvents(engine.directory);
+  expect((await sync()).runs.A).toEqual(stopped);
+  expect(factoryEvents(engine.directory)).toEqual(events);
+  expect((await engine.tick("reconcile", "T-owner")).runs.A).toEqual(stopped);
+
+  for (const file of [tracked, scratch]) {
+    at += 1;
+    await writeFile(file, "second draft");
+    expect(await currentIncident()).toBeUndefined();
+    at += 179_999;
+    expect(await currentIncident()).toBeUndefined();
+    at += 1;
+    expect(await currentIncident()).toMatchObject({ reason: "disconnected" });
+  }
+  execFileSync("git", [
+    "-C",
+    f.worktree,
+    "commit",
+    "--allow-empty",
+    "-qm",
+    "Progress",
+  ]);
+  expect(await currentIncident()).toBeUndefined();
+  updatedAt = ++at;
+  expect(await currentIncident()).toBeUndefined();
+  at += 181_000;
+  expect(await currentIncident()).toMatchObject({ reason: "disconnected" });
+  activity = "streaming";
+  expect(await currentIncident()).toBeUndefined();
+  activity = "running_tools";
+  expect(await currentIncident()).toBeUndefined();
+  at += 181_000;
+  expect(await currentIncident()).toMatchObject({ reason: "disconnected" });
+  activity = "idle";
+  expect((await sync()).runs.A).toMatchObject({
+    kind: "running",
+    worktree: f.worktree,
+    thread: "T-prepared",
+    attempt: 1,
+  });
+  expect(factoryStatus(engine.directory).runs.A?.incident).toBeUndefined();
+  expect(initial).toMatchObject({ thread: "T-prepared", attempt: 1 });
+  expect(f.counts()).toEqual({ creates: 1, sends: 1 });
+});
+
 test("watchdog bounds suspicion across reload, diagnostics, unknown activity and read-only reads", async () => {
   const f = await preparationFixture(() => "");
   let at = 1000;

@@ -372,6 +372,8 @@ const REASONS: Record<StopIncident["reason"], string> = {
   "review-rejected": "Cold review rejected the candidate.",
   "worker-blocked": "The builder reported that it is blocked.",
   "worker-error": "Its thread stopped with an error.",
+  disconnected:
+    "Tool activity and the worktree stopped changing. A stall is suspected, not confirmed.",
   "provider-limit": "The model provider's usage limit was reached.",
   "approval-required": "Its thread waits for a tool approval.",
   "preparation-failed": "The worktree setup command failed.",
@@ -409,9 +411,11 @@ function namedStages(task: FeedTask, count: number): string[] {
   if (stage === "accepted" || stage === "merged")
     return Array.from({ length: count }, () => "done");
   const mark =
-    STOPPED.has(stage!) || (task.stop && stage !== "rate-limited")
-      ? "fail"
-      : "now";
+    stage === "disconnected"
+      ? ""
+      : STOPPED.has(stage!) || (task.stop && stage !== "rate-limited")
+        ? "fail"
+        : "now";
   return Array.from({ length: count }, (_, i) =>
     step === null || step === undefined
       ? ""
@@ -870,7 +874,12 @@ export function derive(
     (t) => t.status !== "accepted" && !t.evidence?.review && reviewed.has(t.id),
   )?.id;
   const became = (status: Status) =>
-    tasks.find((t) => t.status === status && before.get(t.id) !== status)?.id;
+    tasks.find(
+      (t) =>
+        t.status === status &&
+        before.get(t.id) !== status &&
+        t.stage !== "disconnected",
+    )?.id;
   const rows = tasks
     .filter((t) => (before.get(t.id) ?? t.status) !== "accepted")
     .slice(0, ROWS);
@@ -895,7 +904,10 @@ export function derive(
   const started = tasks.find(
     (t) =>
       t.status === "working" &&
-      ["queued", "blocked"].includes(before.get(t.id) ?? ""),
+      ["queued", "blocked"].includes(before.get(t.id) ?? "") &&
+      !earlier.some(
+        (prior) => prior.id === t.id && prior.stage === "disconnected",
+      ),
   )?.id;
   const blocked = rejected ?? became("blocked");
   const stages = next.pipelineSteps ?? pipelineSteps;

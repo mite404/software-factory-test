@@ -27,6 +27,7 @@ import {
 } from "./persistence";
 import { openStore, watchdogFixture } from "./bookkeeping.fixture";
 import { watchdogFingerprint } from "./watchdog";
+import threadStatusLive from "./fixtures/thread-status-live.json";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
@@ -2752,7 +2753,7 @@ test.each([
         },
       });
       await control("reconcile");
-      expect(fallbackCalls).toBe(0);
+      expect(fallbackCalls).toBe(1);
       activity = "idle";
       expect((await control("reconcile")).runs.A).toEqual(original);
       readFails = true;
@@ -3138,6 +3139,206 @@ test.each([
   },
   30_000,
 );
+
+test("connected status detects a suspected reviewer stall from recorded replies", async () => {
+  const root = await mkdtemp(join(tmpdir(), "factory-stall-status-"));
+  const directory = join(root, ".git/factory");
+  let dispose = () => {};
+  let execute!: (
+    input: { action: string },
+    ctx: PluginToolContext,
+  ) => Promise<unknown>;
+  let at =
+    Date.parse(threadStatusLive.samples[0]!.agentState.updatedAt) + 181_000;
+  const clock = spyOn(Date, "now").mockImplementation(() => at);
+  const reads: unknown[] = [];
+  const sends: string[] = [];
+  const fixture = watchdogFixture();
+  let sample = threadStatusLive.samples[0];
+  let threadID = "T-reviewer";
+  const ctx = {
+    thread: { id: "T-owner" },
+    tools: {
+      async call(name: string, input: Record<string, unknown>) {
+        if (name !== "amp.get_thread_status")
+          return fixture.tools.call(name, input);
+        reads.push(input.thread);
+        return { ...sample, metadata: { threadID } };
+      },
+    },
+  } as unknown as PluginToolContext;
+  const control = async (context = ctx, action = "reconcile") =>
+    JSON.parse(String(await execute({ action }, context)));
+  try {
+    git(root, "init", "-q");
+    await writeFile(join(root, "prd.md"), "Fixture");
+    const task = { id: "A", brief: "Work", after: [] };
+    await writeFile(join(root, "tickets.json"), JSON.stringify([task]));
+    await writeFile(
+      join(root, ".factory.json"),
+      JSON.stringify({
+        version: 1,
+        capacity: 1,
+        workerModel: "openai/gpt-6.2-sol",
+        prd: "prd.md",
+        tickets: "tickets.json",
+        scope: ["src/"],
+        verify: "true",
+        permissions: { execute: true, publish: false, externalTickets: false },
+      }),
+    );
+    git(root, "add", ".");
+    git(
+      root,
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "commit",
+      "-qm",
+      "fixture",
+    );
+    const base = git(root, "rev-parse", "HEAD");
+    const reviewTree = join(directory, "review-worktree");
+    git(root, "worktree", "add", "--detach", reviewTree, base);
+    const storage = openPersistence(directory, [task]);
+    storage.commit(
+      {
+        enabled: true,
+        owner: "T-owner",
+        runs: {
+          A: {
+            kind: "running",
+            base,
+            thread: "T-worker",
+            attempt: 1,
+            delivery: "sent",
+            worktree: root,
+            review: {
+              ticket: "A",
+              attempt: 1,
+              revision: base,
+              base,
+              stage: "post-graft",
+              worktree: reviewTree,
+              model: "anthropic/reviewer",
+              report: join(directory, "review.json"),
+              log: "fixture",
+              command: "true",
+              delivery: "sent",
+              thread: "T-reviewer",
+            },
+          },
+        },
+        foreman: {
+          notes: [],
+          handoffs: [],
+          observer: {
+            thread: "T-observer",
+            model: "anthropic/claude-haiku-4-5",
+            effort: "high",
+            at,
+          },
+        },
+      },
+      "A",
+      "fixture",
+      "review delivered",
+    );
+    storage.close();
+    registerFactory(
+      {
+        threads: {
+          get(id: string) {
+            return {
+              state: {
+                get: () => "running",
+                subscribe: () => ({ unsubscribe() {} }),
+              },
+              title: {
+                get: () => null,
+                subscribe: () => ({ unsubscribe() {} }),
+              },
+              appendUserMessage: () => {
+                sends.push(id);
+              },
+            };
+          },
+        },
+        logger: { log() {} },
+        on() {},
+        registerTool(tool: { execute: typeof execute }) {
+          execute = tool.execute;
+        },
+        onDispose(fn: () => void) {
+          dispose = fn;
+        },
+      } as unknown as PluginAPI,
+      root,
+      openStore,
+    );
+    const observer = {
+      ...ctx,
+      thread: { id: "T-observer" },
+    } as unknown as PluginToolContext;
+    const offline = {
+      ...ctx,
+      tools: undefined,
+    } as unknown as PluginToolContext;
+    await control(offline);
+    expect(reads).toEqual([]);
+    threadID = "T-wrong";
+    await control(observer);
+    expect(factoryStatus(directory).runs.A).not.toHaveProperty("stallSample");
+    threadID = "T-reviewer";
+    await control(observer);
+    expect(factoryStatus(directory).runs.A?.incident).toBeUndefined();
+    at += 60_000;
+    await control(observer);
+    const stopped = factoryStatus(directory).runs.A!;
+    expect(stopped.incident).toMatchObject({
+      reason: "disconnected",
+      recovery: "reconnect",
+      cause: { role: "reviewer", thread: "T-reviewer" },
+    });
+    const status = await control(observer, "status-summary");
+    expect(status.runs[0]).toMatchObject({
+      stage: "disconnected",
+      kind: "running",
+    });
+    const dashboard = startDashboard({ root, port: 0 });
+    try {
+      const feed = await (
+        await fetch(`http://localhost:${dashboard.port}/api/status`)
+      ).json();
+      expect(feed.tasks[0]).toMatchObject({
+        stage: "disconnected",
+        stop: { reason: "disconnected", role: "reviewer" },
+      });
+      expect(feed.tasks[0]).not.toHaveProperty("stallSample");
+    } finally {
+      await dashboard.stop(true);
+    }
+    sample = threadStatusLive.samples[1];
+    await control(observer);
+    expect(factoryStatus(directory).runs.A?.incident).toBeUndefined();
+    sample = threadStatusLive.samples[2];
+    await control(observer);
+    expect(factoryStatus(directory).runs.A).toMatchObject({
+      kind: "running",
+      attempt: 1,
+      thread: "T-worker",
+      review: { thread: "T-reviewer", worktree: reviewTree },
+    });
+    expect(reads).toEqual(Array(5).fill("T-reviewer"));
+    expect(sends).toEqual(["T-owner"]);
+    expect(fixture.schedules.size).toBe(0);
+  } finally {
+    dispose();
+    clock.mockRestore();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("setup recovery control preserves durable failure and compatible observations across reload", async () => {
   const root = await mkdtemp(join(tmpdir(), "factory-plugin-setup-"));
