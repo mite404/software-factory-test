@@ -1670,6 +1670,12 @@ function validMergeException(value: unknown) {
   );
 }
 
+function validMergeChecks(checks: Record<string, unknown>[]) {
+  if (!checks.every(validMergeCheck)) return false;
+  const ids = checks.flatMap(({ id }) => (id === undefined ? [] : [id]));
+  return new Set(ids).size === ids.length;
+}
+
 function validMergeEvidence(value: unknown) {
   if (value === undefined) return true;
   const evidence = record(value);
@@ -1677,7 +1683,7 @@ function validMergeEvidence(value: unknown) {
     typeof evidence.head === "string" &&
     /^[a-f0-9]{40}$/.test(evidence.head) &&
     Array.isArray(evidence.checks) &&
-    evidence.checks.every(validMergeCheck) &&
+    validMergeChecks(evidence.checks) &&
     Object.keys(evidence).every((key) =>
       ["head", "checks", "exception"].includes(key),
     ) &&
