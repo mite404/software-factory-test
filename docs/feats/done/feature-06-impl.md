@@ -2,7 +2,7 @@
 
 ## Goal and settled design
 
-Implement `feature-06-story.md` through the native factory. One Sol 6.1 implementation worker at
+Implement `feature-06-story.md` through the native factory. One Sol implementation worker at
 medium effort owns this feature. The user selected one conditional post-graft model review, not
 before-and-after reviews. Flag risk at scoping; a retry triggers review automatically.
 Small, low-risk first-attempt work uses quality gates only. No scoring service or classifier.

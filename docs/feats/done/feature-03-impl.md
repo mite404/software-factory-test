@@ -4,7 +4,7 @@
 
 - State: verified locally and accepted in both live fixtures. Priority: P0. Category: fix.
 - Story: [feature-03-story.md](feature-03-story.md).
-- Worker: one Sol 6.1 child at medium effort. No nested delegation.
+- Worker: one Sol worker at medium effort. No nested delegation.
 
 ## Why this matters
 

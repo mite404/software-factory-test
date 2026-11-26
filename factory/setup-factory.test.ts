@@ -61,7 +61,7 @@ test("two project definitions migrate explicitly, preserve metadata and expose o
       raw.review = index === 0;
       raw.workerModel = index
         ? "anthropic/claude-sonnet-4.6"
-        : "openai/gpt-6.1-sol";
+        : "openai/gpt-6.2-sol";
       raw.mode = index ? "bug-finding" : "ui-polish";
       raw.permissions.execute = index === 0;
       if (index === 0) raw.permissions.backup = true;
@@ -383,7 +383,7 @@ test("refresh rebuilds only the adapter in two repositories", async () => {
           expect(mode).toMatchObject({
             key: "factory-foreman",
             agent: {
-              model: "openai/gpt-6.1-sol",
+              model: "openai/gpt-6.2-sol",
               reasoningEffort: "medium",
               features: [],
               tools: {
@@ -405,6 +405,11 @@ test("refresh rebuilds only the adapter in two repositories", async () => {
       expect(modes).toBe(1);
       const config = join(root, ".factory.json");
       const saved = await Bun.file(config).json();
+      expect(saved).toMatchObject({
+        workerModel: "openai/gpt-6.2-sol",
+        workerEffort: "medium",
+        orchestratorModel: "openai/gpt-6.2-sol",
+      });
       expect(saved.review).toBe(name === "first");
       expect(saved.setup).toBe(
         name === "first" ? "bun install --frozen-lockfile" : undefined,

@@ -54,7 +54,7 @@ const flat = {
   workerEffort: "medium",
   workerRunner: "factory-dogfood",
   review: true,
-  orchestratorModel: "openai/gpt-6.1-sol",
+  orchestratorModel: "openai/gpt-6.2-sol",
   prd: "prd.md",
   tickets: "tickets.json",
   scope: ["factory/", "src/"],
@@ -95,7 +95,7 @@ backup:
 bookkeepingSHA256: ${bookkeeping}
 `,
   "agents/foreman/agent.md":
-    "---\nmodel: openai/gpt-6.1-sol\n---\n# Foreman\n\nOrchestrate.\n",
+    "---\nmodel: openai/gpt-6.2-sol\n---\n# Foreman\n\nOrchestrate.\n",
   "agents/implementer/agent.md": `---\nmodel: ${model}\neffort: medium\nrunner: factory-dogfood\n---\n`,
   "agents/light-implementer/agent.md":
     "---\nmodel: anthropic/claude-sonnet-5-5\neffort: high\n---\n",
@@ -245,7 +245,7 @@ test.each([
     "a Foreman prompt with valid model front matter",
     {
       "agents/foreman/agent.md":
-        "---\nmodel: openai/gpt-6.1-sol\n---\n# Foreman\n",
+        "---\nmodel: openai/gpt-6.2-sol\n---\n# Foreman\n",
     },
     "agents/foreman/agent.md",
   ],
@@ -585,7 +585,9 @@ test("migration keeps an existing Foreman prompt body and adds its model", async
   await put(f.root, { "agents/foreman/agent.md": body });
   await migrateDefinition(f.root);
   const migrated = (await snapshot(f.root))["agents/foreman/agent.md"]!;
-  expect(migrated).toMatch(/^---\nmodel: openai\/gpt-6\.1-sol\n---\n/);
+  expect(migrated.startsWith("---\nmodel: openai/gpt-6.2-sol\n---\n")).toBe(
+    true,
+  );
   expect(migrated.endsWith(`---\n${body}`)).toBe(true);
 });
 

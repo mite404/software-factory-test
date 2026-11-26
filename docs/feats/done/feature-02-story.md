@@ -7,9 +7,9 @@ Status: locally verified, 2026-11-13. Backend tool configuration under F01 and F
 
 **As** the factory operator,
 **I want** my chosen model and reasoning effort to reach the worker's Amp agent definition,
-**so that** implementation uses Sol 6.1 at medium effort instead of an unverified model default.
+**so that** implementation uses Sol at medium effort instead of an unverified model default.
 
-1. New setup defaults to `openai/gpt-6.1-sol` and `workerEffort: "medium"`.
+1. New setup defaults to Sol 6.2 (`openai/gpt-6.2-sol`) and `workerEffort: "medium"`.
 2. `--worker-effort` accepts the native Amp effort values. Invalid CLI values fail before setup
    writes files. Invalid persisted values block check and dispatch before a worker is created.
 3. Configuration passes the chosen effort through dispatch into `amp.createAgent` as

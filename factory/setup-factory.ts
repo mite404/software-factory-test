@@ -318,7 +318,7 @@ function options() {
       setup: { type: "string" },
       "setup-timeout-ms": { type: "string" },
       scope: { type: "string", multiple: true },
-      "worker-model": { type: "string", default: "openai/gpt-6.1-sol" },
+      "worker-model": { type: "string", default: "openai/gpt-6.2-sol" },
       "worker-effort": { type: "string", default: "medium" },
       "light-worker-model": { type: "string" },
       "light-worker-effort": { type: "string", default: "high" },
@@ -444,7 +444,7 @@ async function main() {
     workerModel: values["worker-model"],
     workerEffort,
     review: values.review,
-    orchestratorModel: "openai/gpt-6.1-sol",
+    orchestratorModel: "openai/gpt-6.2-sol",
     permissions: {
       execute: false,
       publish: false,

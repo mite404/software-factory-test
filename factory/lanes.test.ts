@@ -47,7 +47,7 @@ async function fixture(
     JSON.stringify({
       version: 1,
       capacity: 1,
-      workerModel: "openai/gpt-6.1-sol",
+      workerModel: "openai/gpt-6.2-sol",
       workerEffort: "medium",
       prd: "prd.md",
       tickets: "tickets.json",
@@ -128,7 +128,7 @@ test("capacity one without a light lane dispatches one ticket and leaves the nex
     expect(state.runs.A).not.toHaveProperty("lane");
     await f.tick();
     expect(f.created.map(([, model, effort]) => [model, effort])).toEqual([
-      ["openai/gpt-6.1-sol", "medium"],
+      ["openai/gpt-6.2-sol", "medium"],
     ]);
     await f.submit("A", "a", "a\n");
     const done = await f.tick();
@@ -155,15 +155,20 @@ test("two lanes start a main and a light worker on their own models, one run per
     });
     expect(state.runs.M1).toMatchObject({
       kind: "running",
-      workerModel: "openai/gpt-6.1-sol",
+      workerModel: "openai/gpt-6.2-sol",
     });
     expect(state.runs.M1).not.toHaveProperty("lane");
     expect(state.runs.L2).toBeUndefined();
     expect(state.runs.M2).toBeUndefined();
     expect(f.created.map(([, model, effort]) => [model, effort])).toEqual([
       ["anthropic/claude-sonnet-5-5", "high"],
-      ["openai/gpt-6.1-sol", "medium"],
+      ["openai/gpt-6.2-sol", "medium"],
     ]);
+    for (const thread of ["T-1", "T-2"]) {
+      expect(
+        f.messages.find((entry) => entry.thread === thread)?.message,
+      ).toContain("Read and apply the poteto-mode skill");
+    }
     const database = join(f.directory, "state.sqlite");
     const before = await readFile(database);
     const events = factoryEvents(f.directory);
@@ -607,13 +612,13 @@ test("a rebased candidate is reviewed at the rebased revision by its saved worke
     expect(rebased).toMatchObject({
       workerModel: "anthropic/claude-sonnet-5-5",
       base: target,
-      review: { base: target, model: "openai/gpt-6-astra" },
+      review: { base: target, model: "openai/gpt-6.2-astra" },
     });
     expect(git(f.root, "rev-parse", `${rebased.review.revision}^`)).toBe(
       target,
     );
     expect((await f.gates()).at(-1)).toBe(rebased.review.revision);
-    expect(review.review.model).toBe("moonshotai/kimi-k3");
+    expect(review.review.model).toBe("openai/gpt-6.2-astra");
   } finally {
     await f.close();
   }

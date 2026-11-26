@@ -4,7 +4,7 @@
 
 - State: verified and accepted in the disposable factory. Priority: P0. Category: feature.
 - Story: [feature-04-story.md](feature-04-story.md). Backlog item: F02 core persistence.
-- Worker: one Sol 6.1 child at medium effort. No nested delegation or review panels.
+- Worker: one Sol worker at medium effort. No nested delegation or review panels.
 
 ## Why this matters
 
@@ -83,7 +83,7 @@ No push, external ticket write, deployment, backup provisioning, or worker clean
 
 ## Drift log
 
-2026-11-13. One Sol 6.1/medium worker returned its original attempt-1 candidate. The factory
+2026-11-13. One Sol worker at medium effort returned its original attempt-1 candidate. The factory
 verified and integrated it in the fixture. Parent review copied its six-file patch into this
 checkout and reran 74 tests with 1,159 assertions, strict SDK TypeScript, and whitespace checks.
 

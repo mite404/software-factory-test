@@ -353,7 +353,7 @@ function retainedLaneDigest(run: Run) {
     checkpoint.lane === "light" ||
     ("workerModel" in checkpoint &&
       checkpoint.workerModel &&
-      checkpoint.workerModel !== "openai/gpt-6.1-sol")
+      checkpoint.workerModel !== "openai/gpt-6.2-sol")
   )
     throw new Error("Retained worker does not match the governed Sol lane");
   const digest = checkpoint.definition ?? run.definition;
@@ -379,7 +379,7 @@ function requireGovernedLanes(
   if (
     pins.some(
       (pin) =>
-        pin.workerModel !== "openai/gpt-6.1-sol" ||
+        pin.workerModel !== "openai/gpt-6.2-sol" ||
         pin.workerEffort !== "medium" ||
         pin.lightWorker ||
         !pin.review ||
@@ -387,7 +387,7 @@ function requireGovernedLanes(
     )
   )
     throw new Error(
-      "Governed execution requires one Sol 6.1 medium lane and native review",
+      "Governed execution requires one Sol 6.2 medium lane and native review",
     );
 }
 
@@ -407,7 +407,7 @@ export default function registerFactory(
   } = {},
 ) {
   const subscriptions: { unsubscribe(): void }[] = [];
-  const foreman = restrictedForeman(root, "openai/gpt-6.1-sol");
+  const foreman = restrictedForeman(root, "openai/gpt-6.2-sol");
   const definition = {
     ...foreman,
     name: `factory-policy-${options.policy}`,

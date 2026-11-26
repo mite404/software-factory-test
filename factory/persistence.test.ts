@@ -705,7 +705,7 @@ async function fixture(execute = true) {
     JSON.stringify({
       version: 1,
       capacity: 1,
-      workerModel: "openai/gpt-6.1-sol",
+      workerModel: "openai/gpt-6.2-sol",
       prd: "prd.md",
       tickets: "tickets.json",
       scope: ["src/"],

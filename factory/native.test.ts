@@ -151,7 +151,7 @@ async function preparationFixture(
     JSON.stringify({
       version: 1,
       capacity: 1,
-      workerModel: "openai/gpt-6.1-sol",
+      workerModel: "openai/gpt-6.2-sol",
       prd: "prd.md",
       tickets: "tickets.json",
       scope: ["src/"],
@@ -420,7 +420,8 @@ test.each([false, true])(
     if (run?.kind !== "running") throw new Error("Expected complete worker");
     expect(messages.at(-1)).toMatch(/^factory-key: [a-f0-9]{64}\n/);
     expect(messages.at(-1)?.replace(/^factory-key: [a-f0-9]{64}\n/, "")).toBe(
-      `Work only in your worktree ${run.worktree}. Ticket A: Implement prd.md\nAllowed paths: src/. Check: true.\nDefinition: ${run.definition}.\nDependency evidence: none.\nUse a local commit for the change. Do not push, deploy, create tickets, edit factory files, or delegate.\nForeman: T-owner. Send questions and blockers with the factory control action message-foreman and message text. Messaging does not grant factory control.\nAfter finishing, write JSON to ${join(engine.directory, "A.report.json")}: {"attempt":1,"kind":"candidate","revision":"<full git HEAD>","insight":"<short verified finding>","summary":"<optional public line>"}. If blocked, use {"attempt":1,"kind":"blocked","reason":"<needed decision>"}. Report briefly here too.`,
+      `Read and apply the poteto-mode skill (~/.cache/amp/global-skills/ampcode.com/user/poteto-mode@*/SKILL.md) within the factory restrictions below.
+Work only in your worktree ${run.worktree}. Ticket A: Implement prd.md\nAllowed paths: src/. Check: true.\nDefinition: ${run.definition}.\nDependency evidence: none.\nUse a local commit for the change. Do not push, deploy, create tickets, edit factory files, or delegate.\nForeman: T-owner. Send questions and blockers with the factory control action message-foreman and message text. Messaging does not grant factory control.\nAfter finishing, write JSON to ${join(engine.directory, "A.report.json")}: {"attempt":1,"kind":"candidate","revision":"<full git HEAD>","insight":"<short verified finding>","summary":"<optional public line>"}. If blocked, use {"attempt":1,"kind":"blocked","reason":"<needed decision>"}. Report briefly here too.`,
     );
   },
 );
@@ -1773,7 +1774,7 @@ test("external landing preserves saved repair identity while paused", async () =
     acceptedBase: running.base,
     revision: request.revision,
     merge: { pr: request.pr, commit: request.commit },
-    workerModel: "openai/gpt-6.1-sol",
+    workerModel: "openai/gpt-6.2-sol",
   });
   expect(f.counts()).toEqual(counts);
   const after = await snapshot();
@@ -1981,15 +1982,15 @@ test("invalid limit policies fail before worker creation", async () => {
 });
 
 test.each([
-  ["openai/gpt-6.1-sol", "moonshotai/kimi-k3"],
-  ["anthropic/claude-fable-5-2", "openai/gpt-6-astra"],
-  ["moonshotai/kimi-k3", "openai/gpt-6-astra"],
-  ["openai/gpt-6.1-sol", "openrouter/openai/gpt-6-astra"],
+  ["openai/gpt-6.2-sol", "openai/gpt-6.2-astra"],
+  ["anthropic/claude-fable-5-2", "openai/gpt-6.2-astra"],
+  ["moonshotai/kimi-k3", "openai/gpt-6.2-astra"],
+  ["openai/gpt-6.2-sol", "openrouter/openai/gpt-6-astra"],
   ["anthropic/claude-fable-5-2", "amp/claude-fable-5-2"],
   ["anthropic/claude-fable-5-2", "fireworks-ai/claude-fable-5-2"],
-  ["openai/gpt-6.1-sol", "baseten/openai/gpt-6-astra"],
-  ["openai/gpt-6.1-sol", "google-vertex/claude-fable-5-2"],
-  ["openrouter/openai/gpt-6.1-sol", "anthropic/claude-fable-5-2"],
+  ["openai/gpt-6.2-sol", "baseten/openai/gpt-6-astra"],
+  ["openai/gpt-6.2-sol", "google-vertex/claude-fable-5-2"],
+  ["openrouter/openai/gpt-6.2-sol", "anthropic/claude-fable-5-2"],
 ] as const)(
   "unsafe fallback models %s / %s fail authored and stored validation before creation",
   async (workerModel, reviewerModel) => {
@@ -2060,7 +2061,7 @@ test.each([undefined, "google/gemini-2.5-pro"])(
     expect(waiting).toMatchObject({
       kind: "running",
       thread: "T-prepared",
-      workerModel: "openai/gpt-6.1-sol",
+      workerModel: "openai/gpt-6.2-sol",
       incident: { reason: "provider-limit", recovery: "wait" },
     });
     expect(f.counts()).toEqual({ creates: 1, sends: 1 });
@@ -2071,7 +2072,7 @@ test.each([undefined, "google/gemini-2.5-pro"])(
     expect(continued).toMatchObject({
       kind: "running",
       thread: "T-prepared",
-      workerModel: "openai/gpt-6.1-sol",
+      workerModel: "openai/gpt-6.2-sol",
       attempt: 1,
       incident: { providerLimit: { continuation: { outcome: "sent" } } },
     });
@@ -6176,7 +6177,7 @@ test("setup preserves application files and disabled configuration across two re
       expect(install.status).toBe(0);
       const configPath = join(root, ".factory.json");
       const config = await Bun.file(configPath).json();
-      expect(config.workerModel).toBe("openai/gpt-6.1-sol");
+      expect(config.workerModel).toBe("openai/gpt-6.2-sol");
       expect(config.workerEffort).toBe("medium");
       expect(config.permissions).toEqual({
         execute: false,
@@ -6463,7 +6464,7 @@ test.each(["high", undefined])(
       expect(settings).toEqual([
         [
           "T-owner",
-          "openai/gpt-6.1-sol",
+          "openai/gpt-6.2-sol",
           effort,
           undefined,
           effort === undefined
@@ -6648,7 +6649,7 @@ test.each(["high", undefined])(
       expect(settings).toEqual(
         Array.from({ length: 3 }, () => [
           "T-owner",
-          "openai/gpt-6.1-sol",
+          "openai/gpt-6.2-sol",
           effort,
           undefined,
           effort === undefined

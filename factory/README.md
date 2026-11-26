@@ -670,7 +670,7 @@ fields, missing models, unknown families, same-worker-family fallbacks and the i
 reviewer fail before dispatch and on stored-pin reads.
 
 When a reviewer hits a provider limit, fallback creates one fresh cold reviewer on the named model
-at high effort, on the same executor, for the same ticket, attempt, staged revision and base.
+at medium effort, on the same executor, for the same ticket, attempt, staged revision and base.
 The replacement receives the original cold review contract, not the limited reviewer's opinions.
 It writes a separate verdict path, so a late verdict from the original reviewer cannot approve
 the candidate. If the fallback is also limited, it waits. There is no fallback chain.
@@ -945,7 +945,7 @@ They require separate recovery evidence. Tests use disposable local remotes, nev
 
 ## Worker settings
 
-Fresh setup defaults to `openai/gpt-6.1-sol` with `workerEffort: "medium"`. Choose a model with
+Fresh setup defaults to `openai/gpt-6.2-sol` with `workerEffort: "medium"`. Choose a model with
 `--worker-model` and effort with `--worker-effort`. Supported native Amp effort values are `none`,
 `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
 Invalid CLI effort fails before setup writes. Invalid saved effort blocks checks and dispatch
@@ -957,7 +957,7 @@ To change future workers, edit `workerModel` and `workerEffort` in the project d
 then reload. These settings apply only when creating a new worker. Corrections continue with
 the original settings, not a replacement.
 
-Generated governed installations require one Sol 6.1 medium lane and native opposite-family review.
+Generated governed installations require one Sol 6.2 medium lane and native Astra 6.2 medium review.
 Other worker settings and the optional second lane remain supported by the native engine, not by
 this installed policy. Refresh preserves incompatible settings but refuses their execution; it
 never rewrites permission or converts an existing worker to another model. Active immutable pins
@@ -969,7 +969,7 @@ policy, so a limit cannot silently substitute another implementor lane.
 A definition runs one lane by default: `capacity: 1` and no `lightWorker`, dispatching exactly as
 before lanes existed. Set `capacity: 2` together with `lightWorker: { "model": "provider/model",
 "effort": "high" }` to add a light lane; either without the other fails parsing. The light model
-needs a known family, and with `review: true` an opposite-family default reviewer, like
+needs a known family, and with `review: true` a supported native default reviewer, like
 `workerModel`. Setup accepts `--light-worker-model` and `--light-worker-effort` (default `high`).
 
 Mark a queue entry `"lane": "light"` to run it on the light worker. Every other entry runs on the
@@ -1137,8 +1137,10 @@ configuration. Invalid review, ticket size, or risk values fail parsing.
 Tickets may declare `size: "small" | "medium" | "large"` and boolean `risky`. With review enabled,
 only a small, low-risk first attempt skips review. Medium, large, unrated, risky, and retried work
 requires one cold post-graft review, never a pre-graft review or a model call to classify risk.
-The reviewer runs cold at high effort on the opposite model family's default: an OpenAI worker
-gets `moonshotai/kimi-k3`, and an Anthropic or Moonshot AI worker gets `openai/gpt-6-astra`.
+The default reviewer runs cold on `openai/gpt-6.2-astra` at medium effort for OpenAI, Anthropic
+and Moonshot AI workers. Independence comes from a separate cold thread reviewing the staged
+artifact, not from requiring an opposite model family. Explicit provider-limit fallback settings
+remain supported by the native engine; this default is not an OpenAI-only provider restriction.
 A worker from any other family is refused.
 
 Scope and risk are separate, following create-linear-ticket's Effort and Risk distinction. Small is
@@ -1387,13 +1389,13 @@ successful source gate or native acceptance is neither remote delivery nor activ
    selects its registered mode; it does not switch an existing owner. Call its exact
    `factory_control_<root hash>` tool with `{"action":"policy-status"}`. Retain the original tool
    response with thread ID and timestamp. Require `verified: true`, the header's policy digest,
-   exact fixture root, current owner, `execute: false`, Sol 6.1 medium, capacity one and review.
+   exact fixture root, current owner, `execute: false`, Sol 6.2 medium, capacity one and review.
    If discovery, agent definition lookup or exact comparison fails, stop as **blocked** with that
    evidence. Do not fall back to instructions or manually supplied identity.
 5. In this isolated fixture only, add one native ticket using the documented ticket schema to
    change `src/example.txt`. Obtain explicit execution authorization, set the fixture's execution
    permission true and call native `start`. Do not create worker/reviewer threads by hand. Retain
-   policy-status, native creation, delivery, checked read, candidate gate and opposite-family cold
+   policy-status, native creation, delivery, checked read, candidate gate and Astra 6.2 medium cold
    review receipts. Confirm the legitimate checked operation and post-approval native dispatch.
 6. Request forbidden alternate shell, delegation, MCP/code-mode and batch calls in the governed
    Foreman, and forbidden alternate delegation in native worker/reviewer threads. Capture actual
