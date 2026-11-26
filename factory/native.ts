@@ -3482,12 +3482,13 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         const current = ids.flatMap(
           (id) => persistence!.currentLesson(id) ?? [],
         );
-        if (current.length === ids.length) return;
         const lessons = [...current, ...relevantHandoff(task, run)].slice(0, 3);
+        if (lessons.length === current.length && current.length === ids.length)
+          return;
         run.handoffLessons = lessons.map(({ id }) => id);
         const body = intent.message.slice(
           intent.message.indexOf("\n") + 1,
-          intent.message.lastIndexOf(lessonHeading),
+          ids.length ? intent.message.lastIndexOf(lessonHeading) : undefined,
         );
         Object.assign(
           intent,
@@ -3513,6 +3514,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         state.runs[task.id] = run;
         commit(task.id, "sent", run.thread);
         await watch(run.thread);
+        await deliverWorkerLessons(persistence!, task);
         return true;
       }
 
@@ -4409,6 +4411,8 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
       ) {
         if (run.delivery !== "sent") return settleWorkerDelivery(task, run);
         const activity = await runActivity(task, run, run.thread);
+        if (await deliverWorkerLessons(persistence!, task, activity))
+          return state;
         if (activity === "running" || activity === "unknown") return;
         if (activity !== "idle") {
           state.runs[task.id] = {
@@ -4811,6 +4815,41 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
     });
   }
 
+  async function deliverWorkerLessons(
+    persistence: ReturnType<typeof openPersistence>,
+    task: Task,
+    activity: Activity = "running",
+  ) {
+    const { state, lessonProject } = persistence;
+    const run = state.runs[task.id];
+    if (!state.enabled || !buildingWorker(run)) return;
+    if (activity !== "running" && activity !== "idle") return;
+    const findings = persistence
+      .relevantLessons(
+        lessonProject,
+        task.id,
+        task.after,
+        run.lessonScope ?? [],
+        run.thread,
+      )
+      .filter(({ id }) => persistence.reserveLesson(id, run.thread));
+    if (!findings.length) return;
+    try {
+      await host.send(
+        run.thread,
+        `Verified factory findings for your current work. This is not a new assignment.\n${lessonText(findings)}`,
+      );
+      return { thread: run.thread, outcome: "sent" } as const;
+    } catch {
+      persistence.event(
+        task.id,
+        "lesson-delivery-unknown",
+        findings.map(({ id }) => id).join(", "),
+      );
+      return { thread: run.thread, outcome: "unknown" } as const;
+    }
+  }
+
   function recordLesson(value: unknown, owner: ThreadID) {
     return saveRecord("record-lesson", owner, async (persistence) => {
       const { state, tickets, lessonProject } = persistence;
@@ -4824,31 +4863,9 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         },
       );
       const unknown: ThreadID[] = [];
-      for (const task of state.enabled ? tickets : []) {
-        const run = state.runs[task.id];
-        if (!buildingWorker(run)) continue;
-        const findings = persistence.relevantLessons(
-          lessonProject,
-          task.id,
-          task.after,
-          run.lessonScope ?? [],
-          run.thread,
-          lesson.id,
-        );
-        if (
-          !findings.length ||
-          !persistence.reserveLesson(lesson.id, run.thread)
-        )
-          continue;
-        try {
-          await host.send(
-            run.thread,
-            `Verified factory findings for your current work. This is not a new assignment.\n${lessonText(findings)}`,
-          );
-        } catch {
-          unknown.push(run.thread);
-          persistence.event(task.id, "lesson-delivery-unknown", lesson.id);
-        }
+      for (const task of tickets) {
+        const delivery = await deliverWorkerLessons(persistence, task);
+        if (delivery?.outcome === "unknown") unknown.push(delivery.thread);
       }
       return { lesson, unknown };
     });

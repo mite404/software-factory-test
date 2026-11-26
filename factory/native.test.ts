@@ -431,9 +431,9 @@ Work only in your worktree ${run.worktree}. Ticket A: Implement prd.md\nAllowed 
   },
 );
 
-test.each([false, true])(
-  "phase lessons reach only relevant workers (recover interrupted handoff: %s)",
-  async (interrupted) => {
+test.each(["normal", "superseded", "absent", "present", "empty", "sent"])(
+  "phase lessons reach only relevant workers (handoff: %s)",
+  async (scenario) => {
     const f = await preparationFixture(() => "");
     const config = await Bun.file(join(f.root, ".factory.json")).json();
     delete config.setup;
@@ -460,7 +460,8 @@ test.each([false, true])(
     f.git("commit", "-qm", "lesson fixture");
     const revision = f.git("rev-parse", "HEAD");
     const messages: { thread: string; message: string }[] = [];
-    let refuseHandoff = interrupted;
+    let refuseHandoff = scenario !== "normal";
+    let lookup: "inconclusive" | "absent" | "present" = "inconclusive";
     const host: NativeHost = {
       async create() {
         return "T-B";
@@ -468,12 +469,14 @@ test.each([false, true])(
       async send(thread, message) {
         if (thread === "T-B" && refuseHandoff) {
           refuseHandoff = false;
-          throw new Error("Interrupted before delivery");
+          if (scenario === "present" || scenario === "sent")
+            messages.push({ thread, message });
+          throw new Error("Interrupted delivery");
         }
         messages.push({ thread, message });
       },
       async lookupDelivery() {
-        return "absent";
+        return lookup;
       },
       async state() {
         return "running";
@@ -521,12 +524,17 @@ test.each([false, true])(
       questions: ["Does the CLI share the guard?"],
     };
     expect(engine.recordLesson(lesson, "T-D")).rejects.toThrow();
-    const original = await engine.recordLesson(lesson, "T-owner");
+    const original =
+      scenario === "empty"
+        ? undefined
+        : await engine.recordLesson(lesson, "T-owner");
     expect(factoryStatus(engine.directory).runs.A?.kind).toBe("running");
     expect(factoryStatus(engine.directory).runs.B).toBeUndefined();
     engine = createFactory(f.root, host, openStore);
-    await engine.recordLesson(lesson, "T-owner");
-    expect(messages.map(({ thread }) => thread)).toEqual(["T-D"]);
+    if (original) await engine.recordLesson(lesson, "T-owner");
+    expect(messages.map(({ thread }) => thread)).toEqual(
+      original ? ["T-D"] : [],
+    );
 
     const landed = openPersistence(engine.directory, []);
     for (const id of ["A", "C", "D"])
@@ -542,7 +550,7 @@ test.each([false, true])(
     const reconcile = () =>
       engine.tick("reconcile", "T-owner", host.state, undefined, tools);
     let dependent = lesson;
-    if (interrupted) {
+    async function recoverInterruptedHandoff() {
       await reconcile().catch(() => {});
       expect(factoryStatus(engine.directory).runs.B).toMatchObject({
         delivery: "sending",
@@ -570,25 +578,63 @@ test.each([false, true])(
       };
       proof.close();
       await engine.recordLesson(
-        { ...dependent, supersedes: original.lesson.id },
+        {
+          ...dependent,
+          ...(scenario === "superseded"
+            ? { supersedes: original!.lesson.id }
+            : {}),
+        },
         "T-owner",
       );
       engine = createFactory(f.root, host, openStore);
+      const beforeLookup = messages.length;
+      if (scenario === "sent") {
+        const delivered = openPersistence(engine.directory, []);
+        const run = delivered.state.runs.B;
+        if (run?.kind !== "running")
+          throw new Error("Expected delivered worker");
+        run.delivery = "sent";
+        delete run.incident;
+        delivered.commit(delivered.state, "B", "sent", run.thread);
+        delivered.close();
+      } else {
+        await reconcile();
+        expect(messages).toHaveLength(beforeLookup);
+        lookup = scenario === "present" ? "present" : "absent";
+      }
       await reconcile();
     }
+    if (scenario !== "normal") await recoverInterruptedHandoff();
     await reconcile();
-    const taught = messages.filter(({ message }) =>
-      message.includes("Phase lesson "),
-    );
-    expect(taught.map(({ thread }) => thread)).toEqual(["T-D", "T-B"]);
-    expect(taught[0]?.message).toContain(lesson.findings[0]!);
-    const handoff = taught[1]?.message;
-    expect(handoff).toContain(dependent.findings[0]!);
-    expect(handoff).toContain(dependent.revision);
-    expect(handoff).toContain(dependent.evidence[0]!);
-    expect(handoff).not.toContain(lesson.failedApproaches[0]!);
-    expect(handoff).not.toContain(lesson.questions[0]!);
-    if (interrupted) expect(handoff).not.toContain(lesson.findings[0]!);
+    assertHandoff();
+
+    function assertHandoff() {
+      const taught = messages.filter(({ message }) =>
+        message.includes("Phase lesson "),
+      );
+      const expected =
+        scenario === "present" || scenario === "sent"
+          ? ["T-D", "T-B", "T-B"]
+          : original
+            ? ["T-D", "T-B"]
+            : ["T-B"];
+      expect(taught.map(({ thread }) => thread)).toEqual(expected);
+      if (original) expect(taught[0]?.message).toContain(lesson.findings[0]!);
+      const handoff = taught.at(-1)?.message;
+      expect(handoff).toContain(dependent.findings[0]!);
+      expect(handoff).toContain(dependent.revision);
+      expect(handoff).toContain(dependent.evidence[0]!);
+      expect(handoff).not.toContain(lesson.failedApproaches[0]!);
+      expect(handoff).not.toContain(lesson.questions[0]!);
+      const dependentMessages = taught.filter(({ thread }) => thread === "T-B");
+      expect(
+        dependentMessages.filter(({ message }) =>
+          message.includes(lesson.findings[0]!),
+        ),
+      ).toHaveLength(
+        ["normal", "present", "absent", "sent"].includes(scenario) ? 1 : 0,
+      );
+    }
   },
 );
 

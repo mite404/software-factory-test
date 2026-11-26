@@ -1272,6 +1272,7 @@ function validLessonScope(value: unknown): value is string[] {
     (path) =>
       path.length <= 160 &&
       /^(?:[\w.-]+\/)*[\w.-]+\/?$/.test(path) &&
+      !unsafeLessonText.test(path) &&
       !path
         .split("/")
         .some(
@@ -1292,7 +1293,11 @@ export function taskLessonScope(value: unknown) {
 }
 
 function lessonName(value: unknown) {
-  if (typeof value !== "string" || !lessonLabel.test(value))
+  if (
+    typeof value !== "string" ||
+    !lessonLabel.test(value) ||
+    unsafeLessonText.test(value)
+  )
     throw new Error("Invalid phase lesson identity");
   return value;
 }
@@ -1323,6 +1328,10 @@ function lessonReferences(scope: unknown, evidence: unknown) {
   )
     throw new Error("Invalid phase lesson scope or evidence");
   return { scope: scope.toSorted(), evidence: evidence.toSorted() };
+}
+
+function lessonSource(value: unknown): value is ThreadID {
+  return thread(value) && !unsafeLessonText.test(value.slice(2));
 }
 
 function parseLesson(value: unknown): PhaseLesson {
@@ -1359,7 +1368,7 @@ function parseLesson(value: unknown): PhaseLesson {
   )
     throw new Error("Invalid phase lesson");
   if (
-    !thread(sourceThread) ||
+    !lessonSource(sourceThread) ||
     !gitRevision(revision) ||
     !positiveInteger(attempt)
   )
@@ -3093,21 +3102,17 @@ export function openPersistence(
         after: string[],
         scope: string[],
         target: ThreadID,
-        only?: string,
       ) {
         const rows = db
-          .query<
-            { id: string; data: string },
-            [string, string, string, string | null, string | null]
-          >(
+          .query<{ id: string; data: string }, [string, string, string]>(
             `
           SELECT l.id, l.data FROM lessons l WHERE l.project = ? AND l.ticket != ?
             AND NOT EXISTS (SELECT 1 FROM lessons newer WHERE newer.supersedes = l.id)
             AND NOT EXISTS (SELECT 1 FROM lesson_deliveries d WHERE d.lesson = l.id AND d.thread = ?)
-            AND (? IS NULL OR l.id = ?) ORDER BY l.rowid DESC
+            ORDER BY l.rowid DESC
         `,
           )
-          .iterate(project, ticket, target, only ?? null, only ?? null);
+          .iterate(project, ticket, target);
         const selected: SavedLesson[] = [];
         for (const { id, data } of rows) {
           const lesson = parseLesson(JSON.parse(data));

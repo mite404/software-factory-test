@@ -22,6 +22,7 @@ import {
   factoryStatus,
   lifecycleStatus,
   openPersistence,
+  taskLessonScope,
   publicSummary,
   runStage,
   stages,
@@ -80,6 +81,11 @@ test("phase lessons retain replaced sources and refuse unproven or unsafe summar
       supersedes: id,
     };
     for (const item of [
+      { phase: "ghp_fixturecredential" },
+      { ticket: "github_pat_fixturecredential" },
+      { project: "AKIAFIXTUREIDENTIFIER" },
+      { sourceThread: "T-sk-fixturecredential" },
+      { scope: ["src/ghp_fixturecredential.ts"] },
       { findings: ["API_KEY=fixture-not-a-real-secret"] },
       {
         findings: [
@@ -91,6 +97,9 @@ test("phase lessons retain replaced sources and refuse unproven or unsafe summar
       expect(() => storage.recordLesson({ ...replacement, ...item })).toThrow(
         /lesson/i,
       );
+    expect(() => taskLessonScope(["src/ghp_fixturecredential.ts"])).toThrow(
+      "Invalid lesson scope",
+    );
     storage.recordLesson({
       ...replacement,
       findings: ["Scope both lookups and pagination by tenant."],

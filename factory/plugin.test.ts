@@ -1539,6 +1539,41 @@ test("an observer's reconcile reply is the bounded summary, never private state"
     expect(String(await execute({ action: "reconcile" }, owner))).toContain(
       canary,
     );
+    const privateIntent = "PRIVATE-LESSON-INTENT-CANARY";
+    const key = "c".repeat(64);
+    const checkpoint = {
+      kind: "running",
+      thread: "T-lesson-worker",
+      base: "base",
+      worktree: root,
+      attempt: 1,
+      delivery: "sending",
+      deliveryIntent: {
+        key,
+        repeated: false,
+        message: `factory-key: ${key}\n${privateIntent}`,
+      },
+    } satisfies Run;
+    const persisted = openPersistence(directory, []);
+    persisted.state.runs.direct = checkpoint;
+    persisted.state.runs.nested = {
+      kind: "uncertain",
+      thread: checkpoint.thread,
+      reason: "Delivery outcome unknown",
+      checkpoint,
+    };
+    persisted.commit(persisted.state, "direct", "fixture", "");
+    persisted.close();
+    const stranger = {
+      thread: { id: "T-stranger" },
+    } as unknown as PluginToolContext;
+    const visible = String(await execute({ action: "status" }, stranger));
+    expect(JSON.parse(visible).runs.nested.kind).toBe("uncertain");
+    expect(visible).not.toContain(privateIntent);
+    expect(visible).not.toContain("deliveryIntent");
+    expect(JSON.stringify(factoryStatus(directory).runs.nested)).toContain(
+      privateIntent,
+    );
   } finally {
     dispose();
     await rm(root, { recursive: true, force: true });

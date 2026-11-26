@@ -20,6 +20,7 @@ import {
   roleTools,
 } from "./capabilities";
 import type { DashboardSnapshot } from "./dashboard";
+import { validDeliveryIntent } from "./delivery";
 import {
   factoryDefinition,
   factoryStatus,
@@ -112,12 +113,19 @@ function connectedTools(action: string, saved: State, ctx: PluginToolContext) {
     : undefined;
 }
 
+function omitDeliveryIntent(key: string, value: unknown) {
+  return key === "deliveryIntent" && validDeliveryIntent(value)
+    ? undefined
+    : value;
+}
+
 // The observer's reconcile replies carry only the summary, never full private state.
 function controlReply(state: State, caller: string) {
   return JSON.stringify(
     state.foreman?.observer?.thread === caller
       ? statusSummary(state, Date.now())
       : state,
+    omitDeliveryIntent,
   );
 }
 
@@ -1014,7 +1022,8 @@ export default function registerFactory(
         return JSON.stringify(await backup(root));
       }
       const record = recordings.get(requested);
-      if (record) return JSON.stringify(await record(input, ctx));
+      if (record)
+        return JSON.stringify(await record(input, ctx), omitDeliveryIntent);
       const action = creation
         ? "reconcile"
         : controlActions.find((action) => action === requested);
@@ -1062,15 +1071,21 @@ export default function registerFactory(
         )
           await publish(liveTools);
         if (action !== "status") return controlReply(state, ctx.thread.id);
-        return JSON.stringify({
-          ...state,
-          lifecycle: lifecycleStatus(),
-          pipelineSteps,
-          stages,
-          stage: Object.fromEntries(
-            Object.entries(state.runs).map(([id, run]) => [id, runStage(run)]),
-          ),
-        });
+        return JSON.stringify(
+          {
+            ...state,
+            lifecycle: lifecycleStatus(),
+            pipelineSteps,
+            stages,
+            stage: Object.fromEntries(
+              Object.entries(state.runs).map(([id, run]) => [
+                id,
+                runStage(run),
+              ]),
+            ),
+          },
+          omitDeliveryIntent,
+        );
       };
       calls++;
       try {
