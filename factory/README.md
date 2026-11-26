@@ -5,8 +5,9 @@ worker retirement, and dashboard chat are not implemented. Remaining stories liv
 [stories.md](../docs/stories.md) and their tickets in [the backlog](../docs/backlog.md).
 
 The [Foreman prompt](config/agents/foreman/agent.md) defines the current orchestration
-procedure: one worker per lane, at most two lanes. It is a reusable prompt, not an automatically
-installed agent mode or a change to worker instructions.
+procedure. It is a reusable prompt, not execution authority. Generated installations register the
+restricted `factory-foreman` mode described below; the source-maintenance registration remains
+separate and does not silently change an existing owner.
 
 ## Take over a stopped Foreman in the same orb
 
@@ -956,6 +957,13 @@ To change future workers, edit `workerModel` and `workerEffort` in the project d
 then reload. These settings apply only when creating a new worker. Corrections continue with
 the original settings, not a replacement.
 
+Generated governed installations require one Sol 6.1 medium lane and native opposite-family review.
+Other worker settings and the optional second lane remain supported by the native engine, not by
+this installed policy. Refresh preserves incompatible settings but refuses their execution; it
+never rewrites permission or converts an existing worker to another model. Active immutable pins
+must also match; unknown legacy worker pins refuse. Provider fallback remains native-only for this
+policy, so a limit cannot silently substitute another implementor lane.
+
 ### Two worker lanes
 
 A definition runs one lane by default: `capacity: 1` and no `lightWorker`, dispatching exactly as
@@ -1314,8 +1322,97 @@ bun factory/setup-factory.ts --repo /path/to/repository --refresh
 ```
 
 Existing configuration, tickets, and runtime state stay unchanged. Reload the factory plugin
-explicitly after a successful refresh. Ordinary repeated setup remains a no-op, and `--check` never
-writes.
+explicitly after a successful refresh. Repeated setup is a no-op only for matching installation
+bytes and source identity. Old or modified generated plugins require refresh. `--check` never
+writes and reports **FILES OK**, not loaded-runtime proof.
+
+### Installed policy identity and governed fixture
+
+The generated header binds the absolute root, factory TypeScript source digest and bundle digest.
+Checks recompute these values without loading the plugin. Neither the header nor an edited
+configuration proves what a running Amp session loaded. In that session, call factory control
+`policy-status`: it reads the native saved owner (or the caller before initial ownership) and the
+platform's `thread.agent().definition`, then compares the complete definition to this loaded
+runtime's restricted agent. It returns the loaded policy digest, root, owner, current execution
+permission and effective lane. A different digest after refresh requires a plugin reload and a
+matching restricted owner, not copying a header into an old session.
+
+Observed contract: `amp plugins show-docs` on CLI `0.0.1795608053-gcec25c` exposes
+`registerAgentMode({ key, label, agent })`, `createAgent(config).definition`, and
+`threads.get(id).agent(): Promise<Agent>`. The installed `@ampcode/plugin` declarations expose the
+same methods. Static discovery uses a JSON `// @amp-agent-mode` comment. The SDK describes the
+returned definition as the agent currently used by the thread. This is platform data, not an
+agent name, prompt assertion or control input. Missing methods, failed reads, built-in owners and
+different definitions refuse execution. Do not infer identity from transcripts. Supported agent
+definition reads do not claim OS isolation or enumerate every resolved runtime permission.
+
+The native serialized tick checks this identity before execution, repair, or automatic recovery
+effects. Restart and state-change callbacks use the same tick. Status, pause and definition reload
+remain available; they do not authorize dispatch. No attempt counter, human confirmation, repair
+worker or fourth-attempt parking rule is replaced. Refresh does not switch this maintenance owner.
+Legacy-owner migration is not automatic: cancel or unknown identity leaves ownership and work
+unchanged. An explicit native handoff still needs its existing checks and never bypasses the next
+execution identity check; the replacement identity is also checked before ownership or schedule
+effects. Native child creation rechecks the owner after any wait for the connected tool to return.
+
+**Coordinator-owned live procedure, separately approved. Do not run during source review.** Unit
+tests use SDK-shaped doubles and disposable installation files; they are not live receipts. A
+successful source gate or native acceptance is neither remote delivery nor activation approval.
+
+1. Obtain approval for an isolated local Git fixture, plugin loading, a restricted Foreman, native
+   worker/reviewer creation, schedules, tool probes and cleanup. Keep production roots, retained
+   bundles, credentials and backlog outside the fixture. Use a real approved bookkeeping store,
+   not `bookkeeping.fixture.ts`. Record the candidate SHA, CLI version and `show-docs` output.
+2. From the accepted source directory, prepare the fixture with the commands below. Set `STORE`
+   to that approved store. Initial setup leaves execution disabled and creates no Amp thread.
+
+   ```sh copy Copy Fixture Setup
+   export FIXTURE="$(mktemp -d /tmp/factory-governed-live.XXXXXX)"
+   export STORE=/absolute/path/to/approved/orch/store.ts
+   git -C "$FIXTURE" init -q
+   mkdir "$FIXTURE/src"
+   printf '# Isolated governed fixture\n' > "$FIXTURE/prd.md"
+   printf 'fixture\n' > "$FIXTURE/src/example.txt"
+   git -C "$FIXTURE" add .
+   git -C "$FIXTURE" commit -m 'test: seed governed fixture'
+   bun factory/setup-factory.ts --repo "$FIXTURE" --store "$STORE" \
+     --prd prd.md --verify 'test -s src/example.txt' --scope src/ --review
+   bun factory/setup-factory.ts --repo "$FIXTURE" --check
+   ```
+
+3. Record the generated header and file-check output. Repeat setup and refresh, confirming saved
+   settings and native state stay unchanged. Replace the fixture plugin temporarily with an old
+   installation and prove check/reuse refuse; refresh it again. These are file receipts only.
+4. Open Amp in `FIXTURE` with `amp --mode factory-foreman`. This loads the fixture plugin and
+   selects its registered mode; it does not switch an existing owner. Call its exact
+   `factory_control_<root hash>` tool with `{"action":"policy-status"}`. Retain the original tool
+   response with thread ID and timestamp. Require `verified: true`, the header's policy digest,
+   exact fixture root, current owner, `execute: false`, Sol 6.1 medium, capacity one and review.
+   If discovery, agent definition lookup or exact comparison fails, stop as **blocked** with that
+   evidence. Do not fall back to instructions or manually supplied identity.
+5. In this isolated fixture only, add one native ticket using the documented ticket schema to
+   change `src/example.txt`. Obtain explicit execution authorization, set the fixture's execution
+   permission true and call native `start`. Do not create worker/reviewer threads by hand. Retain
+   policy-status, native creation, delivery, checked read, candidate gate and opposite-family cold
+   review receipts. Confirm the legitimate checked operation and post-approval native dispatch.
+6. Request forbidden alternate shell, delegation, MCP/code-mode and batch calls in the governed
+   Foreman, and forbidden alternate delegation in native worker/reviewer threads. Capture actual
+   platform refusal/tool omission and zero resulting thread, message, schedule or file effects,
+   not just a model's refusal prose. Confirm unrelated fixture-external threads remain unaffected.
+7. Restart the fixture runtime. Prove the same restricted owner passes identity again. In a
+   separately approved legacy-owner fixture, attempt start, resume and automatic reconciliation
+   after reload/restart with a built-in, unavailable or mismatched owner. Retain before/after native
+   state and events showing no dispatch, attempt, permission or ownership changes. Cancellation of
+   any explicit migration must leave that owner unchanged.
+8. Exercise rejection and same-worker repair through native reports and cold review. Confirm the
+   fourth rejection parks, and capped resume refuses decline, missing attribution and stale
+   confirmation, then permits exactly the authenticated approved repair without replacing its
+   worker. Keep raw platform receipts separate from unit-test output. Transcript reads retain SDK
+   pagination limits; permanent deletion stays unsupported, not emulated by archive.
+9. Pause through native control, confirm only the fixture's owned schedule is cleared, then stop
+   its Amp session. Retain receipts before any separately approved fixture cleanup. Report source
+   gate, cold review, remote delivery and live activation as distinct results, including any blocked
+   criterion. This procedure has not been executed as part of F043 source implementation.
 
 ### Dashboard service declaration
 
@@ -1608,13 +1705,14 @@ hashes. PR metadata, conversation history, and evidence browsing remain backlog 
 
 ## Restricted role capabilities and checked threads
 
-`factory/capabilities.ts` defines an installation seam, not an installed policy.
+`factory/capabilities.ts` defines the capabilities used by generated installed policy.
 `restrictedForeman(root, model)` returns an agent definition with exactly this root's factory
 control tool and no shell, raw thread, delegation, plugin wildcard or arbitrary MCP tools.
 The adapter's optional trusted `restrictedForeman` thread ID binds interception to that identity.
 It does not claim ownership, change modes, create a Foreman, install anything or activate policy
-for an existing maintenance owner. Installation identity, legacy-owner refusal and live governed
-fixture proof belong to the following enforcement unit.
+for an existing maintenance owner. Generated installation supplies a source-policy digest instead
+and governs the native owner with the shared execution identity check described above. Live
+governed fixture proof remains separately approved and deferred, not established by unit tests.
 
 Native child creation selects exact tools by role. Workers and reviewers retain `Read`, patching
 and shell execution/status/termination for implementation and review reports. Observers have only

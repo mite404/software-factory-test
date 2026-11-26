@@ -411,7 +411,11 @@ const spawn = Bun.spawn.bind(Bun);
 Bun.spawn = (args, options) => spawn(args, {...options, env: options?.env ?? process.env});
 const {default: register} = await import(${JSON.stringify(pluginPath)});
 let execute, dispose;
-register({on() {}, registerTool(tool) {execute=tool.execute;}, onDispose(fn) {dispose=fn;}, logger:{log(){}}});
+register({
+  on() {}, registerTool(tool) {execute=tool.execute;}, onDispose(fn) {dispose=fn;}, logger:{log(){}},
+  createAgent(config) {return {definition:{kind:"agent-definition",...config}};},
+  registerAgentMode() {return {unsubscribe(){}};},
+});
 let heartbeats=0;
 const timer=setInterval(()=>heartbeats++,5);
 try {

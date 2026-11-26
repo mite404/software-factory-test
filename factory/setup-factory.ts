@@ -8,6 +8,7 @@ import {
   mkdtemp,
   mkdir,
   readFile,
+  readdir,
   rename,
   rm,
   writeFile,
@@ -75,14 +76,28 @@ function hasDefinition(root: string) {
   );
 }
 
+async function requireInstalledPolicy(root: string, pluginPath: string) {
+  const installed = await readFile(pluginPath, "utf8");
+  const newline = installed.indexOf("\n");
+  const expected = installationHeader(
+    root,
+    await policySource(),
+    installed.slice(newline + 1),
+  );
+  if (installed.slice(0, newline) !== expected)
+    throw new Error(
+      "Installed policy missing or mismatched; run --refresh, then reload and verify policy-status",
+    );
+}
+
 async function checkOrReuse(root: string, pluginPath: string, check: boolean) {
   if (!check && !hasDefinition(root)) return false;
   const config = await configuration(root);
-  await access(pluginPath);
+  await requireInstalledPolicy(root, pluginPath);
   await requireInstallation(root, check, config.checks);
   process.stdout.write(
     check
-      ? "SETUP OK (execution remains separately controlled)\n"
+      ? "FILES OK; loaded policy UNVERIFIED. Call policy-status in the owner runtime.\n"
       : "SETUP UNCHANGED\n",
   );
   return true;
@@ -218,13 +233,31 @@ async function existingSetup(
   return checkOrReuse(root, pluginPath, values.check);
 }
 
+// Source identity is independent of generated files and of model-supplied metadata.
+async function policySource() {
+  const hash = createHash("sha256");
+  const files = (await readdir(import.meta.dir))
+    .filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts"))
+    .sort();
+  for (const name of files) {
+    hash.update(name + "\0");
+    hash.update(await readFile(join(import.meta.dir, name)));
+  }
+  return hash.digest("hex");
+}
+
+function installationHeader(root: string, policy: string, body: string) {
+  return `// factory-installation ${JSON.stringify({ root, policy, bundleSHA256: createHash("sha256").update(body).digest("hex") })}`;
+}
+
 async function bundlePlugin(root: string, store: string) {
   const temporary = await mkdtemp(join(tmpdir(), "factory-bundle-"));
   try {
+    const policy = await policySource();
     const entry = join(temporary, "entry.ts");
     await writeFile(
       entry,
-      `import register from ${JSON.stringify(join(import.meta.dir, "plugin.ts"))};\nimport {openStore} from ${JSON.stringify(store)};\nexport const description = "Sequential local factory dispatch with durable claims and revision verification";\nexport default (amp) => register(amp, ${JSON.stringify(root)}, openStore);\n`,
+      `import register from ${JSON.stringify(join(import.meta.dir, "plugin.ts"))};\nimport {openStore} from ${JSON.stringify(store)};\nexport const description = "Sequential local factory dispatch with durable claims and revision verification";\nexport default (amp) => register(amp, ${JSON.stringify(root)}, openStore, {policy: ${JSON.stringify(policy)}});\n`,
     );
     const result = await Bun.build({
       entrypoints: [entry],
@@ -236,10 +269,12 @@ async function bundlePlugin(root: string, store: string) {
         `Bundle failed: ${result.logs.map((log) => log.message).join("\n")}`,
       );
     // Bun comments each module with its path; the random temp directory would change every refresh.
-    return (await result.outputs[0].text()).replaceAll(
+    const bundled = (await result.outputs[0].text()).replaceAll(
       relative(process.cwd(), entry),
       "factory-bundle/entry.ts",
     );
+    const body = `// @amp-agent-mode {"key":"factory-foreman","label":"Factory Foreman"}\n${bundled}`;
+    return `${installationHeader(root, policy, body)}\n${body}`;
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }
