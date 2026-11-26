@@ -261,6 +261,13 @@ export const FRAMES: Frame[] = [
   },
   { ticket: 3, activity: "working", crowd: true, ...BUILDING },
   { ticket: 3, activity: "working", repair: true, ...BUILDING },
+  {
+    ticket: 3,
+    stage: "disconnected",
+    actor: "operator",
+    kind: "running",
+    stopName: "disconnected",
+  },
 ];
 
 const STOPPED_REVIEW = {
@@ -316,6 +323,10 @@ const GATE_REPAIR = {
 
 function stopFrame(frame: Frame): Partial<FeedTask> {
   if (frame.stopName === "providerLimit") return PROVIDER_LIMIT;
+  if (frame.stopName === "disconnected")
+    return {
+      stop: { reason: "disconnected", role: "worker", thread: "T-replay-3" },
+    };
   if (frame.parked) return PARKED_REVIEW;
   return frame.escalated ? ESCALATED_REVIEW : STOPPED_REVIEW;
 }
@@ -326,6 +337,7 @@ const STEP: Partial<Record<Frame["stage"], number>> = {
   building: 2,
   blocked: 2,
   "rate-limited": 2,
+  disconnected: 2,
   gating: 4,
   reviewing: 5,
   escalated: 5,

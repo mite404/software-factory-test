@@ -34,10 +34,10 @@ function wantsClock(state: State, queue: Task[], automations: Automations) {
   );
 }
 
-// The clock's period: the shortest any enabled automation needs, never longer than the watchdog's.
-function clockMinutes(automations: Automations) {
+// The single clock uses the shortest interval needed by stall checks or enabled automations.
+function clockMinutes(automations: Automations, checkingStalls: boolean) {
   return Math.min(
-    watchdogMinutes,
+    checkingStalls ? 1 : watchdogMinutes,
     ...enabledAutomations(automations).map((record) =>
       shortestGapMinutes(record.schedule),
     ),
@@ -241,6 +241,31 @@ function satisfied(
     : ["missing", "conflict"].includes(current);
 }
 
+function ownedScheduleId(schedule: Record<string, unknown>) {
+  if (typeof schedule.id !== "string" || !schedule.id)
+    throw new WatchdogUnavailable(
+      "Owned watchdog did not report a schedule ID",
+    );
+  return schedule.id;
+}
+
+function assertWritableRegistration(
+  current: ReturnType<typeof registration>,
+  monitor: NonNullable<State["monitor"]>,
+) {
+  if (current === "conflict") {
+    monitor.schedule = "conflict";
+    delete monitor.pendingThread;
+    throw new WatchdogUnavailable(
+      "Thread already has an unrelated schedule or a second factory root; preserve it",
+    );
+  }
+  if (current === "drifted")
+    throw new WatchdogUnavailable(
+      "Owned watchdog configuration drifted; inspect recurrence, run mode and enabled state",
+    );
+}
+
 function monitorState(
   state: State,
   fingerprint: string,
@@ -273,13 +298,18 @@ async function changeRegistration(
   wakeAt: number | undefined,
   target: ThreadID | undefined,
   at: number,
+  scheduleId?: string,
 ) {
   // Omitting the thread keeps the owner's own registration call exactly as observed.
   const thread = target ? { thread: target } : {};
   const minutes = Number(expected.interval);
   await tools
     .call(
-      wanted ? "amp.set_schedule" : "amp.clear_schedule",
+      wanted
+        ? scheduleId
+          ? "amp.update_schedule"
+          : "amp.set_schedule"
+        : "amp.clear_schedule",
       wanted
         ? {
             title: expected.title,
@@ -293,7 +323,7 @@ async function changeRegistration(
                 ? `Every ${minutes} minutes`
                 : `Provider reset, then every ${minutes} minutes`,
             run_mode: "existing",
-            ...thread,
+            ...(scheduleId ? { schedule_id: scheduleId } : thread),
           }
         : thread,
     )
@@ -497,11 +527,24 @@ export async function reconcileSchedule(
   const title = `Factory watchdog ${fingerprint}`;
   const prompt = schedulePrompt(title, root, !!observer);
   const wanted = wantsClock(state, queue, automations);
+  const checkingStalls = queue.some((task) => {
+    const run = state.runs[task.id];
+    if (run)
+      return (
+        run.kind === "preparing" ||
+        run.kind === "creating" ||
+        (run.kind === "running" && !run.incident?.providerLimit)
+      );
+    return (
+      task.intake !== "planned" &&
+      task.after.every((id) => state.runs[id]?.kind === "done")
+    );
+  });
   const expected = {
     fingerprint,
     title,
     prompt,
-    interval: clockMinutes(automations),
+    interval: clockMinutes(automations, checkingStalls),
   };
   const settled = wanted ? "installed" : "cleared";
   const resets = Object.values(state.runs).flatMap((run) => {
@@ -510,44 +553,40 @@ export async function reconcileSchedule(
     const due = providerResetAt(limit);
     return due > at ? [due + 60_000] : [];
   });
-  // An enabled automation needs wakes before any reset, so it keeps the schedule unanchored; the
-  // continuation stays gated by its own reset time at whichever wake follows it.
+  // Stall checks and automations need wakes before a reset. Provider continuation still waits
+  // for its own reset when the watchdog is not anchored to it.
   const wakeAt =
-    resets.length && !enabledAutomations(automations).length
+    resets.length && !checkingStalls && !enabledAutomations(automations).length
       ? Math.min(...resets)
       : undefined;
   try {
     await clearPreviousOwners(state, tools, save, at);
     if (state.enabled && !execute) return;
-    const current = registration(
-      await readSchedule(tools, observer),
-      expected,
-      wakeAt,
-      at,
-    );
-    if (current === "conflict" && wanted) {
-      monitor.schedule = "conflict";
-      delete monitor.pendingThread;
-      throw new WatchdogUnavailable(
-        "Thread already has an unrelated schedule or a second factory root; preserve it",
-      );
-    }
-    if (current === "drifted" && wanted)
-      throw new WatchdogUnavailable(
-        "Owned watchdog configuration drifted; inspect recurrence, run mode and enabled state",
-      );
+    const observed = await readSchedule(tools, observer);
+    const current = registration(observed, expected, wakeAt, at);
+    if (wanted) assertWritableRegistration(current, monitor);
     if (satisfied(current, wanted, monitor.wakeAt, wakeAt)) {
       await clearOwnerSchedule(state, tools, fingerprint);
       settleMonitor(monitor, settled, save);
       return;
     }
+    const scheduleId =
+      wanted && observed ? ownedScheduleId(observed) : undefined;
     monitor.schedule = "checking";
     monitor.pendingThread = thread;
     save();
     // SQLite intent is not a remote receipt. Always inspect, even after a successful call.
     if (
       !satisfied(
-        await changeRegistration(tools, expected, wanted, wakeAt, observer, at),
+        await changeRegistration(
+          tools,
+          expected,
+          wanted,
+          wakeAt,
+          observer,
+          at,
+          scheduleId,
+        ),
         wanted,
       )
     )

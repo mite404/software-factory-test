@@ -80,7 +80,7 @@ function matchingDeliveries(page: ThreadMessage[], message: string) {
   return matches;
 }
 
-function activity(value: unknown): Awaited<ReturnType<NativeHost["state"]>> {
+function activity(value: unknown) {
   switch (value) {
     case "idle":
     case "running":
@@ -322,18 +322,44 @@ function providerActivity(
   };
 }
 
+function connectedSample(agentState: ReturnType<typeof record>) {
+  const state = agentState?.state;
+  if (state !== "running_tools" && state !== "streaming" && state !== "idle")
+    return;
+  if (typeof agentState?.updatedAt !== "string") return;
+  const updatedAt = Date.parse(agentState.updatedAt);
+  if (Number.isSafeInteger(updatedAt) && updatedAt >= 0)
+    return { kind: "sample", state, updatedAt } as const;
+}
+
+type SampleMode = Parameters<NativeHost["state"]>[1];
+
 function reportedActivity(
   value: unknown,
   id: string,
+  sample: SampleMode,
 ): Awaited<ReturnType<NativeHost["state"]>> {
   const result = record(value);
   if (!result) return "unknown";
   const threadID = record(result.metadata)?.threadID;
-  if (threadID !== undefined && threadID !== id) return "unknown";
+  if (otherThread(threadID, id, sample)) return "unknown";
   const agentState = record(result.agentState);
+  const observed =
+    sample && threadID === id ? connectedSample(agentState) : undefined;
+  return observed ?? reportedFallback(agentState, threadID === id);
+}
+
+function otherThread(threadID: unknown, id: string, sample: SampleMode) {
+  return threadID !== id && (threadID !== undefined || sample === "held-stall");
+}
+
+function reportedFallback(
+  agentState: ReturnType<typeof record>,
+  exactThread: boolean,
+) {
   const status = activity(agentState?.state);
   if (status === "error") return providerActivity(agentState?.agentError);
-  return threadID === id ? status : "unknown";
+  return exactThread ? status : "unknown";
 }
 
 const activities = {
@@ -443,25 +469,76 @@ export default function registerFactory(
     yieldCalls = Promise.withResolvers<undefined>();
   }
 
-  async function observe(
-    id: Parameters<NativeHost["state"]>[0],
-    tools?: PluginTools & { isConnected?(): boolean },
-  ) {
-    let local: Awaited<ReturnType<NativeHost["state"]>> = "unknown";
+  async function readLocal(id: Parameters<NativeHost["state"]>[0]) {
     try {
-      local = activity(await amp.threads.get(id).state.get());
-      if (local !== "error" || !tools) return local;
+      return activity(await amp.threads.get(id).state.get());
     } catch {
-      if (!tools) return "unknown";
+      // The connected read can still supply a status when local SDK state is unavailable.
     }
-    if (tools.isConnected?.() === false) return local;
+  }
+
+  async function readConnected(
+    id: Parameters<NativeHost["state"]>[0],
+    tools: PluginTools,
+    sample: SampleMode,
+  ) {
     try {
-      const result = await tools.call("amp.get_thread_status", { thread: id });
-      return reportedActivity(result, id);
+      return reportedActivity(
+        await tools.call("amp.get_thread_status", { thread: id }),
+        id,
+        sample,
+      );
     } catch {
       // A failed observation is not evidence that a worker is idle or blocked.
     }
-    return "unknown";
+  }
+
+  async function observe(
+    id: Parameters<NativeHost["state"]>[0],
+    tools?: PluginTools & { isConnected?(): boolean },
+    sample?: SampleMode,
+    samplesOnly = false,
+  ) {
+    if (sample === "held-stall")
+      return observeHeldStall(id, tools, samplesOnly);
+    const local = await readLocal(id);
+    const needsFallback = local === "error" || local === undefined;
+    if (
+      !tools ||
+      tools.isConnected?.() === false ||
+      (!sample && !needsFallback)
+    )
+      return local ?? "unknown";
+    const reported = await readConnected(id, tools, sample);
+    return selectObservation(local, reported, samplesOnly, needsFallback);
+  }
+
+  async function observeHeldStall(
+    id: Parameters<NativeHost["state"]>[0],
+    tools: (PluginTools & { isConnected?(): boolean }) | undefined,
+    samplesOnly: boolean,
+  ) {
+    if (!tools || tools.isConnected?.() === false) return "unknown";
+    const reported = await readConnected(id, tools, "held-stall");
+    if (
+      samplesOnly &&
+      (typeof reported !== "object" || reported.kind !== "sample")
+    )
+      return "unknown";
+    return reported ?? "unknown";
+  }
+
+  function selectObservation(
+    local: Awaited<ReturnType<typeof readLocal>>,
+    reported: Awaited<ReturnType<typeof readConnected>>,
+    samplesOnly: boolean,
+    needsFallback: boolean,
+  ) {
+    if (typeof reported === "object" && reported.kind === "sample")
+      return reported;
+    if (!samplesOnly && needsFallback && reported !== undefined)
+      return reported;
+    return local === "error" && !samplesOnly ? "unknown" : (local ?? "unknown");
   }
 
   async function policyIdentity(owner?: PluginToolContext["thread"]["id"]) {
@@ -559,7 +636,7 @@ export default function registerFactory(
       }
       return "inconclusive";
     },
-    state: observe,
+    state: (id, sample) => observe(id, undefined, sample),
     messages: (id, options) => amp.threads.get(id).messages(options),
     watch(id, wake) {
       const thread = amp.threads.get(id);
@@ -790,8 +867,8 @@ export default function registerFactory(
     [
       "handoff",
       (input, ctx) =>
-        factory.handoff(input, ctx.thread.id, ctx.tools, (id) =>
-          observe(id, ctx.tools),
+        factory.handoff(input, ctx.thread.id, ctx.tools, (id, sample) =>
+          observe(id, ctx.tools, sample),
         ),
     ],
     ...automationActions.map(
@@ -903,15 +980,29 @@ export default function registerFactory(
       const tools = connectedTools(action, saved, ctx);
       const request = await repairRequest(input, saved, ctx, root);
       let connected = true;
-      const liveTools = tools && {
-        call: tools.call.bind(tools),
-        isConnected: () => connected,
-      };
+      const duringCall = (bridge: PluginTools | undefined) =>
+        bridge && {
+          call: bridge.call.bind(bridge),
+          isConnected: () => connected,
+        };
+      const liveTools = duringCall(tools);
+      const observerBridge = () =>
+        action === "reconcile" &&
+        ctx.thread.id === saved.foreman?.observer?.thread
+          ? duringCall(ctx.tools)
+          : undefined;
       const control = async () => {
+        const observerTools = observerBridge();
         const state = await factory.tick(
           action,
           ctx.thread.id,
-          (id) => observe(id, liveTools),
+          (id, sample) =>
+            observe(
+              id,
+              liveTools ?? (sample ? observerTools : undefined),
+              sample,
+              !!observerTools,
+            ),
           request,
           liveTools,
           (action === "admit" || action === "record-insight") &&
@@ -963,7 +1054,7 @@ export default function registerFactory(
       const reconciled = await factory.tick(
         "reconcile",
         event.thread.id,
-        (id) => observe(id, ctx.tools),
+        (id, sample) => observe(id, ctx.tools, sample),
         undefined,
         ctx.tools,
       );

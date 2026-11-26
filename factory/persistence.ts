@@ -43,6 +43,7 @@ export type MergeRecord = {
 };
 export type WatchdogPolicy = {
   suspicionMs: number;
+  disconnectMs?: number;
   spendingFirstAttempt: number;
   spendingInterval: number;
 };
@@ -61,9 +62,12 @@ export type Watchdog = {
   nudgedAt?: number;
   alerts: WatchdogAlert[];
 };
+/** Default age of an unchanged tools sample before reporting a suspected stall. */
+export const defaultDisconnectMs = 180_000;
 /** Defaults for definitions and immutable pins authored before watchdog policy existed. */
 export const defaultWatchdog: WatchdogPolicy = {
   suspicionMs: 30 * 60 * 1000,
+  disconnectMs: defaultDisconnectMs,
   spendingFirstAttempt: 6,
   spendingInterval: 4,
 };
@@ -130,6 +134,10 @@ export type ProviderLimit = {
   observedAt: number;
   resetAt?: number;
 };
+export type ThreadSample = {
+  state: "running_tools" | "streaming" | "idle";
+  updatedAt: number;
+};
 /** One check's public result: its name, whether it decides acceptance, and how it ended. */
 export type CheckStatus = {
   name: string;
@@ -169,6 +177,7 @@ export type StopIncident = {
     | "review-rejected"
     | "worker-blocked"
     | "worker-error"
+    | "disconnected"
     | "provider-limit"
     | "approval-required"
     | "preparation-failed"
@@ -179,7 +188,7 @@ export type StopIncident = {
     | "review-identity-changed"
     | "evidence-missing"
     | "brief-incomplete";
-  recovery: "resume" | "retry-setup" | "inspect" | "wait";
+  recovery: "resume" | "retry-setup" | "inspect" | "wait" | "reconnect";
   providerLimit?: ProviderLimit & {
     thread: ThreadID;
     continuation?: { at: number; outcome: "sending" | "sent" | "unknown" };
@@ -203,6 +212,14 @@ export type Run = (
       requirements?: string;
       feedback?: string;
       deliveryIntent?: DeliveryIntent;
+      /** Last distinct connected observation for the delivered worker or reviewer. */
+      stallSample?: ThreadSample & {
+        thread: ThreadID;
+        attempt: number;
+        fingerprint?: string;
+        observedAt: number;
+        since: number;
+      };
       /** Saved with its process group when the gate spawns and removed when it returns; a later
        * reconcile retires it once that group has stopped, and an idle report gates again.
        * `start` is the leader's boot ID and start tick, so only this gate is ever killed;
@@ -308,7 +325,7 @@ type LifecycleExit = (
 ) & { actor: Actor };
 type LifecycleStop = {
   actor: Actor;
-  trigger: "stopped" | "interrupted" | "activity" | "provider";
+  trigger: "stopped" | "interrupted" | "activity" | "provider" | "stall";
   reasons: readonly [StopIncident["reason"], ...StopIncident["reason"][]];
   recovery: StopIncident["recovery"];
   exits: readonly LifecycleExit[];
@@ -519,6 +536,19 @@ export const runLifecycle = {
           {
             event: "review-recovered",
             when: "the same reviewer is observed idle or running",
+            actor: "computer",
+          },
+        ],
+      },
+      disconnected: {
+        actor: "operator",
+        trigger: "stall",
+        reasons: ["disconnected"],
+        recovery: "reconnect",
+        exits: [
+          {
+            event: "stall-cleared",
+            when: "connected status or the assignment worktree shows progress",
             actor: "computer",
           },
         ],
@@ -926,6 +956,11 @@ export const stages = [
     status: "unknown",
   },
   {
+    id: "disconnected",
+    actor: runLifecycle.running.stops.disconnected.actor,
+    status: "blocked",
+  },
+  {
     id: "blocked",
     actor: runLifecycle.blocked.actor,
     status: "blocked",
@@ -961,6 +996,7 @@ function runningStage(run: Extract<Run, { kind: "running" }>): StageStep {
   const step = run.review ? "review" : "builder";
   if (run.gate) return ["gating", "gate"];
   if (run.incident?.reason === "provider-limit") return ["rate-limited", step];
+  if (run.incident?.reason === "disconnected") return ["disconnected", step];
   return [run.review ? "reviewing" : "building", step];
 }
 
@@ -1342,7 +1378,10 @@ export function validWatchdogPolicy(value: unknown): value is WatchdogPolicy {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const policy = value as Record<string, unknown>;
   return (
-    Object.keys(policy).length === 3 &&
+    Object.keys(policy).length ===
+      (Object.hasOwn(policy, "disconnectMs") ? 4 : 3) &&
+    (!Object.hasOwn(policy, "disconnectMs") ||
+      positiveInteger(policy.disconnectMs)) &&
     ["suspicionMs", "spendingFirstAttempt", "spendingInterval"].every((key) =>
       positiveInteger(policy[key]),
     )
@@ -1431,6 +1470,32 @@ function validateTiming(id: string, run: Record<string, unknown>) {
 
 function thread(value: unknown): value is ThreadID {
   return text(value) && value.startsWith("T-") && value.length > 2;
+}
+
+function validStallSample(value: unknown) {
+  if (value === undefined) return true;
+  const sample = record(value);
+  return (
+    thread(sample.thread) &&
+    positiveInteger(sample.attempt) &&
+    ["running_tools", "streaming", "idle"].includes(String(sample.state)) &&
+    optionalFingerprint(sample.fingerprint) &&
+    stallTimes(sample.updatedAt, sample.since, sample.observedAt)
+  );
+}
+
+function optionalFingerprint(value: unknown) {
+  return value === undefined || validDigest(value);
+}
+
+function stallTimes(updatedAt: unknown, since: unknown, observedAt: unknown) {
+  return (
+    timestamp(updatedAt) &&
+    timestamp(since) &&
+    timestamp(observedAt) &&
+    updatedAt <= since &&
+    since <= observedAt
+  );
 }
 
 function worktreeRun(run: Record<string, unknown>): boolean {
@@ -1613,9 +1678,9 @@ const runValidators: Record<string, (run: Record<string, unknown>) => boolean> =
       worktreeRun(run) &&
       thread(run.thread) &&
       positiveInteger(run.attempt) &&
-      typeof run.delivery === "string" &&
-      ["queued", "sending", "sent"].includes(run.delivery) &&
+      ["queued", "sending", "sent"].some((state) => state === run.delivery) &&
       validDeliveryIntent(run.deliveryIntent) &&
+      validStallSample(run.stallSample) &&
       reviewFields(run) &&
       validRebase(run.rebased) &&
       validStageFacts(run),
@@ -1833,11 +1898,12 @@ function validateIncident(id: string, value: unknown) {
   validateProviderIncident(id, incident);
   const enums = {
     delivery: ["queued", "sent"],
-    recovery: ["resume", "retry-setup", "inspect", "wait"],
+    recovery: ["resume", "retry-setup", "inspect", "wait", "reconnect"],
     reason: [
       "verification-rejected",
       "worker-blocked",
       "worker-error",
+      "disconnected",
       "provider-limit",
       "approval-required",
       "preparation-failed",

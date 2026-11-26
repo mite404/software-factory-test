@@ -13,6 +13,7 @@ import {
   open,
   readdir,
   readFile,
+  readlink,
   unlink,
   writeFile,
 } from "node:fs/promises";
@@ -59,6 +60,7 @@ import {
   openPersistence,
   taskSteps,
   ticketIntake,
+  defaultDisconnectMs,
   defaultWatchdog,
   repairAttemptCap,
   validWatchdogPolicy,
@@ -78,6 +80,7 @@ import {
   runLane,
   validLightWorker,
   type ThreadID,
+  type ThreadSample,
   type Task,
   type Run,
   type DefinitionPin,
@@ -98,6 +101,8 @@ import {
 
 type ConnectedTools = PluginTools & { isConnected?(): boolean };
 type Activity = Awaited<ReturnType<NativeHost["state"]>>;
+const providerSignal = (activity: Activity) =>
+  typeof activity === "object" && activity.kind === "provider-limit";
 type GateOutcome =
   "gate-failed" | "gate-not-run" | "post-gate-changed" | "gate-passed";
 
@@ -204,6 +209,7 @@ export type NativeHost = {
   state(
     this: void,
     thread: ThreadID,
+    sample?: true | "held-stall",
   ): Promise<
     | "idle"
     | "running"
@@ -211,6 +217,7 @@ export type NativeHost = {
     | "error"
     | "unknown"
     | { kind: "provider-limit"; limit: ProviderLimit }
+    | ({ kind: "sample" } & ThreadSample)
   >;
   watch(thread: ThreadID, wake: () => void): void;
   /** Read original SDK messages without interpreting their prose as native authority. */
@@ -895,6 +902,67 @@ function git(root: string, ...args: string[]) {
   return execFileSync("git", ["-C", root, ...args], {
     encoding: "utf8",
   }).trim();
+}
+
+async function worktreeFingerprint(worktree: string) {
+  try {
+    if (git(worktree, "rev-parse", "--show-toplevel") !== worktree) return;
+    const hash = createHash("sha256");
+    const status = git(
+      worktree,
+      "--no-optional-locks",
+      "status",
+      "--porcelain=v1",
+      "--no-renames",
+      "-z",
+      "-uall",
+    );
+    hash.update(git(worktree, "rev-parse", "HEAD"));
+    hash.update(status);
+    for (const diff of [[], ["--cached"]]) {
+      await hashDiff(hash, worktree, diff);
+      hash.update("\0");
+    }
+    for (const entry of status.split("\0")) {
+      if (!entry.startsWith("?? ")) continue;
+      const file = entry.slice(3);
+      const path = join(worktree, file);
+      const stat = await lstat(path);
+      if (stat.isSymbolicLink())
+        hash.update(`link${sha256(await readlink(path))}`);
+      else if (stat.isFile())
+        hash.update(`file${sha256(await readFile(path))}`);
+      else return;
+    }
+    return hash.digest("hex");
+  } catch {
+    // A missing or unreadable worktree is not evidence that it stayed unchanged.
+    return undefined;
+  }
+}
+
+async function hashDiff(
+  hash: ReturnType<typeof createHash>,
+  worktree: string,
+  flags: string[],
+) {
+  const process = Bun.spawn(
+    [
+      "git",
+      "-C",
+      worktree,
+      "diff",
+      "--binary",
+      "--no-ext-diff",
+      "--no-textconv",
+      ...flags,
+      "HEAD",
+    ],
+    { stdout: "pipe", stderr: "ignore" },
+  );
+  for await (const chunk of process.stdout) hash.update(chunk);
+  if ((await process.exited) !== 0)
+    throw new Error("Could not read the worktree diff");
 }
 
 function descends(root: string, base: string, revision: string) {
@@ -2668,6 +2736,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         cause = [
           "worker-blocked",
           "worker-error",
+          "disconnected",
           "approval-required",
           "provider-limit",
           "verification-rejected",
@@ -3787,7 +3856,11 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         activity: Activity,
       ) {
         const review = run.review;
-        if (typeof activity !== "object" || review?.thread !== thread)
+        if (
+          typeof activity !== "object" ||
+          activity.kind !== "provider-limit" ||
+          review?.thread !== thread
+        )
           return false;
         const policy = runDefinition(run, config, directory).providerLimit;
         if (review.fallback || policy?.mode !== "fallback") return false;
@@ -3818,7 +3891,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         activity: Activity,
       ) {
         if (
-          typeof activity === "object" &&
+          providerSignal(activity) &&
           newProviderIncident(run.incident, activity)
         ) {
           delete run.incident;
@@ -3859,11 +3932,165 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         run: Extract<Run, { kind: "running" }>,
         thread: ThreadID,
       ) {
-        const activity = await observe(thread);
+        const observation = await observe(thread, stallReadMode(run.incident));
+        const activity = await sampleActivity(task, run, thread, observation);
+        if (run.incident?.reason === "disconnected" && !explicitStop(activity))
+          return "unknown";
         if (await fallbackReviewer(task, run, thread, activity))
           return "unknown";
         if (await providerWait(task, run, thread, activity)) return "unknown";
         return typeof activity === "object" ? "unknown" : activity;
+      }
+
+      function stallReadMode(
+        incident: Extract<Run, { kind: "running" }>["incident"],
+      ) {
+        if (incident?.providerLimit) return;
+        return incident?.reason === "disconnected"
+          ? ("held-stall" as const)
+          : (true as const);
+      }
+
+      function explicitStop(activity: Activity) {
+        return (
+          activity === "error" ||
+          activity === "awaiting-approval" ||
+          providerSignal(activity)
+        );
+      }
+
+      async function sampleActivity(
+        task: Task,
+        run: Extract<Run, { kind: "running" }>,
+        thread: ThreadID,
+        activity: Activity,
+      ) {
+        if (typeof activity !== "object" || activity.kind !== "sample")
+          return activity;
+        const at = now();
+        if (activity.updatedAt <= at) {
+          const fingerprint = await worktreeFingerprint(
+            run.review?.worktree ?? run.worktree,
+          );
+          observeStall(task.id, run, thread, { ...activity, at, fingerprint });
+        }
+        return activity.state === "idle" ? "idle" : "running";
+      }
+
+      function suspectStall(
+        id: string,
+        run: Extract<Run, { kind: "running" }>,
+        elapsed: number,
+      ) {
+        const threshold =
+          runDefinition(run, config, directory).watchdog?.disconnectMs ??
+          defaultDisconnectMs;
+        if (run.incident || elapsed < threshold) return;
+        const stop = runLifecycle.running.stops.disconnected;
+        if (incident(id, run, stop.reasons[0], stop.recovery, stopCause(run)))
+          commit(
+            id,
+            "stall-suspected",
+            "Unchanged tool activity and worktree; executor failure unconfirmed",
+          );
+      }
+
+      function observeStall(
+        id: string,
+        run: Extract<Run, { kind: "running" }>,
+        thread: ThreadID,
+        {
+          state: activity,
+          updatedAt,
+          at,
+          fingerprint,
+        }: ThreadSample & { at: number; fingerprint: string | undefined },
+      ) {
+        const prior = assignmentSample(run, thread);
+        if (prior && stallUnchanged(prior, activity, updatedAt, fingerprint)) {
+          if (activity === "running_tools")
+            suspectStall(id, run, at - prior.since);
+          return;
+        }
+        if (!fingerprint && prior && !changedStatus(prior, activity, updatedAt))
+          return;
+        recordStallProgress(id, run, {
+          thread,
+          attempt: run.attempt,
+          state: activity,
+          updatedAt,
+          fingerprint,
+          observedAt: at,
+          since: stallSince(prior, activity, updatedAt, fingerprint, at),
+        });
+      }
+
+      type StallSample = NonNullable<
+        Extract<Run, { kind: "running" }>["stallSample"]
+      >;
+
+      function changedStatus(
+        prior: StallSample | undefined,
+        activity: ThreadSample["state"],
+        updatedAt: number,
+      ) {
+        return (
+          prior && (prior.state !== activity || prior.updatedAt !== updatedAt)
+        );
+      }
+
+      function stallUnchanged(
+        prior: StallSample,
+        activity: ThreadSample["state"],
+        updatedAt: number,
+        fingerprint: string | undefined,
+      ) {
+        return (
+          fingerprint !== undefined &&
+          !changedStatus(prior, activity, updatedAt) &&
+          prior.fingerprint === fingerprint
+        );
+      }
+
+      function stallSince(
+        prior: StallSample | undefined,
+        activity: ThreadSample["state"],
+        updatedAt: number,
+        fingerprint: string | undefined,
+        at: number,
+      ) {
+        if (!prior) return fingerprint ? updatedAt : at;
+        if (!prior.fingerprint && !changedStatus(prior, activity, updatedAt))
+          return prior.since;
+        return at;
+      }
+
+      function assignmentSample(
+        run: Extract<Run, { kind: "running" }>,
+        thread: ThreadID,
+      ) {
+        const sample = run.stallSample;
+        return sample?.thread === thread && sample.attempt === run.attempt
+          ? sample
+          : undefined;
+      }
+
+      function recordStallProgress(
+        id: string,
+        run: Extract<Run, { kind: "running" }>,
+        sample: StallSample,
+      ) {
+        run.stallSample = sample;
+        if (run.incident?.reason === "disconnected") {
+          delete run.incident;
+          commit(
+            id,
+            "stall-cleared",
+            "Connected status or worktree progress observed",
+          );
+        } else {
+          commit(id, "stall-observed", sample.state);
+        }
       }
 
       async function reviewIdle(
@@ -4279,7 +4506,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           !laneHeld(state.runs, runLane(run), "resume", twoLanes, task.id)
         ) {
           const activity = await observe(run.checkpoint.thread);
-          if (typeof activity === "object") {
+          if (providerSignal(activity)) {
             const checkpoint = { ...run.checkpoint, incident: undefined };
             state.runs[task.id] = checkpoint;
             await providerWait(task, checkpoint, checkpoint.thread, activity);

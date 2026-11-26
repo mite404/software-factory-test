@@ -55,6 +55,7 @@ test("lifecycle walking names every exitless stop and validates recoveries and p
     "blocked",
     "review-stopped",
     "stop-recorded",
+    "stall-cleared",
   ]);
   const expectedExitless = [
     "blocked.withoutWorker",
@@ -120,6 +121,7 @@ test("lifecycle walking names every exitless stop and validates recoveries and p
     expect(exitless.every((stop) => !!stop.foremanOnly?.trim())).toBe(true);
     expect([...new Set(stops.map((stop) => stop.recovery))].sort()).toEqual([
       "inspect",
+      "reconnect",
       "resume",
       "retry-setup",
       "wait",
