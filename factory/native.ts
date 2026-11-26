@@ -7,7 +7,7 @@ import type {
 } from "@ampcode/plugin";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, constants, existsSync, readFileSync } from "node:fs";
 import {
   lstat,
   mkdir,
@@ -2677,38 +2677,72 @@ function hookEventId({ id, thread }: Pick<AgentStartEvent, "id" | "thread">) {
 
 async function createHookMarker(
   directory: string,
-  hook: NativeHook,
-  id: string,
+  name: string,
+  expired: () => boolean,
+  signal: AbortSignal,
 ) {
   try {
     const markers = join(directory, "hook-markers");
     await mkdir(markers, { recursive: true, mode: 0o700 });
-    if (!(await lstat(markers)).isDirectory()) return "failed";
-    const child = Bun.spawn(
-      ["/bin/mkdir", "-m", "700", "--", join(markers, `${hook.name}-${id}`)],
-      {
-        cwd: directory,
-        env: {},
-        stdin: "ignore",
-        stdout: "ignore",
-        stderr: "ignore",
-      },
+    const handle = await open(
+      markers,
+      constants.O_DIRECTORY | constants.O_NOFOLLOW,
     );
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGKILL");
-    }, hook.timeoutMs);
     try {
+      if (expired()) return "timed-out";
+      // Resolve the leaf through the inherited directory, never the replaceable pathname.
+      const child = Bun.spawn(
+        ["/bin/mkdir", "-m", "700", "--", `/proc/self/fd/3/${name}`],
+        {
+          env: {},
+          stdio: ["ignore", "ignore", "ignore", handle.fd],
+          signal,
+          killSignal: "SIGKILL",
+        },
+      );
       const status = await child.exited;
-      if (timedOut) return "timed-out";
       if (child.signalCode) return "uncertain";
       return status === 0 ? "succeeded" : "failed";
     } finally {
-      clearTimeout(timer);
+      await handle.close();
     }
   } catch {
     return "failed";
+  }
+}
+
+async function runHookBeforeDeadline(
+  directory: string,
+  hook: NativeHook,
+  id: string,
+  permits: () => Promise<boolean>,
+) {
+  const deadline = performance.now() + hook.timeoutMs;
+  const controller = new AbortController();
+  const expired = () =>
+    controller.signal.aborted || performance.now() >= deadline;
+  const timeout = Promise.withResolvers<"timed-out">();
+  const timer = setTimeout(() => {
+    timeout.resolve("timed-out");
+    controller.abort();
+  }, hook.timeoutMs);
+  try {
+    return await Promise.race([
+      timeout.promise,
+      (async () => {
+        const permitted = await permits();
+        if (expired()) return "timed-out" as const;
+        if (!permitted) return "refused" as const;
+        return createHookMarker(
+          directory,
+          `${hook.name}-${id}`,
+          expired,
+          controller.signal,
+        );
+      })(),
+    ]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -2753,10 +2787,10 @@ export function createFactory(
           !persistence.claimHook(id, pin.digest, owner)
         )
           return;
-        const permitted =
-          persistence.state.enabled && (await permitsHook(owner, hook));
-        const outcome = permitted
-          ? await createHookMarker(directory, hook, id)
+        const outcome = persistence.state.enabled
+          ? await runHookBeforeDeadline(directory, hook, id, () =>
+              permitsHook(owner, hook),
+            )
           : "refused";
         persistence.settleHook(id, outcome);
       } finally {

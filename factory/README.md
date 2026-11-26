@@ -156,9 +156,11 @@ hooks:
 ```
 
 `name` is a lowercase alphanumeric label with optional hyphens, up to 32 characters.
-`timeoutMs` is a required integer from 1 to 5000. The action invokes a fixed `mkdir` with no
-shell or inherited environment. Its only effect is one empty directory named
-`<name>-<event-hash>` under the private factory Git directory's `hook-markers/`.
+`timeoutMs` is a required integer from 1 to 5000. One deadline covers permission checks and the
+action. A late permission response cannot start the action or hold a queued pause. The action
+invokes a fixed `mkdir` with no shell or inherited environment. Its only effect is one empty
+directory named `<name>-<event-hash>` inside the opened `hook-markers/` directory. The child uses
+an inherited Linux directory descriptor, so replacing `hook-markers/` cannot redirect a write.
 
 Only a valid Amp `agent.start` message ID for the current owner can trigger a hook. The factory
 must be enabled, the owner's installed policy must verify, and the current definition must both
