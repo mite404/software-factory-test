@@ -604,6 +604,36 @@ The owner reads private content with `evidenceContent(directory, ticket, sha256)
 digests the ticket never recorded and missing or corrupt files. Evidence files are not included
 in private backup yet.
 
+### Phase lessons
+
+At phase completion, the owning Foreman can call `record-lesson` with a `lesson` object:
+
+- `ticket`, `phase`, `sourceThread`, `revision`, and `attempt` identify the source. The source
+  thread must belong to the ticket. SQLite supplies the project identity.
+- `scope` names affected repository-relative paths. End directory paths in `/`.
+- `evidence` lists one to four retained SHA-256 digests from that ticket, attempt, and revision.
+  The factory checks the bytes and requires a passing gate digest for `findings`.
+- `findings`, `failedApproaches`, and `questions` take up to two single-line entries each, with
+  at least one entry across the three lists. The Foreman checks that each finding follows from
+  the cited proof. Never submit credentials, logs, or transcripts. Input checks reject oversized
+  or multiline summaries and transcript markers. Credential checks also cover labels and paths.
+
+The same phase and source revision can be recorded again with identical content, but not changed
+in place. To correct a finding, record a new revision with the same ticket, phase, and scope. Set
+`supersedes` to the old lesson ID. `list-lessons` with `ticket` shows both sources to the owning
+Foreman. Neither action accepts a ticket or releases its dependents.
+
+The worker handoff includes at most three current, intact lessons from direct dependencies or
+matching paths. To opt into path matching, set `lessonScope` on the authored ticket row. The
+factory pins those paths when it creates the worker. The paths do not grant edit permissions.
+An enabled factory reconciles still-undelivered findings for affected workers in the build stage.
+The factory reserves them before calling Amp. It reports an unknown standalone send and does not
+retry it. After Amp confirms a handoff was absent, the one allowed retry includes newly applicable
+findings and excludes superseded ones. If the handoff arrived, the factory sends only the missed
+findings separately. Saved delivery intents never appear in plugin state replies. Supersession
+cannot retract a message the worker received. Failed approaches and questions stay in private
+history.
+
 ### Lifecycle stages
 
 `runStage` in `persistence.ts` names every ticket's stage and who must act. Status, the dashboard

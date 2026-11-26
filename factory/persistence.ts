@@ -9,6 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { validVerificationCapability, type Automation } from "./config";
 import { validCron } from "./cron";
 import { validReview, type Review } from "./review";
@@ -94,6 +95,8 @@ export type Task = {
   lane?: "light";
   /** Repository-relative ticket file this row synced from; authored queue entries never set it. */
   file?: string;
+  /** Affected files and directories for lesson matching, not permissions. */
+  lessonScope?: string[];
 };
 type Preparation = {
   base: string;
@@ -216,6 +219,8 @@ export type Run = (
       review?: Review;
       workerModel?: string;
       requirements?: string;
+      lessonScope?: string[];
+      handoffLessons?: string[];
       feedback?: string;
       deliveryIntent?: DeliveryIntent;
       /** Last distinct connected observation for the delivered worker or reviewer. */
@@ -1227,6 +1232,222 @@ type EvidenceRecord = Omit<Evidence, "content"> & {
 const evidenceColumns =
   "ticket, attempt, kind, revision, definition, tool, outcome, sha256, bytes, at";
 
+type PhaseLesson = {
+  project: string;
+  ticket: string;
+  phase: string;
+  sourceThread: ThreadID;
+  revision: string;
+  attempt: number;
+  scope: string[];
+  evidence: string[];
+  findings: string[];
+  failedApproaches: string[];
+  questions: string[];
+  supersedes?: string;
+};
+export type SavedLesson = PhaseLesson & { id: string };
+
+const lessonLabel = /^[a-zA-Z0-9_-]{1,100}$/;
+const unsafeLessonText =
+  /\b(?:user|assistant|system|tool)\s*:|(?:api[ _-]?key|password|secret|token|credentials?|authorization)["']?\s*[:=]|\bBearer\s+\S+|\b(?:gh[pousr]_|github_pat_|sk[-_]|xox[baprs]-|AKIA)[\w-]{8,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|:\/\/[^\s/]+@|```|\[REDACTED:/i;
+
+function lessonList(
+  value: unknown,
+  max: number,
+  valid: (s: string) => boolean,
+): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= max &&
+    value.every((item) => typeof item === "string" && valid(item)) &&
+    new Set(value).size === value.length
+  );
+}
+
+function validLessonScope(value: unknown): value is string[] {
+  return lessonList(
+    value,
+    12,
+    (path) =>
+      path.length <= 160 &&
+      /^(?:[\w.-]+\/)*[\w.-]+\/?$/.test(path) &&
+      !unsafeLessonText.test(path) &&
+      !path
+        .split("/")
+        .some(
+          (part) =>
+            part === "." ||
+            part === ".." ||
+            part === ".git" ||
+            part.startsWith(".env"),
+        ),
+  );
+}
+
+/** Parse authored lesson scope without changing the worker's allowed paths. @throws On invalid paths. */
+export function taskLessonScope(value: unknown) {
+  if (value === undefined) return undefined;
+  if (!validLessonScope(value)) throw new Error("Invalid lesson scope");
+  return value;
+}
+
+function lessonName(value: unknown) {
+  if (
+    typeof value !== "string" ||
+    !lessonLabel.test(value) ||
+    unsafeLessonText.test(value)
+  )
+    throw new Error("Invalid phase lesson identity");
+  return value;
+}
+
+function lessonSummary(value: unknown) {
+  if (
+    !lessonList(
+      value,
+      2,
+      (line) =>
+        text(line) &&
+        line.length <= 220 &&
+        line === line.trim() &&
+        !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(line) &&
+        !unsafeLessonText.test(line),
+    )
+  )
+    throw new Error("Invalid phase lesson summary");
+  return value;
+}
+
+function lessonReferences(scope: unknown, evidence: unknown) {
+  if (
+    !validLessonScope(scope) ||
+    !scope.length ||
+    !lessonList(evidence, 4, validDigest) ||
+    !evidence.length
+  )
+    throw new Error("Invalid phase lesson scope or evidence");
+  return { scope: scope.toSorted(), evidence: evidence.toSorted() };
+}
+
+function lessonSource(value: unknown): value is ThreadID {
+  return thread(value) && !unsafeLessonText.test(value.slice(2));
+}
+
+function parseLesson(value: unknown): PhaseLesson {
+  const row = record(value);
+  const {
+    project,
+    ticket,
+    phase,
+    sourceThread,
+    revision,
+    attempt,
+    scope,
+    evidence,
+    supersedes,
+  } = row;
+  if (
+    !exactKeys(
+      row,
+      [
+        "project",
+        "ticket",
+        "phase",
+        "sourceThread",
+        "revision",
+        "attempt",
+        "scope",
+        "evidence",
+        "findings",
+        "failedApproaches",
+        "questions",
+      ],
+      ["supersedes"],
+    )
+  )
+    throw new Error("Invalid phase lesson");
+  if (
+    !lessonSource(sourceThread) ||
+    !gitRevision(revision) ||
+    !positiveInteger(attempt)
+  )
+    throw new Error("Invalid phase lesson source");
+  if (supersedes !== undefined && !validDigest(supersedes))
+    throw new Error("Invalid lesson supersession ID");
+  const findings = lessonSummary(row.findings);
+  const failedApproaches = lessonSummary(row.failedApproaches);
+  const questions = lessonSummary(row.questions);
+  if (findings.length + failedApproaches.length + questions.length === 0)
+    throw new Error("Empty phase lesson");
+  return {
+    project: lessonName(project),
+    ticket: lessonName(ticket),
+    phase: lessonName(phase),
+    sourceThread,
+    revision,
+    attempt,
+    ...lessonReferences(scope, evidence),
+    findings,
+    failedApproaches,
+    questions,
+    ...(supersedes === undefined ? {} : { supersedes }),
+  };
+}
+
+function gitRevision(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{40}$/.test(value);
+}
+
+function lessonProof(db: Database, directory: string, lesson: PhaseLesson) {
+  const rows = db
+    .query<
+      Pick<EvidenceRecord, "sha256" | "outcome">,
+      [string, number, string]
+    >(
+      "SELECT sha256, outcome FROM evidence WHERE ticket = ? AND attempt = ? AND revision = ?",
+    )
+    .all(lesson.ticket, lesson.attempt, lesson.revision);
+  return (
+    lesson.evidence.every(
+      (digest) =>
+        rows.some((row) => row.sha256 === digest) && intact(directory, digest),
+    ) &&
+    (!lesson.findings.length ||
+      rows.some(
+        (row) =>
+          row.outcome === "gate-passed" && lesson.evidence.includes(row.sha256),
+      ))
+  );
+}
+
+function lessonHistory(db: Database, project: string, ticket: string) {
+  return db
+    .query<{ id: string; data: string }, [string, string]>(
+      "SELECT id, data FROM lessons WHERE project = ? AND ticket = ? ORDER BY rowid",
+    )
+    .all(project, ticket)
+    .map(({ id, data }) => ({ ...parseLesson(JSON.parse(data)), id }));
+}
+
+function reserveLesson(db: Database, id: string, target: ThreadID) {
+  return (
+    db
+      .query(
+        "INSERT OR IGNORE INTO lesson_deliveries (lesson, thread) VALUES (?, ?)",
+      )
+      .run(id, target).changes > 0
+  );
+}
+
+function overlapsLessonScope(left: string, right: string) {
+  return (
+    left === right ||
+    (left.endsWith("/") && right.startsWith(left)) ||
+    (right.endsWith("/") && left.startsWith(right))
+  );
+}
+
 /** The content digest that names a preserved artifact. */
 export function sha256(content: string | Buffer) {
   return createHash("sha256").update(content).digest("hex");
@@ -1505,7 +1726,13 @@ function stallTimes(updatedAt: unknown, since: unknown, observedAt: unknown) {
 }
 
 function worktreeRun(run: Record<string, unknown>): boolean {
-  return text(run.base) && text(run.worktree);
+  return (
+    text(run.base) &&
+    text(run.worktree) &&
+    (run.lessonScope === undefined || validLessonScope(run.lessonScope)) &&
+    (run.handoffLessons === undefined ||
+      lessonList(run.handoffLessons, 3, validDigest))
+  );
 }
 
 function preparationRun(run: Record<string, unknown>): boolean {
@@ -2674,6 +2901,17 @@ export function openPersistence(
         revision TEXT NOT NULL, definition TEXT, tool TEXT NOT NULL, outcome TEXT NOT NULL,
         sha256 TEXT NOT NULL, bytes INTEGER NOT NULL, at TEXT NOT NULL,
         PRIMARY KEY (ticket, attempt, kind, revision, outcome, sha256))`);
+      db.run(`CREATE TABLE IF NOT EXISTS lessons (
+        id TEXT PRIMARY KEY, project TEXT NOT NULL, ticket TEXT NOT NULL,
+        supersedes TEXT UNIQUE, data TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS lessons_project_ticket ON lessons(project, ticket);
+        CREATE TABLE IF NOT EXISTS lesson_deliveries (
+          lesson TEXT NOT NULL, thread TEXT NOT NULL, PRIMARY KEY (lesson, thread));
+        CREATE TABLE IF NOT EXISTS lesson_project (
+          id INTEGER PRIMARY KEY CHECK (id = 1), project TEXT NOT NULL);`);
+      db.query("INSERT OR IGNORE INTO lesson_project VALUES (1, ?)").run(
+        randomUUID(),
+      );
       const state = readState(db);
       refreshTickets(db, queue, now);
       if (sync) applyTicketSync(db, queue, state, now, sync);
@@ -2681,6 +2919,11 @@ export function openPersistence(
     })();
     return {
       state,
+      lessonProject: db
+        .query<{ project: string }, []>(
+          "SELECT project FROM lesson_project WHERE id = 1",
+        )
+        .get()!.project,
       /** Read dashboard intents oldest first under the coordinator lock. @throws On failed I/O. */
       automationRequests() {
         return readAutomationRequests(db);
@@ -2754,6 +2997,7 @@ export function openPersistence(
           const task = JSON.parse(row.data) as Task;
           taskSteps(task.steps);
           ticketIntake(record(task));
+          if (task.lessonScope !== undefined) taskLessonScope(task.lessonScope);
           return task;
         }),
       /** Admit exactly one planned ticket after accepted prerequisites. @throws On missing work or unmet prerequisites. */
@@ -2802,6 +3046,107 @@ export function openPersistence(
           (row) => row.attempt === attempt && row.revision === revision,
         );
       },
+      /** Record one immutable phase summary per source revision. @throws On unsafe, conflicting or unverified input. */
+      recordLesson(
+        value: unknown,
+        authorize?: (lesson: PhaseLesson) => void,
+      ): SavedLesson {
+        const lesson = parseLesson(value);
+        authorize?.(lesson);
+        const { project, ticket, phase, revision, supersedes } = lesson;
+        const id = sha256(JSON.stringify([project, ticket, phase, revision]));
+        return db.transaction(() => {
+          const history = lessonHistory(db, project, ticket);
+          const saved = history.find((item) => item.id === id);
+          const entry = { ...lesson, id };
+          if (saved) {
+            if (!isDeepStrictEqual(saved, entry))
+              throw new Error("Conflicting phase lesson");
+            return saved;
+          }
+          if (!lessonProof(db, directory, lesson))
+            throw new Error(
+              "Missing intact lesson evidence for this attempt and revision",
+            );
+          if (
+            supersedes &&
+            (!history.some(
+              (item) =>
+                item.id === supersedes &&
+                item.phase === phase &&
+                isDeepStrictEqual(item.scope, lesson.scope),
+            ) ||
+              history.some((item) => item.supersedes === supersedes))
+          )
+            throw new Error("Invalid lesson supersession");
+          db.query(
+            "INSERT INTO lessons (id, project, ticket, supersedes, data) VALUES (?, ?, ?, ?, ?)",
+          ).run(
+            id,
+            project,
+            ticket,
+            supersedes ?? null,
+            JSON.stringify(lesson),
+          );
+          return entry;
+        })();
+      },
+      /** Return source history, including superseded records. @throws On invalid storage. */
+      lessons(project: string, ticket: string) {
+        return lessonHistory(db, project, ticket);
+      },
+      /** Return at most three intact, still-current findings for a worker. @throws On invalid storage. */
+      relevantLessons(
+        project: string,
+        ticket: string,
+        after: string[],
+        scope: string[],
+        target: ThreadID,
+      ) {
+        const rows = db
+          .query<{ id: string; data: string }, [string, string, string]>(
+            `
+          SELECT l.id, l.data FROM lessons l WHERE l.project = ? AND l.ticket != ?
+            AND NOT EXISTS (SELECT 1 FROM lessons newer WHERE newer.supersedes = l.id)
+            AND NOT EXISTS (SELECT 1 FROM lesson_deliveries d WHERE d.lesson = l.id AND d.thread = ?)
+            ORDER BY l.rowid DESC
+        `,
+          )
+          .iterate(project, ticket, target);
+        const selected: SavedLesson[] = [];
+        for (const { id, data } of rows) {
+          const lesson = parseLesson(JSON.parse(data));
+          if (
+            lesson.findings.length &&
+            (after.includes(lesson.ticket) ||
+              lesson.scope.some((a) =>
+                scope.some((b) => overlapsLessonScope(a, b)),
+              )) &&
+            lessonProof(db, directory, lesson)
+          )
+            selected.push({ ...lesson, id });
+          if (selected.length === 3) break;
+        }
+        return selected;
+      },
+      /** Reserve one standalone delivery before calling Amp. @throws On storage failure. */
+      reserveLesson(id: string, target: ThreadID) {
+        return reserveLesson(db, id, target);
+      },
+      /** Read an already reserved finding before repeating a handoff. @throws On invalid storage. */
+      currentLesson(id: string): SavedLesson | undefined {
+        const row = db
+          .query<{ data: string }, [string]>(
+            `SELECT data FROM lessons WHERE id = ?
+          AND NOT EXISTS (SELECT 1 FROM lessons WHERE supersedes = ?1)`,
+          )
+          .get(id);
+        if (!row) return undefined;
+        const lesson = parseLesson(JSON.parse(row.data));
+        return lessonProof(db, directory, lesson)
+          ? { ...lesson, id }
+          : undefined;
+      },
       /** Preserve evidence for a fact that has no state transition of its own, such as a gate run before its rerun; repeats write nothing. @throws On invalid or conflicting evidence or failed preservation. */
       record(ticket: string, evidence: Evidence[]) {
         const records = preparedEvidence(directory, ticket, evidence, now());
@@ -2816,6 +3161,7 @@ export function openPersistence(
         action: string,
         detail: string,
         evidence: Evidence[] = [],
+        handoff?: { thread: ThreadID; lessons: SavedLesson[] },
       ) {
         const at = now();
         const records = preparedEvidence(directory, ticket, evidence, at);
@@ -2845,6 +3191,9 @@ export function openPersistence(
             detail,
           });
           for (const record of records) saveEvidence(db, record);
+          if (handoff)
+            for (const lesson of handoff.lessons)
+              reserveLesson(db, lesson.id, handoff.thread);
         })();
       },
       /** Append a diagnostic without inventing a state transition. @throws On I/O failure. */

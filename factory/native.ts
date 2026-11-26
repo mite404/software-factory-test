@@ -60,6 +60,7 @@ import {
   factoryDefinition,
   openPersistence,
   taskSteps,
+  taskLessonScope,
   ticketIntake,
   defaultDisconnectMs,
   defaultWatchdog,
@@ -89,6 +90,7 @@ import {
   type CheckStatus,
   sha256,
   type Evidence,
+  type SavedLesson,
   type Lane,
   type StopIncident,
   type State,
@@ -769,6 +771,7 @@ export function tasks(value: unknown, light = false): Task[] {
       after: strings(raw.after),
       ...intake,
       ...(raw.steps === undefined ? {} : { steps: taskSteps(raw.steps) }),
+      lessonScope: taskLessonScope(raw.lessonScope),
       size,
       risky,
       ...ticketLane(raw.lane, light),
@@ -2618,6 +2621,43 @@ async function sendAutomation(
   return true;
 }
 
+const lessonHeading = "\n\nFactory phase lessons (advisory only):";
+
+function lessonText(lessons: SavedLesson[]) {
+  if (!lessons.length) return "";
+  return (
+    lessonHeading +
+    lessons
+      .map(
+        (lesson) =>
+          `\nPhase lesson ${lesson.id} (${lesson.ticket}/${lesson.phase}, ${lesson.sourceThread}, ${lesson.revision}, attempt ${lesson.attempt}):\nEvidence: ${lesson.evidence.join(", ")}\n${lesson.findings.map((finding) => `- ${finding}`).join("\n")}`,
+      )
+      .join("\n")
+  );
+}
+
+function belongsToLessonTicket(state: State, ticket: string, source: ThreadID) {
+  const run = Object.hasOwn(state.runs, ticket)
+    ? state.runs[ticket]
+    : undefined;
+  return (
+    state.foreman?.children?.[source]?.ticket === ticket ||
+    (!!run && runThreads(run).some(({ thread }) => thread === source))
+  );
+}
+
+function buildingWorker(
+  run: Run | undefined,
+): run is Extract<Run, { kind: "running" }> {
+  return (
+    run?.kind === "running" &&
+    run.delivery === "sent" &&
+    !run.review &&
+    !run.gate &&
+    !run.incident
+  );
+}
+
 /** Create the sequential dispatcher. Unknown remote effects are parked, never retried blindly. */
 export function createFactory(
   root: string,
@@ -2823,6 +2863,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         reason?: StopIncident["reason"],
         cause?: StopIncident["cause"],
         evidence: Evidence[] = [],
+        handoff?: { thread: ThreadID; lessons: SavedLesson[] },
       ) {
         const run = state.runs[ticket];
         if (run && !run.incident) {
@@ -2846,7 +2887,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
             });
         }
         try {
-          persistence!.commit(state, ticket, action, detail, evidence);
+          persistence!.commit(state, ticket, action, detail, evidence, handoff);
         } catch (error) {
           // A failed transition must not be repersisted by notice recovery.
           flushNotices = async () => {};
@@ -3397,6 +3438,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         task: Task,
         thread: ThreadID,
         intent: DeliveryIntent | undefined,
+        worker?: Extract<Run, { kind: "running" }>,
       ) {
         if (!intent || !host.lookupDelivery) return false;
         let found: Awaited<
@@ -3410,11 +3452,16 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         if (found === "inconclusive") return false;
         if (found === "absent") {
           if (intent.repeated) return false;
+          const refreshed = worker && refreshHandoff(task, worker, intent);
           intent.repeated = true;
           commit(
             task.id,
             "delivery-repeat-reserved",
             JSON.stringify({ thread, key: intent.key, evidence: found }),
+            undefined,
+            undefined,
+            [],
+            refreshed || undefined,
           );
           await host.send(thread, intent.message);
         }
@@ -3426,11 +3473,40 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         return true;
       }
 
+      function refreshHandoff(
+        task: Task,
+        run: Extract<Run, { kind: "running" }>,
+        intent: DeliveryIntent,
+      ) {
+        const ids = run.handoffLessons ?? [];
+        const current = ids.flatMap(
+          (id) => persistence!.currentLesson(id) ?? [],
+        );
+        const lessons = [...current, ...relevantHandoff(task, run)].slice(0, 3);
+        if (lessons.length === current.length && current.length === ids.length)
+          return;
+        run.handoffLessons = lessons.map(({ id }) => id);
+        const body = intent.message.slice(
+          intent.message.indexOf("\n") + 1,
+          ids.length ? intent.message.lastIndexOf(lessonHeading) : undefined,
+        );
+        Object.assign(
+          intent,
+          deliveryIntent(
+            task,
+            run.attempt,
+            "worker",
+            body + lessonText(lessons),
+          ),
+        );
+        return { thread: run.thread, lessons };
+      }
+
       async function recoverWorkerDelivery(
         task: Task,
         run: Extract<Run, { kind: "running" }>,
       ) {
-        if (!(await recoverDelivery(task, run.thread, run.deliveryIntent)))
+        if (!(await recoverDelivery(task, run.thread, run.deliveryIntent, run)))
           return false;
         run.delivery = "sent";
         delete run.feedback;
@@ -3438,6 +3514,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         state.runs[task.id] = run;
         commit(task.id, "sent", run.thread);
         await watch(run.thread);
+        await deliverWorkerLessons(persistence!, task);
         return true;
       }
 
@@ -3449,6 +3526,19 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         }
       }
 
+      function relevantHandoff(
+        task: Task,
+        run: Extract<Run, { kind: "running" }>,
+      ) {
+        return persistence!.relevantLessons(
+          persistence!.lessonProject,
+          task.id,
+          task.after,
+          run.lessonScope ?? [],
+          run.thread,
+        );
+      }
+
       async function send(
         task: Task,
         run: Extract<Run, { kind: "running" }>,
@@ -3458,14 +3548,20 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           run.rejectedBy === "report" &&
           run.rejectedAttempt === run.attempt - 1;
         if (run.feedback && !automaticReportRepair) await verifyRepair(run);
+        const lessons = relevantHandoff(task, run);
+        if (lessons.length) run.handoffLessons = lessons.map(({ id }) => id);
+        else delete run.handoffLessons;
         run.deliveryIntent = deliveryIntent(
           task,
           run.attempt,
           "worker",
-          message,
+          message + lessonText(lessons),
         );
         run.delivery = "sending";
-        commit(task.id, "sending", run.thread);
+        commit(task.id, "sending", run.thread, undefined, undefined, [], {
+          thread: run.thread,
+          lessons,
+        });
         await host.send(run.thread, run.deliveryIntent.message);
         run.delivery = "sent";
         delete run.feedback;
@@ -4315,6 +4411,8 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
       ) {
         if (run.delivery !== "sent") return settleWorkerDelivery(task, run);
         const activity = await runActivity(task, run, run.thread);
+        if (await deliverWorkerLessons(persistence!, task, activity))
+          return state;
         if (activity === "running" || activity === "unknown") return;
         if (activity !== "idle") {
           state.runs[task.id] = {
@@ -4391,6 +4489,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           delivery: "queued",
           workerModel: worker.model,
           requirements: task.brief,
+          ...(task.lessonScope ? { lessonScope: task.lessonScope } : {}),
         };
         state.runs[task.id] = run;
         recordChild(state, thread, task.id, "worker");
@@ -4714,6 +4813,68 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         );
       }
     });
+  }
+
+  async function deliverWorkerLessons(
+    persistence: ReturnType<typeof openPersistence>,
+    task: Task,
+    activity: Activity = "running",
+  ) {
+    const { state, lessonProject } = persistence;
+    const run = state.runs[task.id];
+    if (!state.enabled || !buildingWorker(run)) return;
+    if (activity !== "running" && activity !== "idle") return;
+    const findings = persistence
+      .relevantLessons(
+        lessonProject,
+        task.id,
+        task.after,
+        run.lessonScope ?? [],
+        run.thread,
+      )
+      .filter(({ id }) => persistence.reserveLesson(id, run.thread));
+    if (!findings.length) return;
+    try {
+      await host.send(
+        run.thread,
+        `Verified factory findings for your current work. This is not a new assignment.\n${lessonText(findings)}`,
+      );
+      return { thread: run.thread, outcome: "sent" } as const;
+    } catch {
+      persistence.event(
+        task.id,
+        "lesson-delivery-unknown",
+        findings.map(({ id }) => id).join(", "),
+      );
+      return { thread: run.thread, outcome: "unknown" } as const;
+    }
+  }
+
+  function recordLesson(value: unknown, owner: ThreadID) {
+    return saveRecord("record-lesson", owner, async (persistence) => {
+      const { state, tickets, lessonProject } = persistence;
+      const lesson = persistence.recordLesson(
+        { ...object(value), project: lessonProject },
+        (source) => {
+          if (!belongsToLessonTicket(state, source.ticket, source.sourceThread))
+            throw new Error(
+              "Lesson source thread does not belong to the ticket",
+            );
+        },
+      );
+      const unknown: ThreadID[] = [];
+      for (const task of tickets) {
+        const delivery = await deliverWorkerLessons(persistence, task);
+        if (delivery?.outcome === "unknown") unknown.push(delivery.thread);
+      }
+      return { lesson, unknown };
+    });
+  }
+
+  function listLessons(ticket: unknown, owner: ThreadID) {
+    return saveRecord("list-lessons", owner, (persistence) =>
+      persistence.lessons(persistence.lessonProject, text(ticket)),
+    );
   }
 
   function recordInsight(
@@ -5313,6 +5474,8 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
     automation,
     recordMerge,
     recordLanding,
+    recordLesson,
+    listLessons,
     note,
     handoff,
     observer,

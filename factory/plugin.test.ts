@@ -1539,6 +1539,41 @@ test("an observer's reconcile reply is the bounded summary, never private state"
     expect(String(await execute({ action: "reconcile" }, owner))).toContain(
       canary,
     );
+    const privateIntent = "PRIVATE-LESSON-INTENT-CANARY";
+    const key = "c".repeat(64);
+    const checkpoint = {
+      kind: "running",
+      thread: "T-lesson-worker",
+      base: "base",
+      worktree: root,
+      attempt: 1,
+      delivery: "sending",
+      deliveryIntent: {
+        key,
+        repeated: false,
+        message: `factory-key: ${key}\n${privateIntent}`,
+      },
+    } satisfies Run;
+    const persisted = openPersistence(directory, []);
+    persisted.state.runs.direct = checkpoint;
+    persisted.state.runs.nested = {
+      kind: "uncertain",
+      thread: checkpoint.thread,
+      reason: "Delivery outcome unknown",
+      checkpoint,
+    };
+    persisted.commit(persisted.state, "direct", "fixture", "");
+    persisted.close();
+    const stranger = {
+      thread: { id: "T-stranger" },
+    } as unknown as PluginToolContext;
+    const visible = String(await execute({ action: "status" }, stranger));
+    expect(JSON.parse(visible).runs.nested.kind).toBe("uncertain");
+    expect(visible).not.toContain(privateIntent);
+    expect(visible).not.toContain("deliveryIntent");
+    expect(JSON.stringify(factoryStatus(directory).runs.nested)).toContain(
+      privateIntent,
+    );
   } finally {
     dispose();
     await rm(root, { recursive: true, force: true });
@@ -2453,6 +2488,47 @@ async function recordedMergeFixture(action: string, mapped = false) {
     const recorded = await readFile(join(directory, "state.sqlite"));
     await execute(insight, owner);
     expect(await readFile(join(directory, "state.sqlite"))).toEqual(recorded);
+    {
+      const storage = openPersistence(directory, []);
+      storage.record("legacy", [
+        {
+          attempt: 1,
+          kind: "gate",
+          revision,
+          definition: null,
+          tool: "true",
+          outcome: "gate-passed",
+          content: "fixture gate passed",
+        },
+      ]);
+      const evidence = storage
+        .proof("legacy", 1, revision)
+        .map(({ sha256 }) => sha256);
+      storage.close();
+      const lesson = {
+        ticket: "legacy",
+        phase: "gate",
+        sourceThread: done.thread,
+        revision,
+        attempt: 1,
+        scope: ["src/"],
+        evidence,
+        findings: [canary],
+        failedApproaches: [],
+        questions: [],
+      };
+      const list = { action: "list-lessons", ticket: "legacy" };
+      await execute({ action: "record-lesson", lesson }, owner);
+      expect(JSON.parse((await execute(list, owner)) as string)).toMatchObject([
+        lesson,
+      ]);
+      expect(
+        execute(list, {
+          thread: { id: "T-stranger" },
+        } as unknown as PluginToolContext),
+      ).rejects.toThrow();
+      expect(JSON.stringify(await status())).not.toContain(canary);
+    }
     const body = await status();
     expect(body.enabled).toBe(true);
     expect(factoryStatus(directory).runs.queued).toEqual(queued);

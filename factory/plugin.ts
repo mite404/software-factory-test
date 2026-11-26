@@ -20,6 +20,7 @@ import {
   roleTools,
 } from "./capabilities";
 import type { DashboardSnapshot } from "./dashboard";
+import { validDeliveryIntent } from "./delivery";
 import {
   factoryDefinition,
   factoryStatus,
@@ -112,12 +113,19 @@ function connectedTools(action: string, saved: State, ctx: PluginToolContext) {
     : undefined;
 }
 
+function omitDeliveryIntent(key: string, value: unknown) {
+  return key === "deliveryIntent" && validDeliveryIntent(value)
+    ? undefined
+    : value;
+}
+
 // The observer's reconcile replies carry only the summary, never full private state.
 function controlReply(state: State, caller: string) {
   return JSON.stringify(
     state.foreman?.observer?.thread === caller
       ? statusSummary(state, Date.now())
       : state,
+    omitDeliveryIntent,
   );
 }
 
@@ -857,6 +865,14 @@ export default function registerFactory(
       "record-landing",
       (input, ctx) => factory.recordLanding(input, ctx.thread.id),
     ],
+    [
+      "record-lesson",
+      (input, ctx) => factory.recordLesson(input.lesson, ctx.thread.id),
+    ],
+    [
+      "list-lessons",
+      (input, ctx) => factory.listLessons(input.ticket, ctx.thread.id),
+    ],
     ["note", (input, ctx) => factory.note(input.message, ctx.thread.id)],
     [
       "register-observer",
@@ -909,6 +925,37 @@ export default function registerFactory(
           minLength: 1,
           description:
             "For owner-only record-insight, verified evidence for an already done ticket whose insight is empty. Cannot replace existing nonempty evidence. Repeating the same value is a no-op. Then owner reload releases dependent brief refusals for rechecking without dispatching or starting a paused factory.",
+        },
+        lesson: {
+          type: "object",
+          description:
+            "For owner-only record-lesson at phase completion. Supply concise, credential-free summaries and evidence digests for the exact attempt and revision. A lesson does not accept code or dispatch work. Use list-lessons with ticket to inspect private history.",
+          properties: {
+            ticket: { type: "string" },
+            phase: { type: "string" },
+            sourceThread: { type: "string" },
+            revision: { type: "string" },
+            attempt: { type: "integer", minimum: 1 },
+            scope: { type: "array", items: { type: "string" } },
+            evidence: { type: "array", items: { type: "string" } },
+            findings: { type: "array", items: { type: "string" } },
+            failedApproaches: { type: "array", items: { type: "string" } },
+            questions: { type: "array", items: { type: "string" } },
+            supersedes: { type: "string" },
+          },
+          required: [
+            "ticket",
+            "phase",
+            "sourceThread",
+            "revision",
+            "attempt",
+            "scope",
+            "evidence",
+            "findings",
+            "failedApproaches",
+            "questions",
+          ],
+          additionalProperties: false,
         },
         pr: {
           type: "integer",
@@ -975,7 +1022,8 @@ export default function registerFactory(
         return JSON.stringify(await backup(root));
       }
       const record = recordings.get(requested);
-      if (record) return JSON.stringify(await record(input, ctx));
+      if (record)
+        return JSON.stringify(await record(input, ctx), omitDeliveryIntent);
       const action = creation
         ? "reconcile"
         : controlActions.find((action) => action === requested);
@@ -1023,15 +1071,21 @@ export default function registerFactory(
         )
           await publish(liveTools);
         if (action !== "status") return controlReply(state, ctx.thread.id);
-        return JSON.stringify({
-          ...state,
-          lifecycle: lifecycleStatus(),
-          pipelineSteps,
-          stages,
-          stage: Object.fromEntries(
-            Object.entries(state.runs).map(([id, run]) => [id, runStage(run)]),
-          ),
-        });
+        return JSON.stringify(
+          {
+            ...state,
+            lifecycle: lifecycleStatus(),
+            pipelineSteps,
+            stages,
+            stage: Object.fromEntries(
+              Object.entries(state.runs).map(([id, run]) => [
+                id,
+                runStage(run),
+              ]),
+            ),
+          },
+          omitDeliveryIntent,
+        );
       };
       calls++;
       try {
