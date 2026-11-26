@@ -279,7 +279,7 @@ test.each([
         },
         {
           model: fallbackModel,
-          effort: "medium",
+          effort: "high",
           role: "reviewer",
           executor: "local",
         },

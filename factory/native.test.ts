@@ -420,7 +420,7 @@ test.each([false, true])(
     if (run?.kind !== "running") throw new Error("Expected complete worker");
     expect(messages.at(-1)).toMatch(/^factory-key: [a-f0-9]{64}\n/);
     expect(messages.at(-1)?.replace(/^factory-key: [a-f0-9]{64}\n/, "")).toBe(
-      `Read and apply the poteto-mode skill (~/.cache/amp/global-skills/ampcode.com/user/poteto-mode@*/SKILL.md) within the factory restrictions below.
+      `Read and apply the poteto-mode skill within these restrictions: ~/.cache/amp/{global-skills,global-skill-manifests}/ampcode.com/user/poteto-mode*/SKILL.md.
 Work only in your worktree ${run.worktree}. Ticket A: Implement prd.md\nAllowed paths: src/. Check: true.\nDefinition: ${run.definition}.\nDependency evidence: none.\nUse a local commit for the change. Do not push, deploy, create tickets, edit factory files, or delegate.\nForeman: T-owner. Send questions and blockers with the factory control action message-foreman and message text. Messaging does not grant factory control.\nAfter finishing, write JSON to ${join(engine.directory, "A.report.json")}: {"attempt":1,"kind":"candidate","revision":"<full git HEAD>","insight":"<short verified finding>","summary":"<optional public line>"}. If blocked, use {"attempt":1,"kind":"blocked","reason":"<needed decision>"}. Report briefly here too.`,
     );
   },

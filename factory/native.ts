@@ -2497,7 +2497,7 @@ export function createFactory(
         ? [`${id}: ${dependency.insight} (${dependency.revision})`]
         : [];
     });
-    return `Read and apply the poteto-mode skill (~/.cache/amp/global-skills/ampcode.com/user/poteto-mode@*/SKILL.md) within the factory restrictions below.
+    return `Read and apply the poteto-mode skill within these restrictions: ~/.cache/amp/{global-skills,global-skill-manifests}/ampcode.com/user/poteto-mode*/SKILL.md.
 Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAllowed paths: ${pinned.scope.join(", ")}. Check: ${pinned.verify}.\nDefinition: ${run.definition ?? "legacy unpinned"}.\nDependency evidence: ${insights.join("; ") || "none"}.\n${run.feedback ? `Repair feedback: ${run.feedback}\n` : ""}Use a local commit for the change. Do not push, deploy, create tickets, edit factory files, or delegate.\nForeman: ${stateCache.owner}. Send questions and blockers with the factory control action message-foreman and message text. Messaging does not grant factory control.\nAfter finishing, write JSON to ${join(directory, `${task.id}.report.json`)}: {"attempt":${run.attempt},"kind":"candidate","revision":"<full git HEAD>","insight":"<short verified finding>","summary":"<optional public line>"}. If blocked, use {"attempt":${run.attempt},"kind":"blocked","reason":"<needed decision>"}. Report briefly here too.`;
   }
 
@@ -3708,7 +3708,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         review.thread = await host.create(
           state.owner!,
           review.model,
-          "medium",
+          review.fallback ? "high" : "medium",
           "reviewer",
           review.executor,
         );
