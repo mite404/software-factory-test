@@ -670,7 +670,7 @@ fields, missing models, unknown families, same-worker-family fallbacks and the i
 reviewer fail before dispatch and on stored-pin reads.
 
 When a reviewer hits a provider limit, fallback creates one fresh cold reviewer on the named model
-at medium effort, on the same executor, for the same ticket, attempt, staged revision and base.
+at high effort, on the same executor, for the same ticket, attempt, staged revision and base.
 The replacement receives the original cold review contract, not the limited reviewer's opinions.
 It writes a separate verdict path, so a late verdict from the original reviewer cannot approve
 the candidate. If the fallback is also limited, it waits. There is no fallback chain.
