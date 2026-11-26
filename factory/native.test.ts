@@ -1201,6 +1201,19 @@ test.each(
       incident: "landing-stop",
       decision: "Operator approved external landing",
     };
+    f.host.readPullRequest = () => ({
+      state: "MERGED",
+      merge: commit,
+      head: revision,
+      checks: [
+        {
+          __typename: "CheckRun",
+          name: "quality",
+          status: "COMPLETED",
+          conclusion: "SUCCESS",
+        },
+      ],
+    });
     const record = () =>
       action === "record-merge"
         ? f.factory().recordMerge(request, "T-owner")
@@ -1406,6 +1419,14 @@ test.each(
       decision: "Owner approved exact upstream path moves",
       renames,
     };
+    f.host.readPullRequest = () => ({
+      state: "MERGED",
+      merge: commit,
+      head: revision,
+      checks: [
+        { __typename: "StatusContext", context: "quality", state: "SUCCESS" },
+      ],
+    });
     const record = (input: unknown, restart = false) => {
       const current = restart ? f.factory() : engine;
       return action === "record-merge"
@@ -1464,7 +1485,25 @@ test.each(
       expect(landed.runs.A).toEqual({
         ...accepted,
         stageAt: expect.any(Number),
-        merge: { pr: 97, commit, at: expect.any(String) },
+        merge: {
+          pr: 97,
+          commit,
+          at: expect.any(String),
+          evidence: {
+            head: revision,
+            checks: [
+              {
+                __typename: "StatusContext",
+                context: "quality",
+                state: "SUCCESS",
+              },
+            ],
+            exception: {
+              decision: request.decision,
+              reason: expect.stringContaining("two parents"),
+            },
+          },
+        },
       });
     }
     const after = await readFile(statePath);

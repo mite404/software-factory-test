@@ -14,6 +14,7 @@ import { validCron } from "./cron";
 import { validReview, type Review } from "./review";
 import { validExecutor, type Executor } from "./executor";
 import { validDeliveryIntent, type DeliveryIntent } from "./delivery";
+import { greenMergeCheck, validMergeCheck } from "./github";
 import type { Actor, pipelineSteps } from "./pipeline";
 import type { Check } from "./config";
 
@@ -40,6 +41,11 @@ export type MergeRecord = {
   pr: number;
   commit: string;
   at: string;
+  evidence?: {
+    head: string;
+    checks: Record<string, unknown>[];
+    exception?: { decision: string; reason: string };
+  };
 };
 export type WatchdogPolicy = {
   suspicionMs: number;
@@ -1655,18 +1661,56 @@ function validAcceptance(run: Record<string, unknown>): boolean {
   );
 }
 
-function validateMerge(id: string, run: Record<string, unknown>) {
-  if (run.merge === undefined) return;
-  const merge = record(run.merge);
-  const valid =
-    run.kind === "done" &&
+function validMergeException(value: unknown) {
+  const exception = record(value);
+  return (
+    text(exception.decision) &&
+    text(exception.reason) &&
+    Object.keys(exception).length === 2
+  );
+}
+
+function validMergeChecks(checks: Record<string, unknown>[]) {
+  if (!checks.every(validMergeCheck)) return false;
+  const ids = checks.flatMap(({ id }) => (id === undefined ? [] : [id]));
+  return new Set(ids).size === ids.length;
+}
+
+function validMergeEvidence(value: unknown) {
+  if (value === undefined) return true;
+  const evidence = record(value);
+  return (
+    typeof evidence.head === "string" &&
+    /^[a-f0-9]{40}$/.test(evidence.head) &&
+    Array.isArray(evidence.checks) &&
+    validMergeChecks(evidence.checks) &&
+    Object.keys(evidence).every((key) =>
+      ["head", "checks", "exception"].includes(key),
+    ) &&
+    (evidence.exception === undefined
+      ? evidence.checks.length > 0 && evidence.checks.every(greenMergeCheck)
+      : validMergeException(evidence.exception))
+  );
+}
+
+function validMergeRecord(merge: Record<string, unknown>) {
+  return (
     positiveInteger(merge.pr) &&
     typeof merge.commit === "string" &&
     /^[a-f0-9]{40}$/.test(merge.commit) &&
     typeof merge.at === "string" &&
     Number.isFinite(Date.parse(merge.at)) &&
-    Object.keys(merge).every((key) => ["pr", "commit", "at"].includes(key));
-  if (!valid) throw new Error(`Invalid factory merge ${id}`);
+    validMergeEvidence(merge.evidence) &&
+    Object.keys(merge).every((key) =>
+      ["pr", "commit", "at", "evidence"].includes(key),
+    )
+  );
+}
+
+function validateMerge(id: string, run: Record<string, unknown>) {
+  if (run.merge === undefined) return;
+  if (run.kind !== "done" || !validMergeRecord(record(run.merge)))
+    throw new Error(`Invalid factory merge ${id}`);
 }
 
 const runValidators: Record<string, (run: Record<string, unknown>) => boolean> =

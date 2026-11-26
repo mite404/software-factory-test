@@ -28,6 +28,7 @@ import {
 import { openStore, watchdogFixture } from "./bookkeeping.fixture";
 import { watchdogFingerprint } from "./watchdog";
 import threadStatusLive from "./fixtures/thread-status-live.json";
+import pr103 from "./fixtures/pr103-live.json";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
@@ -1971,6 +1972,47 @@ async function recordedMergeFixture(action: string, mapped = false) {
     git(root, "worktree", "add", "--detach", worktree, revision);
     const missing = await integrateRecordedCandidate(root, revision, mapped);
     const commit = git(root, "rev-parse", "HEAD");
+    const head = git(root, "rev-parse", "HEAD^2");
+    const checks = pr103.statusCheckRollup.map((check, index) => ({
+      ...check,
+      id: `quality-node-${index}`,
+    }));
+    const remotePR = (
+      nodes: unknown[] = checks,
+      totalCount = nodes.length,
+      hasNextPage = false,
+    ) => ({
+      state: pr103.state,
+      headRefOid: head,
+      mergeCommit: { oid: commit },
+      commits: {
+        nodes: [
+          {
+            commit: {
+              oid: head,
+              statusCheckRollup: {
+                contexts: {
+                  totalCount,
+                  pageInfo: {
+                    hasNextPage,
+                    endCursor: nodes.length
+                      ? hasNextPage
+                        ? "MQ"
+                        : "Mg"
+                      : null,
+                  },
+                  nodes,
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+    let pullRequest = remotePR();
+    let nextPage: typeof pullRequest | undefined;
+    let reads = 0;
+    let unavailable = false;
     const at = new Date(
       git(root, "show", "-s", "--format=%cI", commit),
     ).toISOString();
@@ -2047,16 +2089,34 @@ async function recordedMergeFixture(action: string, mapped = false) {
         dispose = fn;
       },
     } as unknown as PluginAPI;
-    registerFactory(amp, root, () => ({
-      async init() {},
-      async close() {},
-      ledger: {
-        async record() {
-          effects++;
-          throw new Error("record-merge must not accept work");
+    registerFactory(
+      amp,
+      root,
+      () => ({
+        async init() {},
+        async close() {},
+        ledger: {
+          async record() {
+            effects++;
+            throw new Error("record-merge must not accept work");
+          },
+        },
+      }),
+      {
+        githubQuery(args: string[]) {
+          reads++;
+          expect(args).toContain("owner=example");
+          expect(args).toContain("repo=merge-fixture");
+          expect(args).toContain("pr=42");
+          if (unavailable) throw new Error("network unavailable");
+          return JSON.stringify(
+            [pullRequest, ...(nextPage ? [nextPage] : [])].map(
+              (pullRequest) => ({ data: { repository: { pullRequest } } }),
+            ),
+          );
         },
       },
-    }));
+    );
     server = startDashboard({ root, port: 0 });
     const status = async () => {
       const response = await fetch(
@@ -2080,6 +2140,12 @@ async function recordedMergeFixture(action: string, mapped = false) {
       },
       null,
     ]);
+    const recordingDecision = () =>
+      action === "record-landing"
+        ? "Operator verified external landing"
+        : mapped
+          ? "Operator approved the cancelled CI exception"
+          : undefined;
     const request = {
       action,
       ticket: "A",
@@ -2087,7 +2153,7 @@ async function recordedMergeFixture(action: string, mapped = false) {
       commit,
       revision,
       incident: "current-stop",
-      decision: "Operator verified external landing",
+      decision: recordingDecision(),
       url: `https://caller.invalid/${canary}`,
       ...(mapped ? { renames: { value: "landed-value" } } : {}),
     };
@@ -2133,6 +2199,164 @@ async function recordedMergeFixture(action: string, mapped = false) {
       /does not contain the accepted change/,
     );
     expect((await status()).tasks[0].merge).toBeNull();
+    const recordedChecks = () =>
+      mapped
+        ? [checks[0], { ...checks[1], conclusion: "CANCELLED" }]
+        : [
+            ...checks,
+            {
+              __typename: "StatusContext",
+              id: "legacy-status-node",
+              context: "legacy",
+              state: "SUCCESS",
+            },
+          ];
+    async function verifyRefusals() {
+      if (action !== "record-merge") return;
+      const before = await readFile(join(directory, "state.sqlite"));
+      const refused = async (
+        pr: typeof pullRequest,
+        reason: RegExp,
+        decision?: string,
+      ) => {
+        pullRequest = pr;
+        expect(
+          await execute({ ...request, decision }, owner).catch(String),
+        ).toMatch(reason);
+        expect(await readFile(join(directory, "state.sqlite"))).toEqual(before);
+      };
+      for (const conclusion of ["CANCELLED", "SKIPPED", "NEUTRAL"]) {
+        await refused(
+          remotePR([checks[0], { ...checks[1], conclusion }]),
+          new RegExp(conclusion),
+        );
+      }
+      await refused(
+        remotePR([
+          checks[0],
+          { ...checks[1], status: "IN_PROGRESS", conclusion: null },
+        ]),
+        /IN_PROGRESS/,
+      );
+      await refused(
+        remotePR([checks[0], { __typename: "UnknownCheck" }]),
+        /UnknownCheck/,
+      );
+      await refused(remotePR([]), /no checks/i);
+      await refused(
+        { ...remotePR(), state: "OPEN" },
+        /not merged/i,
+        "Operator approved",
+      );
+      await refused(
+        { ...remotePR(), mergeCommit: { oid: base } },
+        /merge commit/i,
+        "Operator approved",
+      );
+      const wrongHead = remotePR();
+      wrongHead.commits.nodes[0]!.commit.oid = base;
+      await refused(wrongHead, /attribution/i, "Operator approved");
+      const incomplete = remotePR();
+      incomplete.commits.nodes[0]!.commit.statusCheckRollup.contexts
+        .totalCount++;
+      await refused(incomplete, /incomplete/i, "Operator approved");
+      pullRequest = { ...remotePR(), mergeCommit: { oid: head } };
+      expect(
+        await execute(
+          { ...request, commit: head, decision: undefined },
+          owner,
+        ).catch(String),
+      ).toMatch(/exactly two parents/);
+      expect(await readFile(join(directory, "state.sqlite"))).toEqual(before);
+      const wrongParent = remotePR();
+      wrongParent.headRefOid = revision;
+      wrongParent.commits.nodes[0]!.commit.oid = revision;
+      await refused(wrongParent, /second parent/i, "Operator approved");
+      nextPage = remotePR([checks[1]], 2);
+      await refused(remotePR([checks[0]], 2), /incomplete/i);
+      nextPage.headRefOid = revision;
+      nextPage.commits.nodes[0]!.commit.oid = revision;
+      await refused(
+        remotePR([checks[0]], 2, true),
+        /changed during pagination/i,
+      );
+      nextPage = undefined;
+      unavailable = true;
+      await refused(remotePR(), /read.*pull request/i, "Operator approved");
+      unavailable = false;
+      const expectedChecks = recordedChecks();
+      pullRequest = remotePR(
+        expectedChecks.slice(0, 1),
+        expectedChecks.length,
+        true,
+      );
+      nextPage = remotePR(expectedChecks.slice(1), expectedChecks.length);
+      expect(
+        await execute({ ...request, decision: " \t" }, owner).catch(String),
+      ).toMatch(/nonempty/i);
+    }
+    async function verifyColdReviewRefusals() {
+      if (action !== "record-merge") return;
+      const path = join(directory, "state.sqlite");
+      const before = await readFile(path);
+      const decision = "Operator approved an exception";
+      if (mapped) {
+        const octopus = git(
+          root,
+          "commit-tree",
+          `${commit}^{tree}`,
+          "-p",
+          `${commit}^1`,
+          "-p",
+          head,
+          "-p",
+          revision,
+          "-m",
+          "three-parent fixture",
+        );
+        git(root, "update-ref", "refs/remotes/origin/main", octopus);
+        pullRequest = {
+          ...remotePR(),
+          headRefOid: revision,
+          mergeCommit: { oid: octopus },
+        };
+        pullRequest.commits.nodes[0]!.commit.oid = revision;
+        expect(
+          await execute({ ...request, commit: octopus, decision }, owner).catch(
+            String,
+          ),
+        ).toMatch(/second parent/i);
+        git(root, "update-ref", "refs/remotes/origin/main", commit);
+      } else {
+        const invalidCursor = remotePR([checks[1]], 2);
+        invalidCursor.commits.nodes[0]!.commit.statusCheckRollup.contexts.pageInfo.endCursor =
+          "MQ";
+        pullRequest = remotePR([checks[0]], 2, true);
+        nextPage = invalidCursor;
+        expect(
+          await execute({ ...request, decision }, owner).catch(String),
+        ).toMatch(/invalid.*pagination cursor/i);
+        nextPage = undefined;
+        pullRequest = remotePR([{ ...checks[0], id: undefined }]);
+        expect(
+          await execute({ ...request, decision }, owner).catch(String),
+        ).toMatch(/missing.*check id/i);
+        pullRequest = remotePR([checks[0], checks[0]], 3, true);
+        nextPage = remotePR([{ ...checks[1], conclusion: "FAILURE" }], 3);
+        expect(
+          await execute({ ...request, decision }, owner).catch(String),
+        ).toMatch(/duplicate check id/i);
+        pullRequest = remotePR([checks[0]], 2, true);
+        nextPage = remotePR([checks[0]], 2);
+        expect(await execute(request, owner).catch(String)).toMatch(
+          /duplicate check id/i,
+        );
+        nextPage = undefined;
+      }
+      expect(await readFile(path)).toEqual(before);
+    }
+    await verifyColdReviewRefusals();
+    await verifyRefusals();
     await execute(request, owner);
     const saved = factoryStatus(directory);
     expect(saved).toMatchObject({
@@ -2148,7 +2372,29 @@ async function recordedMergeFixture(action: string, mapped = false) {
       },
     });
     const bytes = await readFile(join(directory, "state.sqlite"));
+    async function verifyEvidence() {
+      if (action !== "record-merge") return;
+      const run = saved.runs.A;
+      if (run?.kind !== "done" || !run.merge?.evidence)
+        throw new Error("Expected recorded merge evidence");
+      const { evidence } = run.merge;
+      expect(evidence.head).toBe(head);
+      expect(evidence.checks).toEqual(recordedChecks());
+      if (mapped) {
+        expect(evidence.exception?.decision).toBe(request.decision);
+        expect(evidence.exception?.reason).toContain("CANCELLED");
+      } else expect(evidence.exception).toBeUndefined();
+      expect(
+        await execute(
+          { ...request, decision: "Different approval" },
+          owner,
+        ).catch(String),
+      ).toMatch(/Conflicting/);
+    }
+    await verifyEvidence();
+    const readsBeforeRepeat = reads;
     await execute(request, owner);
+    expect(reads).toBe(readsBeforeRepeat);
     expect(await readFile(join(directory, "state.sqlite"))).toEqual(bytes);
     for (const conflict of [{ pr: 43 }, { commit: missing }])
       expect(execute({ ...request, ...conflict }, owner)).rejects.toThrow(
@@ -2168,7 +2414,13 @@ async function recordedMergeFixture(action: string, mapped = false) {
     );
     const historical = await readFile(join(directory, "state.sqlite"));
     await execute(
-      { ...request, action: "record-merge", ticket: "legacy", renames: {} },
+      {
+        ...request,
+        action: "record-merge",
+        ticket: "legacy",
+        renames: {},
+        decision: undefined,
+      },
       owner,
     );
     await execute(
@@ -2177,6 +2429,7 @@ async function recordedMergeFixture(action: string, mapped = false) {
         action: "record-merge",
         ticket: "legacy",
         renames: undefined,
+        decision: undefined,
       },
       owner,
     );

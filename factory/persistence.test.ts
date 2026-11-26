@@ -932,6 +932,107 @@ test("merge records validate on save and reopen without changing legacy runs", a
   }
 });
 
+const failedMergeCheck = {
+  __typename: "CheckRun",
+  name: "quality",
+  status: "COMPLETED",
+  conclusion: "FAILURE",
+};
+
+const greenStatus = {
+  __typename: "StatusContext",
+  context: "quality",
+  state: "SUCCESS",
+};
+const identifiedStatus = { ...greenStatus, id: "status-1" };
+
+test.each([
+  { name: "empty object", checks: [{}], accepted: false },
+  {
+    name: "invalid status context",
+    checks: [{ __typename: "StatusContext", context: "quality" }],
+    accepted: false,
+  },
+  {
+    name: "failed check without exception",
+    checks: [failedMergeCheck],
+    accepted: false,
+  },
+  {
+    name: "failed check with valid exception",
+    checks: [failedMergeCheck],
+    accepted: true,
+    exception: { decision: "Operator approved", reason: "quality failed" },
+  },
+  {
+    name: "malformed check with exception",
+    checks: [{}],
+    accepted: false,
+    exception: { decision: "Operator approved", reason: "quality failed" },
+  },
+  {
+    name: "duplicate check IDs",
+    checks: [identifiedStatus, identifiedStatus],
+    accepted: false,
+  },
+  {
+    name: "duplicate check IDs with exception",
+    checks: [identifiedStatus, identifiedStatus],
+    accepted: false,
+    exception: {
+      decision: "Operator approved",
+      reason: "nonstandard merge shape",
+    },
+  },
+  {
+    name: "same name with distinct IDs",
+    checks: [identifiedStatus, { ...identifiedStatus, id: "status-2" }],
+    accepted: true,
+  },
+  {
+    name: "legacy checks without IDs",
+    checks: [greenStatus, greenStatus],
+    accepted: true,
+  },
+])("merge storage boundary: $name", async ({ checks, accepted, exception }) => {
+  const f = await fixture();
+  const storage = openPersistence(f.directory, queue);
+  storage.commit(parked, "D", "fixture", "accepted");
+  const merge = {
+    pr: 42,
+    commit: "a".repeat(40),
+    at: "2026-11-15T12:34:56.000Z",
+    evidence: {
+      head: "b".repeat(40),
+      checks: checks.map((check): Record<string, unknown> => ({ ...check })),
+      ...(exception ? { exception } : {}),
+    },
+  };
+  const done = parked.runs.D;
+  if (done?.kind !== "done") throw new Error("Expected accepted fixture");
+  const run = { ...done, merge };
+  const state = { ...parked, runs: { ...parked.runs, D: run } };
+  try {
+    const save = () =>
+      storage.commit(state, "D", "merge-recorded", merge.commit);
+    if (accepted) save();
+    else expect(save).toThrow(/invalid factory merge/i);
+  } finally {
+    storage.close();
+  }
+  const db = new Database(join(f.directory, "state.sqlite"));
+  try {
+    db.run("UPDATE runs SET data = ? WHERE ticket = 'D'", [
+      JSON.stringify(run),
+    ]);
+  } finally {
+    db.close();
+  }
+  const replay = () => factoryStatus(f.directory).runs.D;
+  if (accepted) expect(replay()).toMatchObject({ merge });
+  else expect(replay).toThrow(/invalid factory merge/i);
+});
+
 test("planning refresh cannot grant admission or rewrite admitted scope", async () => {
   const f = await fixture();
   const planned = {

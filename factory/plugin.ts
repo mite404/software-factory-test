@@ -12,6 +12,7 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { backup } from "./backup";
+import { readPullRequest } from "./github";
 import {
   allowsRoleCall,
   controlToolName,
@@ -430,6 +431,8 @@ export default function registerFactory(
     restrictedForeman?: PluginToolContext["thread"]["id"];
     /** Generated source digest enables installed enforcement, not maintenance-owner migration. */
     policy?: string;
+    /** Substitute the read-only GitHub CLI execution in tests. */
+    githubQuery?: (args: string[]) => string;
   } = {},
 ) {
   const subscriptions: { unsubscribe(): void }[] = [];
@@ -637,6 +640,7 @@ export default function registerFactory(
       return "inconclusive";
     },
     state: (id, sample) => observe(id, undefined, sample),
+    readPullRequest: (pr) => readPullRequest(root, pr, options.githubQuery),
     messages: (id, options) => amp.threads.get(id).messages(options),
     watch(id, wake) {
       const thread = amp.threads.get(id);
@@ -910,7 +914,7 @@ export default function registerFactory(
           type: "integer",
           minimum: 1,
           description:
-            "For owner-only record-merge. Git checks the done ticket's change and commit against the fetched upstream. Recording is repeat-safe, works while paused, and has no lifecycle or schedule effects.",
+            "For owner-only record-merge. Git proves the accepted change against fetched upstream. GitHub must confirm the PR, merge commit and complete exact-head checks. Recording is repeat-safe and has no dispatch, schedule or publication effects.",
         },
         commit: { type: "string", pattern: "^[a-f0-9]{40}$" },
         revision: {
@@ -928,7 +932,7 @@ export default function registerFactory(
         decision: {
           type: "string",
           description:
-            "For resume, a repair diagnosis, not approval. At attempt four or later resume also requires an authenticated human response to the plugin's bound confirmation dialog. Decision text cannot authorize a capped resume.",
+            "For record-merge, document the operator's approval of an exception for non-green checks or nonstandard merge shape. It cannot waive Git or PR identity and attribution proof. For resume, a repair diagnosis, not approval. At attempt four or later resume also requires an authenticated human response to the plugin's bound confirmation dialog. Decision text cannot authorize a capped resume.",
         },
         owner: {
           type: "string",
