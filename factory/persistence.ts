@@ -1157,7 +1157,7 @@ type Event = { at: string; ticket: string; action: string; detail: string };
 
 /** Closed outcomes per evidence kind; anything else is refused at write and read. */
 export const evidenceOutcomes = {
-  report: ["candidate"],
+  report: ["candidate", "candidate-typed"],
   gate: ["gate-passed", "gate-failed", "post-gate-changed"],
   "gate-rerun": ["gate-passed", "gate-failed", "post-gate-changed"],
   review: ["pass", "issues"],

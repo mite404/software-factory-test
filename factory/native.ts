@@ -1713,7 +1713,7 @@ function reportEvidence(
 ) {
   return evidenceFor(run, revision)(
     "report",
-    "candidate",
+    "candidate-typed",
     reportContent(report),
     run.workerModel ?? "unknown",
   );
@@ -1737,7 +1737,9 @@ function landingProven(
       (item) =>
         item.intact &&
         item.kind === "report" &&
-        (item.sha256 === digest || item.sha256 === report.legacyDigest),
+        ((item.outcome === "candidate-typed" && item.sha256 === digest) ||
+          (item.outcome === "candidate" &&
+            item.sha256 === report.legacyDigest)),
     ) &&
     proven(["gate", "gate-rerun"], "gate-passed") &&
     (!reviewed || proven(["review"], "pass"))

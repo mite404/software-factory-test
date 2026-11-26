@@ -1025,7 +1025,7 @@ test("accepted evidence outlives worker files and HTTP serves only allowlisted m
         kind: "report",
         attempt: 1,
         revision,
-        outcome: "candidate",
+        outcome: "candidate-typed",
         preserved: true,
       }),
       expect.objectContaining({
@@ -1162,7 +1162,7 @@ test.each([
         await writeFile(join(directory, "evidence", digest), oldReport);
         const db = new Database(join(directory, "state.sqlite"));
         db.query(
-          "UPDATE evidence SET sha256 = ?, bytes = ? WHERE kind = 'report'",
+          "UPDATE evidence SET outcome = 'candidate', sha256 = ?, bytes = ? WHERE kind = 'report'",
         ).run(digest, Buffer.byteLength(oldReport));
         db.close();
       }
@@ -1193,7 +1193,11 @@ test.each([
         expect(
           rows.map((row) => [row.kind, row.outcome, row.revision]),
         ).toEqual([
-          ["report", "candidate", revision],
+          [
+            "report",
+            proof === "legacy" ? "candidate" : "candidate-typed",
+            revision,
+          ],
           ["gate", "gate-passed", revision],
           ["review", "pass", revision],
         ]);
@@ -1216,6 +1220,36 @@ test.each([
     }
   },
 );
+
+test("a passing review cannot land an edited legacy report", async () => {
+  const f = await fixture();
+  const directory = join(f.root, ".git/factory");
+  try {
+    const base = git(f.root, "rev-parse", "HEAD");
+    await f.submit(1);
+    await f.tick();
+    const db = new Database(join(directory, "state.sqlite"));
+    db.query(
+      "UPDATE evidence SET outcome = 'candidate' WHERE kind = 'report'",
+    ).run();
+    db.close();
+    const [report] = factoryEvidence(directory, "A")!;
+    const path = join(directory, "A.report.json");
+    const original = JSON.parse(
+      evidenceContent(directory, "A", report!.sha256),
+    );
+    expect(sha256(JSON.stringify(original))).toBe(report!.sha256);
+    await writeFile(path, JSON.stringify({ ...original, extra: true }));
+    await f.verdict("pass");
+    expect((await f.tick()).runs.A).toMatchObject({
+      kind: "blocked",
+      incident: { reason: "evidence-missing", recovery: "inspect" },
+    });
+    expect(git(f.root, "rev-parse", "HEAD")).toBe(base);
+  } finally {
+    await f.close();
+  }
+});
 
 test("a passing review returns a malformed report to the original worker without landing", async () => {
   const f = await fixture();
