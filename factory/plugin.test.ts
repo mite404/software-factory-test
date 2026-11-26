@@ -8,7 +8,15 @@ import type {
 } from "@ampcode/plugin";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, writeFileSync } from "node:fs";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  readdir,
+  readFile,
+  rm,
+  rmdir,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startDashboard } from "./dashboard";
@@ -117,6 +125,14 @@ test("installed policy refuses legacy, unknown and mismatched owners across reco
         review: true,
         capacity: 1,
         permissions: { execute: true, publish: false, externalTickets: false },
+        hooks: [
+          {
+            event: "agent.start",
+            action: "create-marker",
+            name: "turn",
+            timeoutMs: 1000,
+          },
+        ],
       }),
     );
     const storage = openPersistence(directory, []);
@@ -248,6 +264,28 @@ test("installed policy refuses legacy, unknown and mismatched owners across reco
       owner: "T-owner",
       runs: {},
     });
+    const markers = join(directory, "hook-markers");
+    expect(existsSync(markers)).toBe(false);
+    await start(
+      { id: "unowned", thread: { id: "T-other" } },
+      { tools: ctx.tools },
+    );
+    expect(existsSync(markers)).toBe(false);
+    const event = { id: "owner-message", thread: ctx.thread };
+    await start(event, { tools: ctx.tools });
+    const [marker] = await readdir(markers);
+    expect(marker).toMatch(/^turn-[a-f0-9]{64}$/);
+    await rmdir(join(markers, marker!));
+    dispose();
+    load();
+    actual = registered;
+    await start(event, { tools: ctx.tools });
+    expect(await readdir(markers)).toEqual([]);
+    expect(
+      factoryEvents(directory)?.filter(
+        ({ action }) => action === "hook-succeeded",
+      ),
+    ).toHaveLength(1);
     for (const [index, effort] of (
       [undefined, "high", "medium"] as const
     ).entries()) {

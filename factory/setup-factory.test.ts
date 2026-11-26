@@ -64,6 +64,14 @@ test("two project definitions migrate explicitly, preserve metadata and expose o
         : "openai/gpt-6.2-sol";
       raw.mode = index ? "bug-finding" : "ui-polish";
       raw.permissions.execute = index === 0;
+      raw.hooks = [
+        {
+          event: "agent.start",
+          action: "create-marker",
+          name: "private-marker",
+          timeoutMs: 1000,
+        },
+      ];
       if (index === 0) raw.permissions.backup = true;
       raw.backup = {
         repository: `private/${name}`,
@@ -112,6 +120,7 @@ test("two project definitions migrate explicitly, preserve metadata and expose o
       expect(effective.stdout).not.toContain("private/");
       expect(effective.stdout).not.toContain("secret-");
       expect(effective.stdout).not.toContain("touch");
+      expect(effective.stdout).not.toContain("private-marker");
       const server = startDashboard({ root, port: 0 });
       try {
         const response = await fetch(
@@ -139,7 +148,19 @@ test("two project definitions migrate explicitly, preserve metadata and expose o
       await rm(join(root, "factory/config"), { recursive: true });
       const invalid = [
         { ...raw, version: 2 },
-        { ...raw, hooks: [] },
+        ...[
+          { event: "tool.call" },
+          { action: "command" },
+          { name: "../outside" },
+          { timeoutMs: 0 },
+          { timeoutMs: 5001 },
+          { command: "touch should-not-run" },
+          { permission: "secrets" },
+        ].map((change) => ({
+          ...raw,
+          hooks: [{ ...raw.hooks[0], ...change }],
+        })),
+        { ...raw, hooks: [raw.hooks[0], raw.hooks[0]] },
         { ...raw, services: {} },
         { ...raw, prd: "missing.md" },
         { ...raw, tickets: "missing.json" },
@@ -161,6 +182,9 @@ test("two project definitions migrate explicitly, preserve metadata and expose o
       expect(run("--check").status).toBe(0);
       expect(await readFile(database)).toEqual(savedDatabase);
       expect(await Bun.file(join(root, "should-not-run")).exists()).toBe(false);
+      expect(
+        await stat(join(root, ".git/factory/hook-markers")).catch(() => null),
+      ).toBeNull();
     }
   } finally {
     await rm(home, { recursive: true, force: true });

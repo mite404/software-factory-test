@@ -1,4 +1,5 @@
 import type {
+  AgentStartEvent,
   AgentReasoningEffort,
   PluginTools,
   ThreadMessage,
@@ -6,7 +7,7 @@ import type {
 } from "@ampcode/plugin";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, constants, existsSync, readFileSync } from "node:fs";
 import {
   lstat,
   mkdir,
@@ -18,6 +19,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
   automationsOf,
   type Automation,
@@ -30,8 +32,10 @@ import {
   readConfigFiles,
   refuseUnfinishedConfig,
   writeConfigFiles,
+  parseNativeHooks,
   configDirectory,
   type Check,
+  type NativeHook,
   type VerificationCapability,
 } from "./config";
 import definitionSchema from "./definition.schema.json";
@@ -518,6 +522,7 @@ async function validateConfiguration(
   const scope = allowedScope(root, raw.scope);
   const verify = gateLine(raw.verify, checks);
   const setup = parseSetup(raw.setup, raw.setupTimeoutMs);
+  const hooks = parseNativeHooks(raw.hooks);
   const watchdog = watchdogPolicy(raw.watchdog);
   const observer = observerRole(raw.observer);
   const instructions = await readFile(prd, "utf8");
@@ -535,6 +540,7 @@ async function validateConfiguration(
     verify,
     checks,
     setup,
+    ...optionalField("hooks", hooks),
     watchdog,
     observer,
     instructions,
@@ -647,6 +653,7 @@ export async function effectiveConfiguration(root: string) {
         ...loaded,
         setup: loaded.setup,
         checks: loaded.checks,
+        hooks: loaded.hooks,
         watchdog: loaded.watchdog ?? defaultWatchdog,
         workerEffort: loaded.workerEffort,
         workerRunner: loaded.workerRunner,
@@ -672,6 +679,7 @@ function definitionPin(
     instructions,
     tickets,
     setup,
+    hooks,
     watchdog,
     providerLimit,
     lightWorker,
@@ -689,6 +697,7 @@ function definitionPin(
     instructions,
     tickets,
     setup,
+    ...optionalField("hooks", hooks),
     watchdog,
     ...(providerLimit === undefined ? {} : { providerLimit }),
     ...(lightWorker === undefined ? {} : { lightWorker }),
@@ -2658,6 +2667,85 @@ function buildingWorker(
   );
 }
 
+function hookEventId({ id, thread }: Pick<AgentStartEvent, "id" | "thread">) {
+  if (typeof id === "number" && (!Number.isSafeInteger(id) || id < 0)) return;
+  if (typeof id !== "string" && typeof id !== "number") return;
+  const message = String(id);
+  if (!message.trim() || message.length > 128) return;
+  return sha256(JSON.stringify(["agent.start", thread.id, message]));
+}
+
+async function createHookMarker(
+  directory: string,
+  name: string,
+  expired: () => boolean,
+  signal: AbortSignal,
+) {
+  try {
+    const markers = join(directory, "hook-markers");
+    await mkdir(markers, { recursive: true, mode: 0o700 });
+    const handle = await open(
+      markers,
+      constants.O_DIRECTORY | constants.O_NOFOLLOW,
+    );
+    try {
+      if (expired()) return "timed-out";
+      // Resolve the leaf through the inherited directory, never the replaceable pathname.
+      const child = Bun.spawn(
+        ["/bin/mkdir", "-m", "700", "--", `/proc/self/fd/3/${name}`],
+        {
+          env: {},
+          stdio: ["ignore", "ignore", "ignore", handle.fd],
+          signal,
+          killSignal: "SIGKILL",
+        },
+      );
+      const status = await child.exited;
+      if (child.signalCode) return "uncertain";
+      return status === 0 ? "succeeded" : "failed";
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return "failed";
+  }
+}
+
+async function runHookBeforeDeadline(
+  directory: string,
+  hook: NativeHook,
+  id: string,
+  permits: () => Promise<boolean>,
+) {
+  const deadline = performance.now() + hook.timeoutMs;
+  const controller = new AbortController();
+  const expired = () =>
+    controller.signal.aborted || performance.now() >= deadline;
+  const timeout = Promise.withResolvers<"timed-out">();
+  const timer = setTimeout(() => {
+    timeout.resolve("timed-out");
+    controller.abort();
+  }, hook.timeoutMs);
+  try {
+    return await Promise.race([
+      timeout.promise,
+      (async () => {
+        const permitted = await permits();
+        if (expired()) return "timed-out" as const;
+        if (!permitted) return "refused" as const;
+        return createHookMarker(
+          directory,
+          `${hook.name}-${id}`,
+          expired,
+          controller.signal,
+        );
+      })(),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Create the sequential dispatcher. Unknown remote effects are parked, never retried blindly. */
 export function createFactory(
   root: string,
@@ -2671,6 +2759,58 @@ export function createFactory(
   );
   const watched = new Set<ThreadID>();
   let pending = Promise.resolve<unknown>(undefined);
+
+  async function permitsHook(owner: ThreadID, hook: NativeHook) {
+    if (!host.requireExecution) return false;
+    try {
+      await host.requireExecution(owner);
+      const current = await configuration(root);
+      return current.execute && isDeepStrictEqual(current.hooks?.[0], hook);
+    } catch {
+      return false;
+    }
+  }
+
+  async function runNativeHook(id: string, owner: ThreadID) {
+    if (!factoryDefinition(directory)?.hooks?.length) return;
+    const store = openStore(join(directory, "bookkeeping"));
+    try {
+      await store.init();
+      const pin = factoryDefinition(directory);
+      if (!pin?.hooks?.[0]) return;
+      const hook = pin.hooks[0];
+      const persistence = openPersistence(directory, [], now);
+      try {
+        persistence.recoverHooks();
+        if (
+          persistence.state.owner !== owner ||
+          !persistence.claimHook(id, pin.digest, owner)
+        )
+          return;
+        const outcome = persistence.state.enabled
+          ? await runHookBeforeDeadline(directory, hook, id, () =>
+              permitsHook(owner, hook),
+            )
+          : "refused";
+        persistence.settleHook(id, outcome);
+      } finally {
+        persistence.close();
+      }
+    } finally {
+      await store.close();
+    }
+  }
+
+  /** Receive an Amp owner-turn event; not callable through the factory control tool. @throws On failed I/O. */
+  function nativeHook(event: Pick<AgentStartEvent, "id" | "thread">) {
+    const id = hookEventId(event);
+    if (!id) return;
+    const result = pending
+      .catch(() => {})
+      .then(() => runNativeHook(id, event.thread.id));
+    pending = result;
+    return result;
+  }
 
   async function event(ticket: string, action: string, detail: string) {
     const persistence = openPersistence(directory, [], now);
@@ -2803,6 +2943,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
       );
       const state = persistence.state;
       assertWatchdogCaller(state, action, owner, tools);
+      persistence.recoverHooks();
       restoreTickets(queue, persistence.tickets, state);
       function requireCreation() {
         if (!creation) return;
@@ -5471,6 +5612,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
   }
   return {
     tick,
+    nativeHook,
     automation,
     recordMerge,
     recordLanding,

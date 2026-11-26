@@ -125,7 +125,8 @@ includes the leftovers of an interrupted migration, which `--migrate` completes.
 ```text
 factory/config/
   factory.yaml                  version, capacity, mode, prd, tickets, scope, verify, permissions,
-                                ticketFiles, backup, bookkeepingSHA256, watchdog, providerLimit
+                                ticketFiles, backup, bookkeepingSHA256, watchdog, providerLimit,
+                                hooks
   agents/foreman/agent.md       front matter: model (orchestratorModel). Body: the Foreman prompt
   agents/implementer/agent.md   front matter: model, effort, runner (workerModel, workerEffort,
                                 workerRunner). Body must be empty
@@ -141,6 +142,38 @@ factory/config/
                                 front matter: schedule (5-field UTC cron), enabled (default
                                 false). Body: the prompt. See Scheduled automations
 ```
+
+### Native hooks
+
+No hooks are configured by default. An authored definition can declare one local action:
+
+```yaml
+hooks:
+  - event: agent.start
+    action: create-marker
+    name: turn
+    timeoutMs: 1000
+```
+
+`name` is a lowercase alphanumeric label with optional hyphens, up to 32 characters.
+`timeoutMs` is a required integer from 1 to 5000. One deadline covers permission checks and the
+action. A late permission response cannot start the action or hold a queued pause. The action
+invokes a fixed `mkdir` with no shell or inherited environment. Its only effect is one empty
+directory named `<name>-<event-hash>` inside the opened `hook-markers/` directory. The child uses
+an inherited Linux directory descriptor, so replacing `hook-markers/` cannot redirect a write.
+
+Only a valid Amp `agent.start` message ID for the current owner can trigger a hook. The factory
+must be enabled, the owner's installed policy must verify, and the current definition must both
+allow execution and still match the accepted hook. Use `reload` to accept a new declaration.
+Removing or changing a declaration stops the old action immediately. Install, check, refresh,
+read, reload and ordinary reconcile never run hooks. Hooks cannot run project commands, read
+secrets, accept candidates, dispatch workers or change ownership.
+
+SQLite records the claim before the process starts. Reconciliation records abandoned claims as
+`hook-uncertain` without replaying them. `hook-refused`, `hook-failed`, `hook-timed-out` and
+`hook-succeeded` also consume the event. Changes to the hook or marker directory do not make an
+already claimed event eligible again. Operator event history shows the outcomes without exposing
+the marker label, the message ID or its content.
 
 ### Check files
 

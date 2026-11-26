@@ -2,14 +2,17 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { renameSync, symlinkSync } from "node:fs";
 import {
   chmod,
   copyFile,
   mkdtemp,
   mkdir,
   readFile,
+  readdir,
   rename,
   rm,
+  rmdir,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -239,6 +242,213 @@ async function preparationFixture(
 afterEach(async () => {
   for (const root of preparationRoots.splice(0))
     await rm(root, { recursive: true, force: true });
+});
+
+async function markerFixture(
+  timeoutMs: number,
+  requireExecution: () => Promise<void>,
+) {
+  const { root, host } = await preparationFixture(() => "exit 99");
+  const config = join(root, ".factory.json");
+  await Bun.write(
+    config,
+    JSON.stringify({
+      ...(await Bun.file(config).json()),
+      hooks: [
+        {
+          event: "agent.start",
+          action: "create-marker",
+          name: "turn",
+          timeoutMs,
+        },
+      ],
+    }),
+  );
+  const owner: ThreadID = "T-owner";
+  const engine = createFactory(root, { ...host, requireExecution }, openStore);
+  const storage = openPersistence(engine.directory, []);
+  storage.commit(
+    { enabled: true, owner, runs: {} },
+    "factory",
+    "fixture",
+    "Owner ready",
+  );
+  storage.close();
+  await engine.tick("reload", owner);
+  return {
+    engine,
+    owner,
+    deliver: () => engine.nativeHook({ id: "event", thread: { id: owner } }),
+    markers: join(engine.directory, "hook-markers"),
+  };
+}
+
+test("hook permission expiry releases pause and late permission never creates a marker", async () => {
+  const entered = Promise.withResolvers<void>();
+  const permission = Promise.withResolvers<void>();
+  const { engine, owner, deliver, markers } = await markerFixture(50, () => {
+    entered.resolve();
+    return permission.promise;
+  });
+  const attempt = deliver();
+  await entered.promise;
+  const pause = engine.tick("pause", owner);
+  try {
+    const paused = await Promise.race([pause, Bun.sleep(750).then(() => null)]);
+    expect(paused?.enabled).toBe(false);
+    expect(
+      factoryEvents(engine.directory)?.some(
+        ({ action }) => action === "hook-timed-out",
+      ),
+    ).toBe(true);
+  } finally {
+    permission.resolve();
+    await Promise.all([attempt, pause]);
+  }
+  await deliver();
+  await Bun.sleep(100);
+  expect(await readdir(markers).catch(() => null)).toBeNull();
+});
+
+test("marker creation stays in the opened directory when its pathname is replaced", async () => {
+  const { engine, deliver, markers } = await markerFixture(
+    1000,
+    async () => {},
+  );
+  const moved = join(engine.directory, "original-markers");
+  const outside = join(engine.directory, "outside-markers");
+  await mkdir(outside);
+  const spawn = Bun.spawn;
+  const substitute = spyOn(Bun, "spawn").mockImplementationOnce(
+    (command, options?) => {
+      renameSync(markers, moved);
+      symlinkSync(outside, markers);
+      return Reflect.apply(spawn, Bun, [command, options]);
+    },
+  );
+  try {
+    await deliver();
+  } finally {
+    substitute.mockRestore();
+  }
+  expect(await readdir(outside)).toEqual([]);
+  expect(await readdir(moved)).toEqual([
+    expect.stringMatching(/^turn-[a-f0-9]{64}$/),
+  ]);
+});
+
+test("native hooks hold refused, timed-out and interrupted effects across reload and restart", async () => {
+  const { root, host, git, counts } = await preparationFixture(() => "exit 99");
+  const configPath = join(root, ".factory.json");
+  const raw = await Bun.file(configPath).json();
+  const owner = { id: "T-owner" } as const;
+  const engine = () =>
+    createFactory(root, { ...host, async requireExecution() {} }, openStore);
+  const { directory } = engine();
+  const markers = join(directory, "hook-markers");
+  const base = git("rev-parse", "HEAD");
+  const state = {
+    enabled: true,
+    owner: owner.id,
+    runs: {
+      A: { kind: "blocked", thread: "T-original", reason: "Stale candidate" },
+    },
+  } satisfies State;
+  const storage = openPersistence(directory, []);
+  storage.commit(state, "A", "fixture", "Existing original worker");
+  storage.close();
+  const configure = (name: string, execute = true, timeoutMs = 1000) =>
+    Bun.write(
+      configPath,
+      JSON.stringify({
+        ...raw,
+        hooks: [
+          { event: "agent.start", action: "create-marker", name, timeoutMs },
+        ],
+        permissions: { ...raw.permissions, execute },
+      }),
+    );
+  const event = (id: string) => ({ id, thread: owner });
+  const outcomes = () =>
+    factoryEvents(directory)?.flatMap(({ action }) =>
+      action.startsWith("hook-") && action !== "hook-claimed" ? [action] : [],
+    );
+
+  await configure("old");
+  await engine().nativeHook(event("not-accepted"));
+  await engine().tick("reload", owner.id);
+  await engine().tick("status");
+  expect(await readdir(markers).catch(() => null)).toBeNull();
+  await configure("old", false);
+  await engine().nativeHook(event("revoked"));
+  await configure("new");
+  await engine().nativeHook(event("edited"));
+  await engine().tick("reload", owner.id);
+  await engine().nativeHook(event("revoked"));
+  await engine().nativeHook(event("edited"));
+  expect(await readdir(markers).catch(() => null)).toBeNull();
+  expect(outcomes()).toEqual(["hook-refused", "hook-refused"]);
+
+  await engine().nativeHook(event("allowed"));
+  const [created] = await readdir(markers);
+  expect(created).toMatch(/^new-[a-f0-9]{64}$/);
+  const interrupted = event("interrupted");
+  const crash = Bun.spawnSync([
+    process.execPath,
+    "-e",
+    `
+      import { createFactory } from ${JSON.stringify(join(import.meta.dir, "native.ts"))};
+      import { openStore } from ${JSON.stringify(join(import.meta.dir, "bookkeeping.fixture.ts"))};
+      const factory = createFactory(Bun.argv.at(-1), { async requireExecution() {} }, openStore);
+      const spawn = Bun.spawn;
+      Bun.spawn = (command, options) => spawn([
+        "/bin/sh", "-c", '"$@" && kill -KILL "$PPID"', "hook-crash-fixture", ...command
+      ], options);
+      await factory.nativeHook(${JSON.stringify(interrupted)});
+    `,
+    root,
+  ]);
+  const [interruptedMarker] = (await readdir(markers)).filter(
+    (name) => name !== created,
+  );
+  expect(crash.signalCode).toBe("SIGKILL");
+  expect(interruptedMarker).toMatch(/^new-[a-f0-9]{64}$/);
+  expect(factoryEvents(directory)?.at(-1)?.action).toBe("hook-claimed");
+  await rmdir(join(markers, interruptedMarker!));
+  await engine().nativeHook(interrupted);
+  expect(await readdir(markers)).toEqual([created!]);
+
+  await configure("slow", true, 500);
+  await engine().tick("reload", owner.id);
+  const spawn = Bun.spawn;
+  let slow: ReturnType<typeof Bun.spawn> | undefined;
+  const substitute = spyOn(Bun, "spawn").mockImplementationOnce(
+    (_, options?) => {
+      slow = Reflect.apply(spawn, Bun, [["/bin/sleep", "10"], options]);
+      return slow!;
+    },
+  );
+  try {
+    await engine().nativeHook(event("timeout"));
+    expect(
+      await Promise.race([slow?.exited, Bun.sleep(1000).then(() => null)]),
+    ).toBe(137);
+  } finally {
+    substitute.mockRestore();
+    slow?.kill("SIGKILL");
+  }
+  await engine().nativeHook(event("timeout"));
+  expect(await readdir(markers)).toEqual([created!]);
+  expect(outcomes()).toEqual([
+    "hook-refused",
+    "hook-refused",
+    "hook-succeeded",
+    "hook-uncertain",
+    "hook-timed-out",
+  ]);
+  expect(counts()).toEqual({ creates: 0, sends: 0 });
+  expect(factoryStatus(directory)).toEqual(state);
+  expect(git("rev-parse", "HEAD")).toBe(base);
 });
 
 test("brief facts list every gap without quoting private instructions", async () => {

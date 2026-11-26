@@ -109,6 +109,21 @@
       "items": { "type": "string", "minLength": 1 }
     },
     "verify": { "type": "string", "minLength": 1 },
+    "hooks": {
+      "type": "array",
+      "maxItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["event", "action", "name", "timeoutMs"],
+        "properties": {
+          "event": { "const": "agent.start" },
+          "action": { "const": "create-marker" },
+          "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,31}$" },
+          "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 5000 }
+        }
+      }
+    },
     "setup": { "type": "string", "minLength": 1 },
     "setupTimeoutMs": {
       "type": "integer",
