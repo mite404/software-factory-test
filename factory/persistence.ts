@@ -237,6 +237,7 @@ type FullGate = {
   | { status: "pending" }
   | { status: "running"; process?: GateProcess }
   | { status: "interrupted" }
+  | { status: "verified"; ledgerPr: number }
   | { status: "passed" | "failed" | "stale"; exit: number | null }
 );
 
@@ -323,6 +324,7 @@ export type Run = (
       insight: string;
       review?: Review;
       workerModel?: string;
+      requirements?: string;
     }
 ) & {
   definition?: string;
@@ -1052,7 +1054,7 @@ export function projectFullGate(run: Run | undefined) {
   const gate = run?.fullGate;
   return (
     gate && {
-      status: gate.status,
+      status: gate.status === "verified" ? "pending" : gate.status,
       landedRevision: gate.revision,
       verifiedRevision: gate.status === "passed" ? gate.revision : null,
     }
@@ -1257,7 +1259,7 @@ type Event = { at: string; ticket: string; action: string; detail: string };
 /** Closed outcomes per evidence kind; anything else is refused at write and read. */
 export const evidenceOutcomes = {
   report: ["candidate", "candidate-typed"],
-  gate: ["gate-passed", "gate-failed", "post-gate-changed"],
+  gate: ["gate-passed", "gate-failed", "post-gate-changed", "gate-not-run"],
   "gate-rerun": ["gate-passed", "gate-failed", "post-gate-changed"],
   "landing-gate": ["gate-passed", "gate-failed", "post-gate-changed"],
   "landing-gate-rerun": ["gate-passed", "gate-failed", "post-gate-changed"],
@@ -2330,6 +2332,10 @@ function validFullGateStatus(
     );
   if (status === "pending" || status === "interrupted")
     return exactKeys(gate, keys);
+  if (status === "verified")
+    return (
+      exactKeys(gate, [...keys, "ledgerPr"]) && positiveInteger(gate.ledgerPr)
+    );
   return (
     exactKeys(gate, [...keys, "exit"]) && validFullGateExit(status, gate.exit)
   );

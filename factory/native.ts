@@ -1940,6 +1940,29 @@ async function verifyGate(
   return result;
 }
 
+async function prepareFullGate(
+  worktree: string,
+  pin: DefinitionPin,
+  revision: string,
+  log: string,
+  onSpawn: (pid: number, timeoutMs: number) => void,
+) {
+  if (!pin.setup) return;
+  const result = await verify(
+    worktree,
+    pin.setup.command,
+    pin.setup.timeoutMs,
+    onSpawn,
+  );
+  if (fullGateResult(result, unchanged(worktree, revision)) === "passed")
+    return;
+  await writeFile(
+    log,
+    `Pinned setup failed or changed the checkout. Full verification did not run.\n${gateLog(result)}`,
+  );
+  return result;
+}
+
 async function writeGateExcerpt(
   log: string,
   outcome: GateOutcome,
@@ -4007,8 +4030,10 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           executor: run.executor,
           ...laneField(run),
           revision,
-          acceptedBase: run.base,
-          ...(scheduled ? {} : { acceptedAt: now() }),
+          acceptedBase: run.fullGate?.base ?? run.base,
+          ...(scheduled
+            ? { requirements: run.requirements }
+            : { acceptedAt: now() }),
           attempt: run.attempt,
           workerModel: run.workerModel,
           review: run.review,
@@ -4213,6 +4238,8 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         if (git(root, "rev-parse", "HEAD") !== run.base)
           return rebaseCandidate(task, run, report, revision);
         const model = reviewerModel(run.workerModel);
+        const pin = runDefinition(run, config, directory);
+        const landing = landingPolicy(run, pin);
         const worktree = join(
           directory,
           "staging",
@@ -4228,7 +4255,8 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           model,
           log,
           executor: run.executor ?? "local",
-          command: runDefinition(run, config, directory).verify,
+          command: landing?.landing ?? pin.verify,
+          ...(landing ? { landingOnly: true } : {}),
           delivery: "creating",
           report: join(
             directory,
@@ -5080,6 +5108,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           attempt: run.attempt!,
           delivery: "sent" as const,
           workerModel: run.workerModel,
+          requirements: run.requirements,
           definition: run.definition,
           executor: run.executor,
           ...laneField(run),
@@ -5098,8 +5127,8 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
       async function settleFullGate() {
         const ticket = fullGateBarrier();
         if (!ticket) return false;
-        const run = state.runs[ticket];
-        if (run?.kind !== "done" || !run.fullGate) return false;
+        const run = state.runs[ticket]!;
+        if (run.kind !== "done" || !run.fullGate) return false;
         const gate = run.fullGate;
         // Hold all coordinator landings while a fast landing lacks full proof.
         if (!authorizedFullWake() || gate.status === "running") return true;
@@ -5111,7 +5140,9 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           staleFullGate(ticket, run, gate);
           return true;
         }
-        await runDueFullGate(ticket, run, gate);
+        if (gate.status === "verified")
+          await acceptFullProof(ticket, run, gate);
+        else await runDueFullGate(ticket, run, gate);
         return true;
       }
 
@@ -5130,11 +5161,38 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         gate: NonNullable<Run["fullGate"]>,
       ) {
         if (gate.status === "stale") return;
+        const { revision, base, definition, landedAt, id } = gate;
         run.fullGate = {
-          ...gate,
+          revision,
+          base,
+          definition,
+          landedAt,
+          id,
           status: "stale",
-          exit: "exit" in gate ? gate.exit : null,
+          exit:
+            gate.status === "verified" ? 0 : "exit" in gate ? gate.exit : null,
         };
+        recordFullGate(ticket, run.fullGate);
+      }
+
+      async function acceptFullProof(
+        ticket: string,
+        run: Extract<Run, { kind: "done" }>,
+        gate: Extract<NonNullable<Run["fullGate"]>, { status: "verified" }>,
+      ) {
+        if (!unchanged(root, gate.revision)) return;
+        const { ledgerPr, ...attempt } = gate;
+        // The store upserts by (pr, sha); a lost response can repeat only this write.
+        await store.ledger.record({
+          pr: ledgerPr,
+          sha: gate.revision,
+          verdict: "unit-test-verified",
+          evidence: fullLog(gate.id),
+        });
+        if (!unchanged(root, gate.revision))
+          return staleFullGate(ticket, run, gate);
+        run.acceptedAt = now();
+        run.fullGate = { ...attempt, status: "passed", exit: 0 };
         recordFullGate(ticket, run.fullGate);
       }
 
@@ -5145,6 +5203,9 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
       ) {
         const pin = dueFullPin(gate);
         if (!pin) return;
+        const ledgerPr = queue.findIndex(({ id }) => id === ticket) + 1;
+        if (!ledgerPr)
+          throw new Error(`Missing queued ticket for full gate: ${ticket}`);
         const { revision, base, definition, landedAt } = gate;
         const attempt = {
           revision,
@@ -5159,45 +5220,79 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         const worktree = fullWorktree(attempt.id);
         git(root, "worktree", "add", "--detach", worktree, gate.revision);
         const log = fullLog(attempt.id);
-        const result = await verifyGate(
+        const started = (pid: number, timeoutMs: number) => {
+          const at = now();
+          const start = processStart(pid);
+          run.fullGate = {
+            ...attempt,
+            process: {
+              pid,
+              at,
+              deadline: at + timeoutMs,
+              ...optionalField("start", start),
+            },
+          };
+          recordFullGate(ticket, run.fullGate);
+        };
+        const setupFailure = await prepareFullGate(
           worktree,
           pin,
+          revision,
           log,
-          (pid, timeoutMs) => {
-            const at = now();
-            const start = processStart(pid);
-            run.fullGate = {
-              ...attempt,
-              process: {
-                pid,
-                at,
-                deadline: at + timeoutMs,
-                ...optionalField("start", start),
-              },
-            };
-            recordFullGate(ticket, run.fullGate);
-          },
+          started,
         );
+        const result =
+          setupFailure ?? (await verifyGate(worktree, pin, log, started));
         const intact = unchanged(worktree, gate.revision);
         removeFullWorktree(attempt.id);
         const status = unchanged(root, gate.revision)
-          ? fullGateResult(result, intact)
+          ? fullGateResult(result, intact && !setupFailure)
           : "stale";
-        run.fullGate = { ...attempt, status, exit: result.status };
-        if (status === "passed") {
-          run.acceptedAt = now();
+        await settleFullProof(
+          ticket,
+          run,
+          attempt,
+          ledgerPr,
+          status,
+          result,
+          setupFailure ? pin.setup!.command : undefined,
+          pin.verify,
+        );
+      }
+
+      async function settleFullProof(
+        ticket: string,
+        run: Extract<Run, { kind: "done" }>,
+        attempt: Extract<NonNullable<Run["fullGate"]>, { status: "running" }>,
+        ledgerPr: number,
+        status: "passed" | "failed" | "stale",
+        result: GateResult,
+        failedSetup: string | undefined,
+        verifyCommand: string,
+      ) {
+        const { definition, revision } = attempt;
+        const outcome = failedSetup
+          ? "gate-not-run"
+          : fullGateEvidenceOutcome(status, result);
+        const settled: NonNullable<Run["fullGate"]> =
+          status === "passed"
+            ? { ...attempt, status: "verified", ledgerPr }
+            : { ...attempt, status, exit: result.status };
+        run.fullGate = settled;
+        if (settled.status === "verified")
           run.checks = recordChecks(run.attempt!, result);
-        }
-        const outcome = fullGateEvidenceOutcome(status, result);
-        recordFullGate(ticket, run.fullGate, [
+        recordFullGate(ticket, settled, [
           evidenceFor({ attempt: run.attempt!, definition }, revision)(
             "gate",
             outcome,
             gateContent(result, revision),
-            pin.verify,
+            failedSetup ?? verifyCommand,
           ),
         ]);
-        if (status === "failed") await routeFullFailure(ticket, run);
+        if (settled.status === "verified")
+          await acceptFullProof(ticket, run, settled);
+        else if (settled.status === "failed")
+          await routeFullFailure(ticket, run);
       }
 
       function dueFullPin(gate: NonNullable<Run["fullGate"]>) {
