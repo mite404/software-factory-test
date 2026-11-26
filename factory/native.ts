@@ -37,6 +37,7 @@ import {
 import definitionSchema from "./definition.schema.json";
 import type { Executor } from "./executor";
 import type { DeliveryIntent } from "./delivery";
+import type { readPullRequest } from "./github";
 import { parseWorkerReport, workerReportExamples } from "./worker-report";
 import {
   deliverAlerts,
@@ -83,6 +84,7 @@ import {
   type ThreadSample,
   type Task,
   type Run,
+  type MergeRecord,
   type DefinitionPin,
   type CheckStatus,
   sha256,
@@ -189,6 +191,8 @@ export type Bookkeeping = {
 
 /** Remote operations only; local state, commands, and verification stay real in tests. */
 export type NativeHost = {
+  /** Read the merged PR and checks attributed to its exact head. @throws On unavailable evidence. */
+  readPullRequest?(pr: number): ReturnType<typeof readPullRequest>;
   /** Require supported platform identity before governed execution. @throws On unknown or unrestricted ownership. */
   requireExecution?(owner: ThreadID | undefined): Promise<void>;
   /** Create a worker; omitted effort preserves Amp's model default. */
@@ -1064,6 +1068,67 @@ function parseLandingRequest(value: unknown) {
     decision: text(raw.decision),
     ...(renames ? { renames } : {}),
   };
+}
+
+function checkRefusal(checks: Record<string, unknown>[]) {
+  if (!checks.length) return "No checks observed on the PR head";
+  const failed = checks.find((check) =>
+    check.__typename === "CheckRun"
+      ? check.status !== "COMPLETED" ||
+        check.conclusion !== "SUCCESS" ||
+        typeof check.name !== "string" ||
+        !check.name.trim()
+      : check.__typename !== "StatusContext" ||
+        check.state !== "SUCCESS" ||
+        typeof check.context !== "string" ||
+        !check.context.trim(),
+  );
+  if (failed)
+    return `Check ${String(failed.name ?? failed.context ?? failed.__typename)} is not green (${String(failed.status ?? failed.state)} / ${String(failed.conclusion)})`;
+}
+
+function mergeEvidence(
+  root: string,
+  commit: string,
+  pull: ReturnType<typeof readPullRequest>,
+  decision: string | undefined,
+) {
+  const { head, checks } = pull;
+  if (pull.state !== "MERGED") throw new Error("Pull request is not merged");
+  if (pull.merge !== commit)
+    throw new Error("Pull request merge commit does not match");
+  const parents = git(root, "show", "-s", "--format=%P", commit)
+    .split(/\s+/)
+    .filter(Boolean);
+  if (parents.length === 2 && parents[1] !== head)
+    throw new Error("Merge commit second parent does not match the PR head");
+  const reason =
+    parents.length !== 2
+      ? "Expected a merge commit with exactly two parents"
+      : checkRefusal(checks);
+  if (reason) {
+    if (!decision) throw new Error(reason);
+    return { head, checks, exception: { decision, reason } };
+  }
+  if (decision)
+    throw new Error("An exception decision requires a refused merge");
+  return { head, checks };
+}
+
+function sameMerge(
+  saved: MergeRecord,
+  request: { pr: number; commit: string; decision?: string },
+) {
+  return (
+    saved.pr === request.pr &&
+    saved.commit === request.commit &&
+    saved.evidence?.exception?.decision === request.decision
+  );
+}
+
+function mergeDecision(request: unknown) {
+  const { decision } = object(request);
+  return decision === undefined ? undefined : text(decision);
 }
 
 // Git's C-quoted path spelling with core.quotePath=true, including UTF-8 octets.
@@ -4955,6 +5020,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
       .then(() =>
         saveRecord("record-merge", owner, (persistence) => {
           const { ticket, pr, commit, renames } = parseMergeRequest(request);
+          const decision = mergeDecision(request);
           const detail = renames ? JSON.stringify({ commit, renames }) : commit;
           const state = persistence.state;
           const run = Object.hasOwn(state.runs, ticket)
@@ -4964,8 +5030,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
             throw new Error("Merge recording requires a done ticket");
           if (run.merge) {
             if (
-              run.merge.pr !== pr ||
-              run.merge.commit !== commit ||
+              !sameMerge(run.merge, { pr, commit, decision }) ||
               (persistence.lastEvent(ticket, "merge-recorded") ??
                 run.merge.commit) !== detail
             )
@@ -4973,7 +5038,15 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
             return state;
           }
           const at = verifyMerge(root, run, commit, renames);
-          run.merge = { pr, commit, at };
+          if (!host.readPullRequest)
+            throw new Error("No GitHub pull request reader configured");
+          const evidence = mergeEvidence(
+            root,
+            commit,
+            host.readPullRequest(pr),
+            decision,
+          );
+          run.merge = { pr, commit, at, evidence };
           persistence.commit(state, ticket, "merge-recorded", detail);
           return state;
         }),

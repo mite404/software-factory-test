@@ -1216,7 +1216,8 @@ blocks landing until revalidation; prior reports and worktrees remain available 
 After merging an accepted ticket, the owning Foreman calls the factory control tool with
 `action: "record-merge"`, `ticket`, a positive integer `pr`, and the full 40-character merge
 `commit`. Fetch the target branch first. The root checkout's configured upstream is the target
-as last fetched; the action does not fetch, push, or call GitHub.
+as last fetched. The action reads the PR from that branch's configured GitHub repository using
+authenticated `gh`; it does not fetch, push, or merge.
 
 Recording requires a `done` run and ancestry of the commit in that fetched remote upstream.
 Both `record-merge` and `record-landing` prove the accepted change with Git patch IDs, stable by
@@ -1230,14 +1231,25 @@ Empty diffs never count as matches, and an empty accepted range is refused. All 
 so changes to surrounding context do not affect patch identity. Older runs use the review base or,
 without review, the accepted revision's first parent. Cherry-picked integration commits can have
 different hashes and context.
-Git verifies the change and ancestry, not whether GitHub assigned that PR number to the commit.
+For `record-merge`, GitHub must identify the PR as merged at the supplied commit. That commit must
+have exactly two parents, with the second equal to the PR head. The GitHub read must identify the
+commit its checks belong to and return the complete rollup for that same head. At least one check
+must be present. Every check run must be `COMPLETED` with `SUCCESS`, and every status context must
+be `SUCCESS`. Duplicate names are evaluated separately. A refusal leaves the ticket accepted.
 
-The record stores `pr`, `commit`, and the commit time as `at`. Optional `renames` uses the exact
+After explicit operator approval, pass a nonempty `decision` to record an exception for a failed
+check policy or a nonstandard parent count. This does not waive upstream or patch proof, PR
+identity, a mismatched second parent, or an unavailable, incomplete or unattributed GitHub read.
+The durable record stores the observed head and all check entries alongside `pr`, `commit` and
+commit time `at`. An exception also stores the decision and refusal reason. Reports and fixture
+tests do not substitute for recording the next real ticket merge after this change lands.
+
+Optional `renames` uses the exact
 header-only mapping proof described below. The normalized mapping is saved atomically with the
-merge record in its `merge-recorded` event. Repeating the same number, commit and mapping does not
-write, including after restart or with reordered mapping keys. Changed mappings, omitted mappings
-after a mapped record, or conflicting PR/commit values refuse without writes. Omitted and empty
-mappings are equivalent; historical unmapped records remain repeat-safe.
+merge record in its `merge-recorded` event. Repeating the same number, commit, mapping and decision
+does not write or re-read GitHub, including after restart or with reordered mapping keys. Changing
+or omitting a recorded decision or mapping conflicts. Omitted and empty mappings are equivalent;
+historical records remain unchanged and repeat-safe without a decision.
 Recording works while paused, preserves the enabled state, and never dispatches work or changes
 watchdog schedules. Backfill older accepted tickets once from their pull request records.
 

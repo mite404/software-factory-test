@@ -154,6 +154,11 @@ review feedback, or an answer to a question. Find its current stage and continue
    every check on the pull request's exact head has succeeded. Never push to `main` directly.
    After the merge, fetch the root checkout's configured upstream and call `record-merge` with
    the accepted ticket ID, integer `pr` number, and full merge `commit` hash. Do not pass a URL.
+   Recording verifies the merged PR, merge parents and complete set of checks on the exact PR head.
+   If it refuses, leave the ticket accepted. Only with explicit operator approval may you repeat
+   with a nonempty `decision` for non-green checks or a nonstandard parent count. The decision and
+   refusal are saved with the observed checks. Never use a decision to bypass missing GitHub
+   evidence, an identity or head mismatch, or the existing Git proof.
    If integration changed paths, either recording action accepts optional `renames` mapping exact
    old repository-relative file paths to landed paths. Only accepted patch headers are adapted;
    content, whitespace, binary data and modes must still match exactly. Every mapping must be used,

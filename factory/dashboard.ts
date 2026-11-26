@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { githubRepository } from "./github";
 import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
@@ -471,28 +472,6 @@ function applyObservation(
 
 function attemptOf(run: Run | undefined): number | null {
   return run && "attempt" in run ? (run.attempt ?? null) : null;
-}
-
-function githubRepository(root: string): string | null {
-  const git = (...args: string[]) =>
-    execFileSync("git", ["-C", root, ...args], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-  try {
-    const branch = git("branch", "--show-current");
-    const remote = git("config", "--get", `branch.${branch}.remote`);
-    const url = git("remote", "get-url", remote);
-    const match =
-      /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([\w-]+)\/([\w.-]+?)(?:\.git)?\/?$/.exec(
-        url,
-      );
-    return match && ![".", ".."].includes(match[2]!)
-      ? `${match[1]}/${match[2]}`
-      : null;
-  } catch {
-    return null;
-  }
 }
 
 function projectMerge(run: Run | undefined, repository: string | null) {
