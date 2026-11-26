@@ -101,11 +101,11 @@ Promotion still needs a Foreman admission decision and accepted prerequisites.
 
 ## Execution contract shared by these tickets
 
-The coordinator owns authored intake and dispatch. Workers edit only their assigned worktree. One
-Sol 6.1 medium implementation owner runs at a time. Luna is for small workflow fixtures. Every
-candidate runs the complete configured gate against its exact revision and current base. Required
-opposite-family cold review and same-owner repair remain mandatory. Two rejected candidates cause a
-Foreman checkpoint, not abandonment or automatic replacement.
+The coordinator owns authored intake and dispatch. Workers edit only their assigned worktree.
+Implementation uses Sol 6.2 at medium effort, one worker at a time. Luna is for small workflow
+fixtures. Every candidate runs the complete configured gate against its exact revision and current
+base. Required opposite-family cold review and same-owner repair remain mandatory. Two rejected
+candidates cause a Foreman checkpoint, not abandonment or automatic replacement.
 
 Use existing modules before adding files. Future module names in tickets are proposals, not claims
 of installed APIs. Revalidate the effective definition and allowed paths after dependencies land.

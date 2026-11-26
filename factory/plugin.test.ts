@@ -110,7 +110,7 @@ test("installed policy refuses legacy, unknown and mismatched owners across reco
         verify: "true",
         scope: ["src/"],
         mode: "bug-finding",
-        workerModel: "openai/gpt-6.1-sol",
+        workerModel: "openai/gpt-6.2-sol",
         workerEffort: "medium",
         review: true,
         capacity: 1,
@@ -198,7 +198,7 @@ test("installed policy refuses legacy, unknown and mismatched owners across reco
       owner: "T-owner",
       policy: "observed-source-identity",
       execute: true,
-      workerModel: "openai/gpt-6.1-sol",
+      workerModel: "openai/gpt-6.2-sol",
       workerEffort: "medium",
       capacity: 1,
       review: true,
@@ -206,7 +206,7 @@ test("installed policy refuses legacy, unknown and mismatched owners across reco
     expect(factoryStatus(directory)).toEqual(before);
     expect(factoryEvents(directory)).toEqual(events);
     expect(registered).toMatchObject({
-      model: "openai/gpt-6.1-sol",
+      model: "openai/gpt-6.2-sol",
       reasoningEffort: "medium",
       features: [],
       tools: {
@@ -218,6 +218,7 @@ test("installed policy refuses legacy, unknown and mismatched owners across reco
     const savedConfig = await readFile(configPath, "utf8");
     for (const change of [
       { review: false },
+      { workerModel: "openai/gpt-6.2-astra" },
       { workerEffort: "high" },
       {
         providerLimit: {
@@ -234,7 +235,7 @@ test("installed policy refuses legacy, unknown and mismatched owners across reco
         String(await execute({ action: "policy-status" }, ctx)),
       );
       expect(identity).toMatchObject({ verified: false });
-      expect(identity.reason).toContain("one Sol 6.1 medium lane");
+      expect(identity.reason).toContain("one Sol 6.2 medium lane");
       expect(factoryStatus(directory)).toEqual(before);
       expect(factoryEvents(directory)).toEqual(events);
     }
@@ -254,7 +255,7 @@ test("installed policy refuses legacy, unknown and mismatched owners across reco
         scope: ["src/"],
         verify: "true",
         review: true,
-        workerModel: "openai/gpt-6.1-sol",
+        workerModel: "openai/gpt-6.2-sol",
         instructions: "Retained fixture",
         tickets: join(root, ".factory-tickets.json"),
         // JSON persistence omits undefined, as older effort-less pins did.
@@ -288,7 +289,7 @@ test("installed policy refuses legacy, unknown and mismatched owners across reco
         const refusal = await execute({ action: "start" }, ctx).catch(
           (error: unknown) => String(error),
         );
-        expect(refusal).toContain("one Sol 6.1 medium lane");
+        expect(refusal).toContain("one Sol 6.2 medium lane");
       }
       expect(factoryStatus(directory)).toEqual(saved);
       expect(factoryEvents(directory)).toEqual(savedEvents);
@@ -411,7 +412,7 @@ test("registered workers cannot reach alternate tools through the public adapter
     expect(
       invoke("T-owner", controlToolName(root), { action: "reconcile" }),
     ).toEqual({ action: "allow" });
-    expect(restrictedForeman(root, "openai/gpt-6.1-sol").tools).toEqual({
+    expect(restrictedForeman(root, "openai/gpt-6.2-sol").tools).toEqual({
       include: [controlToolName(root)],
       exclude: ["tool_search", "code_exec"],
     });
@@ -745,7 +746,7 @@ test("checked creation derives assignments from native state and keeps lane and 
       JSON.stringify({
         version: 1,
         capacity: 1,
-        workerModel: "openai/gpt-6.1-sol",
+        workerModel: "openai/gpt-6.2-sol",
         prd: "prd.md",
         tickets: "tickets.json",
         scope: ["src/"],
@@ -913,7 +914,7 @@ test("capped resume uses the human dialog, revalidates pending bindings and cons
       JSON.stringify({
         version: 1,
         capacity: 1,
-        workerModel: "openai/gpt-6.1-sol",
+        workerModel: "openai/gpt-6.2-sol",
         prd: "prd.md",
         tickets: "tickets.json",
         scope: ["src/"],
@@ -1147,7 +1148,7 @@ test("only the connected owner wake applies a queued dashboard run, once", async
       JSON.stringify({
         version: 1,
         capacity: 1,
-        workerModel: "openai/gpt-6.1-sol",
+        workerModel: "openai/gpt-6.2-sol",
         prd: "prd.md",
         tickets: "tickets.json",
         scope: ["src/"],
@@ -1258,7 +1259,7 @@ test("status exposes a compact static lifecycle with real control actions and no
       JSON.stringify({
         version: 1,
         capacity: 1,
-        workerModel: "openai/gpt-6.1-sol",
+        workerModel: "openai/gpt-6.2-sol",
         prd: "prd.md",
         tickets: "tickets.json",
         scope: ["src/"],
@@ -1430,7 +1431,7 @@ test("an observer's reconcile reply is the bounded summary, never private state"
       JSON.stringify({
         version: 1,
         capacity: 1,
-        workerModel: "openai/gpt-6.1-sol",
+        workerModel: "openai/gpt-6.2-sol",
         prd: "prd.md",
         tickets: "tickets.json",
         scope: ["src/"],
@@ -1564,7 +1565,7 @@ test("connected handoff observes the exact old owner and returns private durable
       JSON.stringify({
         version: 1,
         capacity: 1,
-        workerModel: "openai/gpt-6.1-sol",
+        workerModel: "openai/gpt-6.2-sol",
         prd: "prd.md",
         tickets: "tickets.json",
         scope: ["src/"],
@@ -1747,7 +1748,7 @@ test.each([
         JSON.stringify({
           version: 1,
           capacity: 1,
-          workerModel: "openai/gpt-6.1-sol",
+          workerModel: "openai/gpt-6.2-sol",
           prd: "prd.md",
           tickets: "tickets.json",
           scope: ["src/"],
@@ -1946,7 +1947,7 @@ async function recordedMergeFixture(action: string, mapped = false) {
       JSON.stringify({
         version: 1,
         capacity: 1,
-        workerModel: "openai/gpt-6.1-sol",
+        workerModel: "openai/gpt-6.2-sol",
         prd: "prd.md",
         tickets: "tickets.json",
         scope: ["src/"],
@@ -2287,7 +2288,7 @@ test("plugin and HTTP keep private briefs and native titles out of public titles
       JSON.stringify({
         version: 1,
         capacity: 1,
-        workerModel: "openai/gpt-6.1-sol",
+        workerModel: "openai/gpt-6.2-sol",
         prd: "prd.md",
         tickets: "tickets.json",
         scope: ["src/"],
@@ -2556,7 +2557,7 @@ test.each([
         JSON.stringify({
           version: 1,
           capacity: 1,
-          workerModel: "openai/gpt-6.1-sol",
+          workerModel: "openai/gpt-6.2-sol",
           review: gate === "review",
           workerRunner,
           prd: "prd.md",
@@ -2961,8 +2962,8 @@ test.each([
         expect(ledger).toEqual([]);
         expect(await readFile(join(root, "src/value"), "utf8")).toBe("old");
         expect(models[1]).toMatchObject({
-          model: "moonshotai/kimi-k3",
-          reasoningEffort: "high",
+          model: "openai/gpt-6.2-astra",
+          reasoningEffort: "medium",
           tools: roleTools(root, "reviewer"),
         });
         expect(
@@ -3140,7 +3141,7 @@ test("setup recovery control preserves durable failure and compatible observatio
       JSON.stringify({
         version: 1,
         capacity: 1,
-        workerModel: "openai/gpt-6.1-sol",
+        workerModel: "openai/gpt-6.2-sol",
         prd: "prd.md",
         tickets: "tickets.json",
         scope: ["src/"],
@@ -3547,7 +3548,7 @@ test.each([
         JSON.stringify({
           version: 1,
           capacity: 1,
-          workerModel: "openai/gpt-6.1-sol",
+          workerModel: "openai/gpt-6.2-sol",
           prd: "prd.md",
           tickets: "tickets.json",
           scope: ["src/"],

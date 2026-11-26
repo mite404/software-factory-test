@@ -4,7 +4,7 @@
 
 - State: preserved implementation awaiting current canonical adoption. Priority: P0. Backlog: F05.
 - Story: [feature-05-story.md](feature-05-story.md).
-- Worker: one Sol 6.1 child at medium effort, with no nested delegation.
+- Worker: one Sol worker at medium effort, with no nested delegation.
 
 ## Canonical adoption scope
 

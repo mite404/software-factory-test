@@ -33,7 +33,7 @@ const finding = {
 
 async function fixture(
   scope: Partial<Task> = {},
-  workerModel = "openai/gpt-6.1-sol",
+  workerModel = "openai/gpt-6.2-sol",
   failure = "",
   providerLimit?: ProviderLimitPolicy,
 ) {
@@ -227,7 +227,7 @@ test.each([
 ] as const)(
   "reviewer fallback %s is cold, revision-bound, recorded and used only once across restart",
   async (fallbackModel) => {
-    const f = await fixture({}, "openai/gpt-6.1-sol", "", {
+    const f = await fixture({}, "openai/gpt-6.2-sol", "", {
       mode: "fallback",
       reviewerModel: fallbackModel,
     });
@@ -251,7 +251,7 @@ test.each([
         thread: "T-3",
         delivery: "sent",
         fallback: {
-          model: "moonshotai/kimi-k3",
+          model: "openai/gpt-6.2-astra",
           thread: "T-2",
           reason: "Kimi usage limit",
         },
@@ -266,14 +266,14 @@ test.each([
         })),
       ).toEqual([
         {
-          model: "openai/gpt-6.1-sol",
+          model: "openai/gpt-6.2-sol",
           effort: undefined,
           role: undefined,
           executor: "local",
         },
         {
-          model: "moonshotai/kimi-k3",
-          effort: "high",
+          model: "openai/gpt-6.2-astra",
+          effort: "medium",
           role: "reviewer",
           executor: "local",
         },
@@ -313,7 +313,7 @@ test.each([
       await f.verdict();
       expect((await f.tick()).runs.A).toMatchObject({
         kind: "done",
-        workerModel: "openai/gpt-6.1-sol",
+        workerModel: "openai/gpt-6.2-sol",
         review: {
           model: fallbackModel,
           fallback: fallback.fallback,
@@ -334,7 +334,7 @@ test.each([
 test.each([undefined, { mode: "wait" } as const])(
   "review limit waits without replacement for policy %j",
   async (policy) => {
-    const f = await fixture({}, "openai/gpt-6.1-sol", "", policy);
+    const f = await fixture({}, "openai/gpt-6.2-sol", "", policy);
     try {
       await f.submit(1);
       await f.tick();
@@ -348,8 +348,8 @@ test.each([undefined, { mode: "wait" } as const])(
       expect(waiting.runs.A).toMatchObject({
         kind: "running",
         thread: "T-1",
-        workerModel: "openai/gpt-6.1-sol",
-        review: { thread: "T-2", model: "moonshotai/kimi-k3" },
+        workerModel: "openai/gpt-6.2-sol",
+        review: { thread: "T-2", model: "openai/gpt-6.2-astra" },
         incident: {
           reason: "provider-limit",
           recovery: "wait",
@@ -376,7 +376,7 @@ test.each([
 ])(
   "run pins its limit policy %j against a definition reload",
   async (policy) => {
-    const f = await fixture({}, "openai/gpt-6.1-sol", "", policy);
+    const f = await fixture({}, "openai/gpt-6.2-sol", "", policy);
     try {
       await f.submit(1);
       await f.tick();
@@ -399,7 +399,7 @@ test.each([
       expect((await f.review()).model).toBe(
         policy?.mode === "fallback"
           ? "anthropic/claude-sonnet-4-6"
-          : "moonshotai/kimi-k3",
+          : "openai/gpt-6.2-astra",
       );
       expect(f.settings).toHaveLength(policy?.mode === "fallback" ? 3 : 2);
     } finally {
@@ -411,7 +411,7 @@ test.each([
 test.each(["create", "send"])(
   "uncertain fallback %s never creates another reviewer",
   async (failure) => {
-    const f = await fixture({}, "openai/gpt-6.1-sol", "", {
+    const f = await fixture({}, "openai/gpt-6.2-sol", "", {
       mode: "fallback",
       reviewerModel: "anthropic/claude-sonnet-4-6",
     });
@@ -590,8 +590,9 @@ test("review requirements keep the dispatched brief across queue edits and reloa
 });
 
 test.each([
-  ["openai/gpt-6.1-sol", "moonshotai/kimi-k3"],
-  ["anthropic/claude-opus-5-5", "openai/gpt-6-astra"],
+  ["openai/gpt-6.2-sol", "openai/gpt-6.2-astra"],
+  ["anthropic/claude-opus-5-5", "openai/gpt-6.2-astra"],
+  ["moonshotai/kimi-k3", "openai/gpt-6.2-astra"],
 ] as const)(
   "cold post-graft review returns issues to %s owner",
   async (worker, reviewer) => {
@@ -605,7 +606,7 @@ test.each([
       expect(f.settings[1]).toEqual([
         "T-owner",
         reviewer,
-        "high",
+        "medium",
         "reviewer",
         "local",
       ]);

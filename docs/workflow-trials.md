@@ -196,7 +196,7 @@ Sources, bootstrap receipts, and full logs are under `.amp/in/scratchpad/factory
 
 ## Trial 6: recover the original disconnected candidate
 
-2026-11-13. [Feature 03](feats/done/feature-03-impl.md) used one Sol 6.1/medium worker.
+2026-11-13. [Feature 03](feats/done/feature-03-impl.md) used one Sol worker at medium effort.
 The initial patch passed local tests but failed live acceptance because synchronous verification
 blocked the plugin heartbeat. A diagnostic wrapper confirmed matching server idle state before
 the block. The same worker then lost executor connectivity before correcting that second failure.
@@ -222,8 +222,8 @@ reattachment or context-free server status observation. Full logs and patches re
 
 ## Trial 7: atomic SQLite persistence and real legacy migration
 
-2026-11-13. One Sol 6.1/medium worker implemented Feature 04. The factory accepted its first
-candidate in the disposable repo. Parent review reran 74 tests, strict SDK TypeScript, and
+2026-11-13. One Sol worker at medium effort implemented Feature 04. The factory accepted its
+first candidate in the disposable repo. Parent review reran 74 tests, strict SDK TypeScript, and
 whitespace checks. A forced database failure test rolled back both ownership and its claim event.
 
 The parent refreshed the actual adapters for the previously accepted Feature 02 and Feature 03
@@ -267,7 +267,7 @@ Fixture, read-only assertion script, and full logs remain under
 ## Trial 9 passed: real backlog cold review and same-worker repair
 
 2026-11-13. Feature-07 implemented the SQLite-backed observation API through the installed
-native factory. One Sol 6.1 medium worker owned implementation and repair. Each post-graft
+native factory. One Sol worker at medium effort owned implementation and repair. Each post-graft
 candidate received a fresh Fable 5.2 high review, without the worker transcript or prior verdict.
 
 - The initial clean baseline failed Fallow because the worker had no local dependencies. Manual
@@ -323,7 +323,7 @@ coordinator orb at acceptance, not when a successor asks for it. Handoff files r
 ## Trial 11 passed: watchdog ticket 1 through rejection, repair and a pull request
 
 2026-11-14. `foreman-watchdog-ticket1` ran through the native factory on a dogfood clone of current
-main. One Sol 6.1 medium worker owned implementation and repair; each candidate got a fresh
+main. One Sol worker at medium effort owned implementation and repair. Each candidate got a fresh
 Fable 5.2 high review.
 
 - Candidate 1 passed the full gate. Review found that a reviewer which errored, recovered and
@@ -354,8 +354,8 @@ Accepted work still crosses from the clone to the parent by hand. Nothing was re
 ## Trial 12 passed: watchdog ticket 2 accepted on its first attempt
 
 2026-11-14. `foreman-watchdog-ticket2` ran through the native factory on the dogfood clone, with
-watchdog ticket 1 live in the installed plugin. One Sol 6.1 medium worker implemented it; a fresh
-Fable 5.2 reviewer checked the pinned revision.
+watchdog ticket 1 live in the installed plugin. One Sol worker at medium effort implemented it.
+A fresh Fable 5.2 reviewer checked the pinned revision.
 
 - Candidate 1 at `4f4f3c4` passed the full gate and the cold review with no findings. Its commit
   already carried both Amp trailers.
@@ -380,8 +380,8 @@ Edge cases this run exposed:
 ## Trial 13 passed: watchdog ticket 3 through three rejections and executor loss
 
 2026-11-14. `foreman-watchdog-ticket3` ran through the native factory on the dogfood clone. One
-Sol 6.1 medium worker kept its thread and worktree for all four attempts; each candidate went to
-a fresh Fable 5.2 reviewer.
+Sol worker at medium effort kept its thread and worktree for all four attempts. Each candidate
+went to a fresh Fable 5.2 reviewer.
 
 - Attempt 1 at `a43ae47` passed the gate and was rejected with six warnings and one nit, all on
   paths where the watchdog schedule cannot install.
@@ -422,8 +422,8 @@ Edge cases this run exposed:
 ## Trial 14 passed: backup identity fix accepted first time, with two live proofs
 
 2026-11-14. `F001-backup-commit-identity` ran through the native factory on the dogfood clone with
-watchdog ticket 3 live in the installed plugin. One Sol 6.1 medium worker implemented it; a fresh
-Fable 5.2 reviewer passed candidate `36d79f3` at attempt one with no findings. The Foreman
+watchdog ticket 3 live in the installed plugin. One Sol worker at medium effort implemented it.
+A fresh Fable 5.2 reviewer passed candidate `36d79f3` at attempt one with no findings. The Foreman
 cherry-picked it onto parent main, reran the full gate (183 tests) and merged PR #20 only after the
 `quality` check passed on its exact head.
 
@@ -457,7 +457,7 @@ Edge cases this run exposed:
 2026-11-14. `F002-worker-runner-executor` and `planned-intake-ticket1` ran through the native
 factory on the dogfood clone. F002 was accepted at attempt one (candidate `ac9b6cd`, PR #23).
 planned-intake-ticket1 was accepted at attempt two (candidate `ca6d022`, PR #25): a fresh Fable 5.2
-reviewer rejected attempt one with two warnings and a nit, the same Sol 6.1 worker repaired them,
+reviewer rejected attempt one with two warnings and a nit. The same Sol worker repaired them,
 and a second fresh reviewer passed with no findings.
 
 Observed live, not through fixtures:
@@ -500,7 +500,7 @@ Edge cases this run exposed:
 ## Trial 16 passed: provider limit resume through two rejections and an escalation
 
 2026-11-15. `F003-provider-limit-resume` ran through the native factory on the dogfood clone and
-was accepted at attempt three (candidate `9abbca0`, PR #31). One Sol 6.1 worker on the runner
+was accepted at attempt three (candidate `9abbca0`, PR #31). One Sol worker on the runner
 `factory-dogfood` kept the ticket throughout; each attempt had a fresh cold reviewer.
 
 - Attempt one (`192f73f`) was rejected with one critical finding and four warnings. A limit first

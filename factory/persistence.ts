@@ -30,9 +30,9 @@ const modelFamilies = new Map<string, string>([
   ["zhipuai", "zhipuai"],
 ]);
 const defaultReviewerModels = new Map<string, `${string}/${string}`>([
-  ["openai", "moonshotai/kimi-k3"],
-  ["anthropic", "openai/gpt-6-astra"],
-  ["moonshotai", "openai/gpt-6-astra"],
+  ["openai", "openai/gpt-6.2-astra"],
+  ["anthropic", "openai/gpt-6.2-astra"],
+  ["moonshotai", "openai/gpt-6.2-astra"],
 ]);
 
 export type ThreadID = `T-${string}`;
@@ -1350,7 +1350,7 @@ function modelFamily(model: string) {
   return modelFamilies.get(model.split("/")[0]);
 }
 
-/** Resolve pstack's opposite-family adversary. @throws On unsupported worker families. */
+/** Resolve the native cold reviewer. @throws On unsupported worker families. */
 export function reviewerModel(worker: string): `${string}/${string}` {
   const model = defaultReviewerModels.get(modelFamily(worker) ?? "");
   if (!model)
@@ -1360,7 +1360,7 @@ export function reviewerModel(worker: string): `${string}/${string}` {
   return model;
 }
 
-/** Validate authored and pinned limit policy, preserving known opposite-family review. */
+/** Validate authored and pinned limit policy, preserving independent fallback review. */
 export function validProviderLimitPolicy(
   value: unknown,
   workerModel: string,

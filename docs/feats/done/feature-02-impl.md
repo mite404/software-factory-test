@@ -4,18 +4,19 @@
 
 - State: locally verified; live factory acceptance recovered by Feature 03. Priority: P0.
 - Story: [feature-02-story.md](feature-02-story.md), feature 1.
-- Worker: one `openai/gpt-6.1-sol` child at medium effort. No nested delegation.
+- Worker: one Sol worker at medium effort. No nested delegation.
 - Planned locally on 2026-11-13. No external ticket, push, or deployment is authorized.
 
 ## Why this matters
 
-The operator requested Sol 6.1/medium for implementation. Model selection already reaches Amp,
-but effort is absent from the install configuration, `NativeHost.create`, and plugin adapter.
+The operator requested a Sol worker at medium effort for implementation. The model selection
+reached Amp, but the install configuration, `NativeHost.create`, and plugin adapter lacked effort.
 
 ## Current state
 
-`factory/setup-factory.ts` defaults workerModel to Sol 6.1. `configuration()` in `factory/native.ts`
-validates it, and `host.create(owner, workerModel)` dispatches it. `factory/plugin.ts` calls
+At the original base, `factory/setup-factory.ts` defaulted `workerModel` to Sol.
+`configuration()` in `factory/native.ts` validated the model, and `host.create(owner, workerModel)`
+dispatched it. `factory/plugin.ts` called
 `amp.createAgent({ model, ... })` without `reasoningEffort`.
 
 The installed plugin API declaration exposes `AgentReasoningEffort` and
@@ -77,8 +78,8 @@ effort and records Amp's resolved agent definition. That probe is not part of th
 
 ## Drift log
 
-2026-11-13. One Sol 6.1 child implemented the six allowed files. The bootstrap recorded the real
-Amp definition as `model: "openai/gpt-6.1-sol"`, `reasoningEffort: "medium"`. There was no second
+2026-11-13. One Sol worker implemented the six allowed files. The bootstrap recorded explicit
+model selection and `reasoningEffort: "medium"` in the real Amp definition. There was no second
 implementation child or review panel.
 
 The worker's focused checks failed before implementation, then passed after the change. Parent

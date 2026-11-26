@@ -50,7 +50,7 @@ only part of one. Evidence and trial limitations remain in [workflow-trials.md](
 - F13: Evidence-based effectiveness, scorecards, and spending reports remain planned.
 
 Automated discovery, scheduled full gates, and the complete backup, restore, and retirement loop
-remain outstanding. Implementation workers currently use Sol 6.1 at medium effort, one at a time.
+remain outstanding. Implementation workers currently use Sol 6.2 at medium effort, one at a time.
 Luna remains available for inexpensive workflow fixtures. The reusable Foreman prompt is documented
 in [factory/config/agents/foreman/agent.md](../factory/config/agents/foreman/agent.md), not
 installed automatically as an agent mode.
@@ -603,7 +603,7 @@ reopen it.
 ## Open decisions
 
 - Production model and effort selections, and the evidence needed to escalate a worker. Current
-  implementation workers use Sol 6.1 at medium effort; this does not settle production policy.
+  implementation workers use Sol 6.2 at medium effort; this does not settle production policy.
 - Recovery cadence and discovery cooldown. Fifteen minutes and one hour respectively are proposals,
   not configured schedules.
 - Final bug-rating thresholds beyond the current fixture rubric.
