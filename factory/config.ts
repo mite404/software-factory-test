@@ -103,6 +103,25 @@ export type Automation = {
   prompt: string;
 };
 
+/** Opt-in fast landing command and UTC cron for the ordinary full gate. */
+export type ScheduledGatePolicy = { landing: string; schedule: string };
+
+/** Check the same policy at the authored definition and persisted pin boundaries. */
+export function validScheduledGatePolicy(
+  value: unknown,
+): value is ScheduledGatePolicy {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const { landing, schedule } = value as Data;
+  return (
+    Object.keys(value).length === 2 &&
+    typeof landing === "string" &&
+    /\S/.test(landing) &&
+    !landing.includes("\0") &&
+    typeof schedule === "string" &&
+    validCron(schedule)
+  );
+}
+
 const schemas: Record<string, { properties: object; required?: string[] }> =
   configSchema.$defs;
 const runnerTemplate = "runners/<name>.yaml";

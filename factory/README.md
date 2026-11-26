@@ -1274,6 +1274,41 @@ instead of Bun's default five seconds. Bun 1.4.4 does not read a `[test].timeout
 A repair reruns the full gate and gets a fresh cold reviewer. Changed code or integration base
 blocks landing until revalidation; prior reports and worktrees remain available as evidence.
 
+## Run full gates after landing (opt-in)
+
+By default the full gate must pass before acceptance. To opt in, add both settings below to the
+existing `factory/config/factory.yaml` (or the equivalent fields in a legacy flat definition), then
+reload. Keep the other permission settings, including `execute: true` for a factory allowed to run.
+Set `landing` to a trusted local command that is safe to run against a candidate checkout.
+
+```yaml
+scheduledGate:
+  landing: bash factory/checks.sh compile
+  schedule: "*/15 * * * *"
+permissions:
+  scheduleGates: true
+```
+
+The landing check does not replace scope checks or cold review. A fast-forward records the landed
+revision, not acceptance. The existing watchdog wakes the reconciler; it does not start a second
+schedule or a model for the check. An enabled factory accepts due wakes from its owner or registered
+observer. The first UTC cron minute strictly after landing makes the gate due. A late wake runs it
+once, not once per missed slot. The full command is the run's pinned `verify` or `checks/` list. It
+runs in a detached worktree at the recorded revision and uses the normal check timeouts.
+
+`status-summary` and the dashboard feed separate the landed revision from the verified revision.
+Outgoing dependencies and further local landings wait while the full gate is unresolved. A changed
+integration head makes the result stale. Inspect the target before taking action. Returning to the
+exact recorded head and reconciling can run a fresh check; no old result verifies the new head.
+On restart a live gate holds further work. Once its process group stops, the reconciler records an
+interruption and an authorized wake can retry. The private event history records the exact revision,
+base, definition digest, outcome and available log reference for each attempt.
+
+A rejection returns to the original worker on the landed revision and follows the existing repair
+attempt cap. The repaired candidate runs the full gate before acceptance. Pause or revoke
+`permissions.scheduleGates` to prevent new scheduled checks. Revocation does not promote pending
+landings or stop a command already running. A policy reload does not rewrite an existing pin.
+
 ## Record a merged pull request
 
 After merging an accepted ticket, the owning Foreman calls the factory control tool with

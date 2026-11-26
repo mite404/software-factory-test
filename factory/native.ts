@@ -33,11 +33,13 @@ import {
   refuseUnfinishedConfig,
   writeConfigFiles,
   parseNativeHooks,
+  validScheduledGatePolicy,
   configDirectory,
   type Check,
   type NativeHook,
   type VerificationCapability,
 } from "./config";
+import { lastFire } from "./cron";
 import definitionSchema from "./definition.schema.json";
 import type { Executor } from "./executor";
 import type { DeliveryIntent } from "./delivery";
@@ -60,6 +62,8 @@ import {
 } from "./review";
 import {
   factoryStatus,
+  fullyVerified,
+  projectFullGate,
   evidenceContent,
   factoryDefinition,
   openPersistence,
@@ -368,6 +372,11 @@ function actionPermissions(raw: Record<string, unknown>) {
   knownKeys(permissions, definitionSchema.properties.permissions.properties);
   const backup = backupTarget(raw.backup);
   if (
+    permissions.scheduleGates !== undefined &&
+    typeof permissions.scheduleGates !== "boolean"
+  )
+    throw new Error("Invalid scheduled gate permission");
+  if (
     permissions.backup !== undefined &&
     typeof permissions.backup !== "boolean"
   )
@@ -382,6 +391,7 @@ function actionPermissions(raw: Record<string, unknown>) {
     );
   return {
     execute: permissions.execute,
+    scheduleGates: permissions.scheduleGates === true,
     backup,
     backupAllowed: permissions.backup === true,
   };
@@ -539,12 +549,20 @@ async function validateConfiguration(
     scope,
     verify,
     checks,
+    ...optionalField("scheduledGate", parseScheduledGate(raw.scheduledGate)),
     setup,
     ...optionalField("hooks", hooks),
     watchdog,
     observer,
     instructions,
   };
+}
+
+function parseScheduledGate(value: unknown) {
+  if (value === undefined || validScheduledGatePolicy(value)) return value;
+  throw new Error(
+    "Invalid scheduledGate: expected a landing command and UTC cron schedule",
+  );
 }
 
 // The flat files that can hold a definition, in the order the conflict message names them.
@@ -653,6 +671,7 @@ export async function effectiveConfiguration(root: string) {
         ...loaded,
         setup: loaded.setup,
         checks: loaded.checks,
+        scheduledGate: loaded.scheduledGate,
         hooks: loaded.hooks,
         watchdog: loaded.watchdog ?? defaultWatchdog,
         workerEffort: loaded.workerEffort,
@@ -672,6 +691,7 @@ function definitionPin(
     scope,
     verify,
     checks,
+    scheduledGate,
     review,
     workerModel,
     workerEffort,
@@ -690,6 +710,10 @@ function definitionPin(
     scope,
     verify,
     ...(checks === undefined ? {} : { checks }),
+    ...optionalField(
+      "scheduledGate",
+      config.scheduleGates ? scheduledGate : undefined,
+    ),
     review,
     workerModel,
     ...(workerEffort === undefined ? {} : { workerEffort }),
@@ -1545,6 +1569,26 @@ type CheckRun = CheckStatus & {
 // A gate of checks keeps every check's own result; its status and log are summaries of them.
 type GateResult = CommandResult & { checks?: CheckRun[] };
 
+function fullGateResult(result: GateResult, intact: boolean) {
+  return result.status === 0 && !result.error && intact ? "passed" : "failed";
+}
+
+function fullGateEvidenceOutcome(
+  status: "passed" | "failed" | "stale",
+  result: GateResult,
+) {
+  if (status === "passed") return "gate-passed";
+  return status === "stale" || result.status === 0
+    ? "post-gate-changed"
+    : "gate-failed";
+}
+
+function canRecordMerge(
+  run: Run | undefined,
+): run is Extract<Run, { kind: "done" }> {
+  return admitsRun(run, "record-merge") && fullyVerified(run);
+}
+
 function shellArgument(value: string) {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
@@ -1657,16 +1701,13 @@ function checkStatus(result: CommandResult): CheckStatus["status"] {
 }
 
 // Each check's public status goes on the run; a flat command is the one required check `verify`.
-function recordChecks(
-  run: Extract<Run, { kind: "running" }>,
-  result: GateResult,
-) {
+function recordChecks(attempt: number, result: GateResult, name = "verify") {
   const results = result.checks?.map(({ name, required, status }) => ({
     name,
     required,
     status,
-  })) ?? [{ name: "verify", required: true, status: checkStatus(result) }];
-  run.checks = { attempt: run.attempt, results };
+  })) ?? [{ name, required: true, status: checkStatus(result) }];
+  return { attempt, results };
 }
 
 // F008's tail budget split evenly across the failed checks, each keeping its own streams.
@@ -1860,6 +1901,7 @@ function landingProven(
   proof: (Omit<Evidence, "content"> & { sha256: string; intact: boolean })[],
   report: CandidateSubmission,
   reviewed: boolean,
+  fast: boolean,
 ) {
   const digest = sha256(reportContent(report));
   const proven = (kinds: Evidence["kind"][], outcome: string) =>
@@ -1876,7 +1918,10 @@ function landingProven(
           (item.outcome === "candidate" &&
             item.sha256 === report.legacyDigest)),
     ) &&
-    proven(["gate", "gate-rerun"], "gate-passed") &&
+    proven(
+      fast ? ["landing-gate", "landing-gate-rerun"] : ["gate", "gate-rerun"],
+      "gate-passed",
+    ) &&
     (!reviewed || proven(["review"], "pass"))
   );
 }
@@ -1912,6 +1957,49 @@ async function writeGateExcerpt(
   );
 }
 
+function landingPolicy(run: Run, pin: DefinitionPin) {
+  return run.definition && !run.fullGate ? pin.scheduledGate : undefined;
+}
+
+function preserveFullFailure(run: Run, saved: Run | undefined) {
+  if (run.kind !== "done" && saved?.fullGate?.status === "failed")
+    run.fullGate ??= saved.fullGate;
+}
+
+function canLand(
+  root: string,
+  run: Extract<Run, { kind: "running" }>,
+  revision: string,
+  scope: string[],
+) {
+  return (
+    !git(root, "status", "--porcelain") &&
+    cleanCandidate(run, revision) &&
+    allowedChanges(run.worktree, run.base, revision, scope)
+  );
+}
+
+function shouldRerunGate(
+  result: GateResult,
+  run: Extract<Run, { kind: "running" }>,
+  revision: string,
+) {
+  return (
+    result.status !== null &&
+    result.status !== 0 &&
+    cleanCandidate(run, revision)
+  );
+}
+
+function candidateGateOutcome(
+  result: GateResult,
+  path: string,
+  revision: string,
+): GateOutcome {
+  if (result.status !== 0) return "gate-failed";
+  return unchanged(path, revision) ? "gate-passed" : "post-gate-changed";
+}
+
 async function candidateEvidence(
   directory: string,
   task: Task,
@@ -1925,7 +2013,11 @@ async function candidateEvidence(
     returned: (outcome: GateOutcome, records: Evidence[]) => void;
   },
 ) {
-  const pinned = runDefinition(run, config, directory);
+  const definition = runDefinition(run, config, directory);
+  const landing = landingPolicy(run, definition)?.landing;
+  const pinned = landing
+    ? { ...definition, verify: landing, checks: undefined }
+    : definition;
   const { revision, failure } = candidate(run, report, pinned.scope);
   const log = join(directory, `${task.id}-${run.attempt}.log`);
   if (!revision) {
@@ -1944,42 +2036,36 @@ async function candidateEvidence(
   }
   const record = evidenceFor(run, revision);
   const reported = reportEvidence(run, revision, report);
-  let gateKind: Evidence["kind"] = "gate";
+  let gateKind: Evidence["kind"] = landing ? "landing-gate" : "gate";
   let result = await verifyGate(run.worktree, pinned, log, gate.started);
   let rerunLog: string | null = null;
-  if (
-    result.status !== null &&
-    result.status !== 0 &&
-    cleanCandidate(run, revision)
-  ) {
+  if (shouldRerunGate(result, run, revision)) {
     await writeGateExcerpt(log, "gate-failed", result);
     gate.recorded([
       reported,
       record(
-        "gate",
+        gateKind,
         "gate-failed",
         gateContent(result, revision),
         pinned.verify,
       ),
     ]);
-    gateKind = "gate-rerun";
+    gateKind = landing ? "landing-gate-rerun" : "gate-rerun";
     rerunLog = join(directory, `${task.id}-${run.attempt}.rerun.log`);
     result = await verifyGate(run.worktree, pinned, rerunLog, gate.started);
   }
-  const verified = result.status === 0 && unchanged(run.worktree, revision);
-  const outcome: GateOutcome =
-    result.status !== 0
-      ? "gate-failed"
-      : verified
-        ? "gate-passed"
-        : "post-gate-changed";
-  recordChecks(run, result);
+  const outcome = candidateGateOutcome(result, run.worktree, revision);
+  run.checks = recordChecks(
+    run.attempt,
+    result,
+    landing ? "landing" : "verify",
+  );
   gate.returned(outcome, [
     reported,
     record(gateKind, outcome, gateContent(result, revision), pinned.verify),
   ]);
   return {
-    revision: verified ? revision : null,
+    revision: outcome === "gate-passed" ? revision : null,
     log,
     rerunLog,
     feedback: gateFeedback(result, log, rerunLog),
@@ -2144,6 +2230,7 @@ function runSummary(ticket: string, run: Run) {
     progressAt: since,
     incident: incident ? { id: incident.id, reason: incident.reason } : null,
     review: "review" in run && run.review ? run.review.delivery : null,
+    ...optionalField("fullGate", projectFullGate(run)),
   };
 }
 
@@ -3012,6 +3099,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           if (stop) incident(ticket, run, ...stop, cause ?? stopCause(run));
         }
         if (run) {
+          preserveFullFailure(run, savedRuns[ticket]);
           run.watchdog = watchdogProgress(
             run,
             savedRuns[ticket]?.watchdog,
@@ -3441,8 +3529,9 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
       // so a reconcile with nothing new still writes nothing.
       function killGate(
         ticket: string,
-        run: Extract<Run, { kind: "running" }>,
-        gate: NonNullable<typeof run.gate>,
+        attempt: string,
+        gate: NonNullable<Extract<Run, { kind: "running" }>["gate"]>,
+        action = "gate-killed",
       ) {
         try {
           process.kill(-gate.pid, "SIGKILL");
@@ -3451,7 +3540,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         }
         if (!gate.killed) {
           gate.killed = true;
-          commit(ticket, "gate-killed", String(run.attempt));
+          commit(ticket, action, attempt);
         }
         return processGroupAlive(gate.pid) ? "alive" : "stopped";
       }
@@ -3459,7 +3548,8 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         for (const [ticket, run] of Object.entries(state.runs)) {
           if (run.kind !== "running" || !run.gate) continue;
           let gate = gateState(run.gate, now());
-          if (gate === "kill") gate = killGate(ticket, run, run.gate);
+          if (gate === "kill")
+            gate = killGate(ticket, String(run.attempt), run.gate);
           if (gate === "stopped") {
             delete run.gate;
             commit(ticket, "gate-interrupted", String(run.attempt));
@@ -3467,6 +3557,26 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         }
       }
       retireInterruptedGates();
+      retireInterruptedFullGates();
+      function retireInterruptedFullGates() {
+        for (const [ticket, run] of Object.entries(state.runs)) {
+          const gate = run.fullGate;
+          if (gate?.status !== "running") continue;
+          const process = gate.process;
+          let activity = process ? gateState(process, now()) : "stopped";
+          if (process && activity === "kill")
+            activity = killGate(ticket, gate.id, process, "full-gate-killed");
+          if (activity !== "stopped") continue;
+          removeFullWorktree(gate.id);
+          appendFileSync(
+            fullLog(gate.id),
+            "\nCoordinator interrupted before recording a result.\n",
+          );
+          delete gate.process;
+          run.fullGate = { ...gate, status: "interrupted" };
+          recordFullGate(ticket, run.fullGate);
+        }
+      }
       if (!state.enabled || !config.execute || !state.owner) return state;
       const wake = () => {
         void tick("reconcile").catch((error) =>
@@ -3848,34 +3958,48 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         log: string,
       ) {
         const target = git(root, "rev-parse", "HEAD");
-        if (
-          git(root, "status", "--porcelain") ||
-          !cleanCandidate(run, revision) ||
-          !allowedChanges(
-            run.worktree,
-            run.base,
-            revision,
-            runDefinition(run, config, directory).scope,
-          )
-        )
+        const pin = runDefinition(run, config, directory);
+        const scheduled = landingPolicy(run, pin);
+        if (landingPermissionRevoked(scheduled)) return;
+        if (!canLand(root, run, revision, pin.scope))
           return blockLanding(task, run);
-        if (target !== run.base && target !== revision)
+        if (![run.base, revision].includes(target))
           return rebaseCandidate(task, run, report, revision);
         if (
           !landingProven(
             persistence!.proof(task.id, run.attempt, revision),
             report,
             !!run.review,
+            !!scheduled,
           )
         )
           return blockLanding(task, run, "evidenceMissing");
         if (target !== revision) git(root, "merge", "--ff-only", revision);
-        await store.ledger.record({
-          pr: queue.indexOf(task) + 1,
-          sha: revision,
-          verdict: "unit-test-verified",
-          evidence: log,
-        });
+        await recordAcceptedLanding(
+          task,
+          run,
+          report,
+          revision,
+          log,
+          !!scheduled,
+        );
+      }
+
+      async function recordAcceptedLanding(
+        task: Task,
+        run: Extract<Run, { kind: "running" }>,
+        report: CandidateSubmission,
+        revision: string,
+        log: string,
+        scheduled: boolean,
+      ) {
+        if (!scheduled)
+          await store.ledger.record({
+            pr: queue.indexOf(task) + 1,
+            sha: revision,
+            verdict: "unit-test-verified",
+            evidence: log,
+          });
         state.runs[task.id] = {
           kind: "done",
           definition: run.definition,
@@ -3884,7 +4008,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           ...laneField(run),
           revision,
           acceptedBase: run.base,
-          acceptedAt: now(),
+          ...(scheduled ? {} : { acceptedAt: now() }),
           attempt: run.attempt,
           workerModel: run.workerModel,
           review: run.review,
@@ -3892,7 +4016,31 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           insight: report.insight,
           ...publicSummary(report.summary),
         };
-        commit(task.id, "accepted", revision);
+        const landed = state.runs[task.id];
+        if (scheduled) {
+          landed.fullGate = {
+            status: "pending",
+            revision,
+            base: run.base,
+            definition: run.definition!,
+            landedAt: now(),
+            id: randomUUID(),
+          };
+          recordFullGate(task.id, landed.fullGate);
+        } else commit(task.id, "accepted", revision);
+      }
+
+      function landingPermissionRevoked(
+        policy: DefinitionPin["scheduledGate"],
+      ) {
+        return policy && !config.scheduleGates;
+      }
+
+      function requiresReview(task: Task, run: Run, attempt: number) {
+        return (
+          runDefinition(run, config, directory).review &&
+          (task.size !== "small" || task.risky || attempt > 1)
+        );
       }
 
       async function checkCandidate(
@@ -3900,6 +4048,12 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         run: Extract<Run, { kind: "running" }>,
         report: CandidateSubmission,
       ) {
+        if (
+          landingPermissionRevoked(
+            landingPolicy(run, runDefinition(run, config, directory)),
+          )
+        )
+          return;
         const { revision, log, feedback, rerunLog, outcome, result } =
           await candidateEvidence(directory, task, run, report, config, {
             started(pid, timeoutMs) {
@@ -3938,10 +4092,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
               JSON.stringify({ log, rerunLog }),
             );
           const evidence = rerunLog ?? log;
-          if (
-            runDefinition(run, config, directory).review &&
-            (task.size !== "small" || task.risky || run.attempt > 1)
-          ) {
+          if (requiresReview(task, run, run.attempt)) {
             await beginReview(task, run, report, revision, evidence);
           } else await accept(task, run, report, revision, evidence);
         } else await reject(task, run, log, "gate", feedback);
@@ -4731,8 +4882,9 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
       function dispatchEligible(task: Task) {
         return (
           task.intake !== "planned" &&
+          !fullGateBarrier() &&
           !state.runs[task.id] &&
-          task.after.every((id) => state.runs[id]?.kind === "done") &&
+          task.after.every((id) => fullyVerified(state.runs[id])) &&
           // A light ticket waits until a loaded definition has the light lane.
           (!task.lane || !!config.lightWorker) &&
           !laneHeld(
@@ -4819,7 +4971,11 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           await retrySetup();
           return true;
         }
-        for (const task of queue) {
+        const barrier = fullGateBarrier();
+        const tasks = barrier
+          ? queue.filter(({ id }) => id === barrier)
+          : queue;
+        for (const task of tasks) {
           if (creation && task.id !== creation.ticket) continue;
           const run = state.runs[task.id];
           if (run && reconcileHeld(runLane(run))) continue;
@@ -4855,8 +5011,207 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         }
         throw new Error("No preparation to retry");
       }
-      if (!(await settleRuns())) await dispatchNext();
+      await settleWork();
       return state;
+
+      async function settleWork() {
+        if (await settleFullGate()) return;
+        if (!(await settleRuns())) await dispatchNext();
+      }
+
+      function fullWorktree(id: string) {
+        return join(directory, "staging", `full-${id}`);
+      }
+
+      function fullGateBarrier() {
+        return Object.keys(state.runs).find((ticket) => {
+          const run = state.runs[ticket];
+          return run?.fullGate && !fullyVerified(run);
+        });
+      }
+
+      function removeFullWorktree(id: string) {
+        const path = fullWorktree(id);
+        if (existsSync(path)) git(root, "worktree", "remove", "--force", path);
+      }
+
+      function recordFullGate(
+        ticket: string,
+        gate: NonNullable<Run["fullGate"]>,
+        evidence: Evidence[] = [],
+      ) {
+        const log = fullLog(gate.id);
+        commit(
+          ticket,
+          gate.status === "pending"
+            ? "landed-pending-full"
+            : `full-gate-${gate.status}`,
+          JSON.stringify({ ...gate, ...(existsSync(log) ? { log } : {}) }),
+          undefined,
+          undefined,
+          evidence,
+        );
+      }
+
+      function fullLog(id: string) {
+        return join(directory, `full-${id}.log`);
+      }
+
+      async function routeFullFailure(
+        ticket: string,
+        run: Extract<Run, { kind: "done" }>,
+      ) {
+        const gate = run.fullGate!;
+        const task = queue.find(({ id }) => id === ticket);
+        if (
+          !task ||
+          (await observe(run.thread)) !== "idle" ||
+          !unchanged(root, gate.revision)
+        )
+          return;
+        const worktree = join(directory, "worktrees", ticket);
+        requireWorktree(root, worktree);
+        if (!unchanged(worktree, gate.revision)) return;
+        const repair = {
+          kind: "running" as const,
+          thread: run.thread,
+          base: gate.revision,
+          worktree,
+          attempt: run.attempt!,
+          delivery: "sent" as const,
+          workerModel: run.workerModel,
+          definition: run.definition,
+          executor: run.executor,
+          ...laneField(run),
+          fullGate: gate,
+        };
+        state.runs[ticket] = repair;
+        await reject(
+          task,
+          repair,
+          fullLog(gate.id),
+          "gate",
+          `Scheduled full gate failed for landed revision ${gate.revision}. Repair that revision. Full log: ${fullLog(gate.id)}`,
+        );
+      }
+
+      async function settleFullGate() {
+        const ticket = fullGateBarrier();
+        if (!ticket) return false;
+        const run = state.runs[ticket];
+        if (run?.kind !== "done" || !run.fullGate) return false;
+        const gate = run.fullGate;
+        // Hold all coordinator landings while a fast landing lacks full proof.
+        if (!authorizedFullWake() || gate.status === "running") return true;
+        if (gate.status === "failed") {
+          await routeFullFailure(ticket, run);
+          return true;
+        }
+        if (git(root, "rev-parse", "HEAD") !== gate.revision) {
+          staleFullGate(ticket, run, gate);
+          return true;
+        }
+        await runDueFullGate(ticket, run, gate);
+        return true;
+      }
+
+      function authorizedFullWake() {
+        return (
+          action === "reconcile" &&
+          !creation &&
+          config.scheduleGates &&
+          clockMayRun(state, owner, config.execute)
+        );
+      }
+
+      function staleFullGate(
+        ticket: string,
+        run: Run,
+        gate: NonNullable<Run["fullGate"]>,
+      ) {
+        if (gate.status === "stale") return;
+        run.fullGate = {
+          ...gate,
+          status: "stale",
+          exit: "exit" in gate ? gate.exit : null,
+        };
+        recordFullGate(ticket, run.fullGate);
+      }
+
+      async function runDueFullGate(
+        ticket: string,
+        run: Extract<Run, { kind: "done" }>,
+        gate: NonNullable<Run["fullGate"]>,
+      ) {
+        const pin = dueFullPin(gate);
+        if (!pin) return;
+        const { revision, base, definition, landedAt } = gate;
+        const attempt = {
+          revision,
+          base,
+          definition,
+          landedAt,
+          status: "running" as const,
+          id: randomUUID(),
+        };
+        run.fullGate = attempt;
+        recordFullGate(ticket, attempt);
+        const worktree = fullWorktree(attempt.id);
+        git(root, "worktree", "add", "--detach", worktree, gate.revision);
+        const log = fullLog(attempt.id);
+        const result = await verifyGate(
+          worktree,
+          pin,
+          log,
+          (pid, timeoutMs) => {
+            const at = now();
+            const start = processStart(pid);
+            run.fullGate = {
+              ...attempt,
+              process: {
+                pid,
+                at,
+                deadline: at + timeoutMs,
+                ...optionalField("start", start),
+              },
+            };
+            recordFullGate(ticket, run.fullGate);
+          },
+        );
+        const intact = unchanged(worktree, gate.revision);
+        removeFullWorktree(attempt.id);
+        const status = unchanged(root, gate.revision)
+          ? fullGateResult(result, intact)
+          : "stale";
+        run.fullGate = { ...attempt, status, exit: result.status };
+        if (status === "passed") {
+          run.acceptedAt = now();
+          run.checks = recordChecks(run.attempt!, result);
+        }
+        const outcome = fullGateEvidenceOutcome(status, result);
+        recordFullGate(ticket, run.fullGate, [
+          evidenceFor({ attempt: run.attempt!, definition }, revision)(
+            "gate",
+            outcome,
+            gateContent(result, revision),
+            pin.verify,
+          ),
+        ]);
+        if (status === "failed") await routeFullFailure(ticket, run);
+      }
+
+      function dueFullPin(gate: NonNullable<Run["fullGate"]>) {
+        const pin = factoryDefinition(directory, gate.definition);
+        if (!pin?.scheduledGate)
+          throw new Error("Missing pinned scheduled gate definition");
+        const slot = lastFire(pin.scheduledGate.schedule, now());
+        if (
+          slot !== undefined &&
+          slot > gate.landedAt &&
+          unchanged(root, gate.revision)
+        )
+          return pin;
+      }
     } finally {
       try {
         await flushNotices();
@@ -5318,8 +5673,10 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           const run = Object.hasOwn(state.runs, ticket)
             ? state.runs[ticket]
             : undefined;
-          if (!admitsRun(run, "record-merge"))
-            throw new Error("Merge recording requires a done ticket");
+          if (!canRecordMerge(run))
+            throw new Error(
+              "Merge recording requires a done ticket with full verification",
+            );
           if (run.merge) {
             if (
               !sameMerge(run.merge, { pr, commit, decision }) ||
@@ -5360,6 +5717,14 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           const run = Object.hasOwn(state.runs, ticket)
             ? state.runs[ticket]
             : undefined;
+          if (
+            Object.values(state.runs).some(
+              (run) => run.fullGate && !fullyVerified(run),
+            )
+          )
+            throw new Error(
+              "Scheduled gate repair requires full verification through the original worker",
+            );
           if (run?.kind === "done") {
             if (persistence.lastEvent(ticket, "landed-outside") !== detail)
               throw new Error("Conflicting landing record");

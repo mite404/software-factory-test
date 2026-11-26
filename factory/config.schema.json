@@ -54,6 +54,9 @@
         "watchdog": {
           "$ref": "definition.schema.json#/properties/watchdog"
         },
+        "scheduledGate": {
+          "$ref": "definition.schema.json#/properties/scheduledGate"
+        },
         "providerLimit": {
           "$ref": "definition.schema.json#/properties/providerLimit"
         }
