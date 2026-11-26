@@ -34,8 +34,11 @@ import {
 import { startDashboard } from "./dashboard";
 import { deliverAlerts } from "./watchdog";
 import { audit } from "./audit";
+import { parseWorkerReport, workerReportExamples } from "./worker-report";
 import {
   factoryDefinition,
+  evidenceContent,
+  factoryEvidence,
   factoryEvents,
   factoryRecords,
   factoryStatus,
@@ -463,14 +466,16 @@ test("brief refusal repairs accepted empty evidence through owner control action
   f.git("-C", worktree, "add", ".");
   f.git("-C", worktree, "commit", "-qm", "dependency candidate");
   const revision = f.git("-C", worktree, "rev-parse", "HEAD");
-  await writeFile(
-    join(engine.directory, "D.report.json"),
-    JSON.stringify({
-      kind: "candidate",
-      attempt: 1,
-      revision,
-    }),
-  );
+  f.git("merge", "--ff-only", revision);
+  const legacy = openPersistence(engine.directory, queue);
+  legacy.state.runs.D = {
+    kind: "done",
+    revision,
+    insight: "",
+    thread: "T-worker-1",
+  };
+  legacy.commit(legacy.state, "D", "accepted", revision);
+  legacy.close();
   const stopped = await engine.tick(
     "reconcile",
     "T-owner",
@@ -1530,7 +1535,12 @@ async function externalLandingFixture(targetChanged = false) {
   workerGit("add", ".");
   workerGit("commit", "-qm", "candidate");
   const revision = workerGit("rev-parse", "HEAD");
-  const report = { attempt: running.attempt, kind: "candidate", revision };
+  const report = {
+    attempt: running.attempt,
+    kind: "candidate",
+    revision,
+    insight: "Verified candidate",
+  };
   const reportPath = join(engine.directory, "A.report.json");
   await writeFile(reportPath, JSON.stringify(report));
   f.host.state = async () => "idle";
@@ -3747,6 +3757,187 @@ test("a crash after nudge reservation retains alert intent without immediate red
   expect(f.counts().creates).toBe(1);
 });
 
+test.each([
+  ["insight", { insight: undefined }],
+  ["insight", { insight: "" }],
+  ["attempt", { attempt: "1" }],
+  ["revision", { revision: "a".repeat(39) }],
+  ["kind", { kind: "failed" }],
+  ["JSON", null],
+  ["reason", { kind: "blocked", reason: " " }],
+  ["summary", { summary: 3 }],
+] as const)(
+  "malformed worker report returns %s to the same worker (%j)",
+  async (field, patch) => {
+    const f = await preparationFixture(() => "");
+    const engine = f.factory();
+    const messages: string[] = [];
+    f.host.send = async (thread, message) => {
+      expect(thread).toBe("T-prepared");
+      messages.push(message);
+    };
+    await engine.tick("start", "T-owner");
+    const base = f.git("rev-parse", "HEAD");
+    const path = join(engine.directory, "A.report.json");
+    await writeFile(
+      path,
+      patch
+        ? JSON.stringify({
+            attempt: 1,
+            kind: "candidate",
+            revision: base,
+            insight: "Verified",
+            ...patch,
+          })
+        : "{",
+    );
+    f.host.state = async () => "idle";
+    const repair = {
+      kind: "running",
+      attempt: 2,
+      rejectedBy: "report",
+      thread: "T-prepared",
+    };
+    expect((await engine.tick("reconcile")).runs.A).toMatchObject(repair);
+    expect(messages[1]).toContain(`Invalid worker report: ${field}`);
+    const events = factoryEvents(engine.directory, 0, 500)!;
+    expect(
+      JSON.parse(events.find((event) => event.action === "rejected")!.detail),
+    ).toMatchObject({
+      reason: "report-invalid",
+      attempt: 1,
+    });
+    expect((await f.factory().tick("reconcile")).runs.A).toMatchObject(repair);
+    await writeFile(
+      path,
+      JSON.stringify({
+        attempt: 1,
+        kind: "candidate",
+        revision: base,
+        insight: "Old attempt",
+      }),
+    );
+    expect((await engine.tick("reconcile")).runs.A).toMatchObject(repair);
+    expect(factoryEvents(engine.directory, 0, 500)).toEqual(events);
+    expect(messages).toHaveLength(2);
+    expect(f.counts().creates).toBe(1);
+    expect(f.git("rev-parse", "HEAD")).toBe(base);
+  },
+);
+
+test("the blocked example in the worker brief is a valid report", () => {
+  expect(parseWorkerReport(workerReportExamples(3).blocked, 3)).toEqual({
+    kind: "blocked",
+    attempt: 3,
+    reason: "<needed decision>",
+  });
+});
+
+test.each([
+  "F041-merge-proof-paths",
+  "F042-restricted-foreman-tools",
+  "F043-installed-policy-identity",
+  "enforce-human-capped-resume",
+])("accepts worker report fixture %s", async (name) => {
+  const source = await readFile(
+    join(import.meta.dir, "fixtures/worker-reports", `${name}.report.json`),
+    "utf8",
+  );
+  const { attempt, revision: original, insight } = JSON.parse(source);
+  expect(parseWorkerReport(source, attempt)).toMatchObject({
+    kind: "candidate",
+    attempt,
+    revision: original,
+    insight,
+  });
+  const f = await preparationFixture(() => "");
+  const engine = f.factory();
+  await engine.tick("start", "T-owner");
+  f.host.state = async () => "idle";
+  const path = join(engine.directory, "A.report.json");
+  if (attempt === 2) {
+    await writeFile(
+      path,
+      JSON.stringify({
+        attempt: 1,
+        kind: "candidate",
+        revision: original,
+        insight: "Prior attempt",
+      }),
+    );
+    expect((await engine.tick("reconcile")).runs.A).toMatchObject({
+      attempt: 2,
+      rejectedBy: "gate",
+    });
+  }
+  await mkdir(join(f.worktree, "src"));
+  await writeFile(join(f.worktree, "src/value"), name);
+  f.git("-C", f.worktree, "add", "src");
+  f.git("-C", f.worktree, "commit", "-qm", "fixture candidate");
+  const revision = f.git("-C", f.worktree, "rev-parse", "HEAD");
+  // The private fixture commits are unavailable here; bind each report to a real test commit.
+  await writeFile(path, source.replace(original, revision));
+  const accepted = await engine.tick("reconcile");
+  expect(accepted.runs.A).toMatchObject({
+    kind: "done",
+    attempt,
+    revision,
+    insight,
+  });
+  expect(insight).not.toBe("");
+  expect(f.git("rev-parse", "HEAD")).toBe(revision);
+});
+
+test("acceptance caps insight and discards unknown report keys from evidence and feed", async () => {
+  const f = await preparationFixture(() => "");
+  const engine = f.factory();
+  await engine.tick("start", "T-owner");
+  await mkdir(join(f.worktree, "src"));
+  await writeFile(join(f.worktree, "src/value"), "verified");
+  f.git("-C", f.worktree, "add", "src");
+  f.git("-C", f.worktree, "commit", "-qm", "fixture candidate");
+  const revision = f.git("-C", f.worktree, "rev-parse", "HEAD");
+  const insight = "x".repeat(1000);
+  const report = {
+    attempt: 1,
+    kind: "candidate",
+    revision,
+    insight,
+    summary: "Verified result",
+  };
+  await writeFile(
+    join(engine.directory, "A.report.json"),
+    JSON.stringify({
+      ...report,
+      insight: `${insight}suffix`,
+      unknown: "PRIVATE-CANARY",
+    }),
+  );
+  f.host.state = async () => "idle";
+  const accepted = await engine.tick("reconcile");
+  expect(accepted.runs.A).toMatchObject({
+    kind: "done",
+    insight,
+    summary: report.summary,
+  });
+  expect(JSON.stringify(accepted)).not.toContain("PRIVATE-CANARY");
+  const proof = factoryEvidence(engine.directory, "A")!.find(
+    (row) => row.kind === "report",
+  )!;
+  expect(
+    JSON.parse(evidenceContent(engine.directory, "A", proof.sha256)),
+  ).toEqual(report);
+  const server = startDashboard({ root: f.root, port: 0 });
+  try {
+    const response = await fetch(`http://localhost:${server.port}/api/status`);
+    const feed = await response.text();
+    expect(feed).toContain(report.summary);
+    expect(feed).not.toContain("PRIVATE-CANARY");
+  } finally {
+    await server.stop(true);
+  }
+});
+
 test("stop notices do not reset an incident clock and repair opens a fresh episode", async () => {
   const f = await preparationFixture(() => "");
   let at = 1000;
@@ -3872,6 +4063,7 @@ test("four rejections park the worker, release only independent work and require
         kind: "candidate",
         attempt,
         revision,
+        insight: "Verified candidate",
       }),
     );
     if (attempt === 4) {
@@ -4031,6 +4223,7 @@ test("four rejections park the worker, release only independent work and require
       kind: "candidate",
       attempt: 1,
       revision: advancedBase,
+      insight: "Verified candidate",
     }),
   );
   await reopened.tick("reconcile");
@@ -4234,7 +4427,12 @@ test("a running gate reads as gating and an interrupted gate reruns exactly once
   ).trim();
   await writeFile(
     join(engine.directory, "A.report.json"),
-    JSON.stringify({ kind: "candidate", attempt: 1, revision }),
+    JSON.stringify({
+      kind: "candidate",
+      attempt: 1,
+      revision,
+      insight: "Verified candidate",
+    }),
   );
   const gating = engine.tick("reconcile");
   await waitForFile(join(marks, "gate-running"));
@@ -4391,7 +4589,12 @@ test("a gate that outlives its killed coordinator stays gating and never overlap
   const directory = join(marks, "factory");
   await writeFile(
     join(directory, "A.report.json"),
-    JSON.stringify({ kind: "candidate", attempt: 1, revision }),
+    JSON.stringify({
+      kind: "candidate",
+      attempt: 1,
+      revision,
+      insight: "Verified candidate",
+    }),
   );
   const runner = join(marks, "coordinator.ts");
   await writeFile(
@@ -4533,6 +4736,7 @@ test("owner-authorized repairs retain spending alerts at six and ten on the same
         kind: "candidate",
         attempt,
         revision: f.git("rev-parse", "HEAD"),
+        insight: "Verified candidate",
       }),
     );
     const result = await f.factory(clock).tick("reconcile");
@@ -5293,7 +5497,12 @@ test.each([
     const revision = f.git("-C", f.worktree, "rev-parse", "HEAD");
     await writeFile(
       join(engine.directory, "A.report.json"),
-      JSON.stringify({ attempt: 1, kind: "candidate", revision }),
+      JSON.stringify({
+        attempt: 1,
+        kind: "candidate",
+        revision,
+        insight: "Verified candidate",
+      }),
     );
     f.host.state = async () => "idle";
     const schedule = globalThis.setTimeout;
@@ -5462,6 +5671,7 @@ test.each([
         attempt: 1,
         kind: "candidate",
         revision: f.git("-C", f.worktree, "rev-parse", "HEAD"),
+        insight: "Verified candidate",
       }),
     );
     f.host.state = async () => "idle";
@@ -5561,7 +5771,12 @@ test.each([
       const revision = f.git("-C", f.worktree, "rev-parse", "HEAD");
       await writeFile(
         join(engine.directory, "A.report.json"),
-        JSON.stringify({ attempt: 2, kind: "candidate", revision }),
+        JSON.stringify({
+          attempt: 2,
+          kind: "candidate",
+          revision,
+          insight: "Verified candidate",
+        }),
       );
       expect((await engine.tick("reconcile")).runs.A).toMatchObject({
         kind: "blocked",
@@ -5603,7 +5818,8 @@ test.each(["candidate revision", "clean tree", "allowed-path"])(
       JSON.stringify({
         attempt: 1,
         kind: "candidate",
-        revision: failure === "candidate revision" ? "wrong" : revision,
+        revision: failure === "candidate revision" ? "f".repeat(40) : revision,
+        insight: "Verified candidate",
       }),
     );
     f.host.state = async () => "idle";
@@ -5687,7 +5903,12 @@ test("definition rename is rejected and private instructions stay deduplicated",
   const revision = f.git("-C", f.worktree, "rev-parse", "HEAD");
   await writeFile(
     join(engine.directory, "A.report.json"),
-    JSON.stringify({ attempt: 1, kind: "candidate", revision }),
+    JSON.stringify({
+      attempt: 1,
+      kind: "candidate",
+      revision,
+      insight: "Verified candidate",
+    }),
   );
   f.host.state = async () => "idle";
   const rejected = await engine.tick("reconcile");
@@ -5820,7 +6041,12 @@ test.each(
       const revision = f.git("-C", f.worktree, "rev-parse", "HEAD");
       await writeFile(
         join(factory.directory, "A.report.json"),
-        JSON.stringify({ kind: "candidate", attempt: 1, revision }),
+        JSON.stringify({
+          kind: "candidate",
+          attempt: 1,
+          revision,
+          insight: "Verified candidate",
+        }),
       );
       f.host.state = async () => "idle";
       expect((await factory.tick("reconcile")).runs.A).toMatchObject({
@@ -5980,7 +6206,12 @@ test.each([
     const revision = f.git("-C", f.worktree, "rev-parse", "HEAD");
     await writeFile(
       join(reopened.directory, "A.report.json"),
-      JSON.stringify({ kind: "candidate", attempt: 1, revision }),
+      JSON.stringify({
+        kind: "candidate",
+        attempt: 1,
+        revision,
+        insight: "Verified candidate",
+      }),
     );
     f.host.state = async () => "idle";
     expect((await reopened.tick("reconcile")).runs.A).toMatchObject({
@@ -6477,7 +6708,7 @@ test.each(["high", undefined])(
       const candidate = async (
         value: string,
         attempt: number,
-        insight = "",
+        insight = "Verified candidate",
       ) => {
         await writeFile(join(worktree, "src/value"), value);
         execFileSync("git", ["-C", worktree, "add", "src/value"]);

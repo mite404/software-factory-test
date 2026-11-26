@@ -16,6 +16,7 @@ import {
   factoryEvidence,
   factoryEvents,
   factoryStatus,
+  sha256,
   type Task,
   type ProviderLimitPolicy,
 } from "./persistence";
@@ -1119,7 +1120,14 @@ test("a failed evidence write leaves integration and the ledger untouched until 
   }
 });
 
-test.each(["intact", "corrupt", "stale", "report-missing"] as const)(
+test.each([
+  "intact",
+  "legacy",
+  "corrupt",
+  "stale",
+  "report-missing",
+  "report-edited",
+] as const)(
   "a passing review lands only with intact report and gate proof bound to its revision (%s)",
   async (proof) => {
     const f = await fixture();
@@ -1140,6 +1148,35 @@ test.each(["intact", "corrupt", "stale", "report-missing"] as const)(
         await writeFile(join(directory, "evidence", gate!.sha256), "tampered");
       if (proof === "report-missing")
         await rm(join(directory, "evidence", report!.sha256));
+      if (proof === "legacy") {
+        const oldReport = JSON.stringify({
+          summary: "Verified value",
+          insight: "CANARY-WORKER-RATIONALE",
+          revision,
+          attempt: 1,
+          kind: "candidate",
+          extra: "A field the old parser retained",
+        });
+        const digest = sha256(oldReport);
+        await writeFile(join(directory, "A.report.json"), oldReport);
+        await writeFile(join(directory, "evidence", digest), oldReport);
+        const db = new Database(join(directory, "state.sqlite"));
+        db.query(
+          "UPDATE evidence SET sha256 = ?, bytes = ? WHERE kind = 'report'",
+        ).run(digest, Buffer.byteLength(oldReport));
+        db.close();
+      }
+      if (proof === "report-edited") {
+        await writeFile(
+          join(directory, "A.report.json"),
+          JSON.stringify({
+            attempt: 1,
+            kind: "candidate",
+            revision,
+            insight: "Changed since verification",
+          }),
+        );
+      }
       if (proof === "stale") {
         const db = new Database(join(directory, "state.sqlite"));
         db.query("UPDATE evidence SET revision = ? WHERE kind = 'gate'").run(
@@ -1149,7 +1186,7 @@ test.each(["intact", "corrupt", "stale", "report-missing"] as const)(
       }
       await f.verdict("pass", { note: "CANARY-REVIEW-NOTE" });
       const run = (await f.tick()).runs.A!;
-      if (proof === "intact") {
+      if (proof === "intact" || proof === "legacy") {
         expect(run).toMatchObject({ kind: "done", revision });
         expect(git(f.root, "rev-parse", "HEAD")).toBe(revision);
         const rows = factoryEvidence(directory, "A")!;
@@ -1179,6 +1216,32 @@ test.each(["intact", "corrupt", "stale", "report-missing"] as const)(
     }
   },
 );
+
+test("a passing review returns a malformed report to the original worker without landing", async () => {
+  const f = await fixture();
+  try {
+    const base = git(f.root, "rev-parse", "HEAD");
+    await f.submit(1);
+    await f.tick();
+    await writeFile(join(f.root, ".git/factory/A.report.json"), "{");
+    await f.verdict("pass");
+    const run = (await f.tick()).runs.A;
+    expect(run).toMatchObject({
+      kind: "running",
+      thread: "T-1",
+      attempt: 2,
+      rejectedBy: "report",
+    });
+    expect(run).not.toHaveProperty("review");
+    expect(f.messages.at(-1)).toMatchObject({
+      thread: "T-1",
+      message: expect.stringContaining("Invalid worker report: JSON"),
+    });
+    expect(git(f.root, "rev-parse", "HEAD")).toBe(base);
+  } finally {
+    await f.close();
+  }
+});
 
 test("reviewer recovery renews notices without repeating unchanged stop transitions", async () => {
   const f = await fixture();

@@ -528,6 +528,7 @@ async function submit(f: Awaited<ReturnType<typeof engine>>, path: string) {
       attempt: 1,
       kind: "candidate",
       revision: git("rev-parse", "HEAD"),
+      insight: "Verified candidate",
     }),
   );
   f.host.state = async () => "idle";
@@ -1572,6 +1573,7 @@ test.each([
         attempt: 1,
         kind: "candidate",
         revision: git("rev-parse", "HEAD"),
+        insight: "Verified candidate",
       }),
     );
     const runner = join(marks, "coordinator.ts");
