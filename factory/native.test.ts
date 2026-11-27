@@ -5229,6 +5229,125 @@ async function proveScheduledMerge(
   });
 }
 
+test.each(["report", "review", "gate"] as const)(
+  "scheduled proof refuses damaged %s until the exact evidence returns",
+  async (kind) => {
+    const { engine, wake, ledger, revision, counter } =
+      await scheduledEvidenceFixture();
+    const repair =
+      kind === "report"
+        ? await damageScheduledEvidence(engine.directory, kind)
+        : undefined;
+    const result = await wake().catch(String);
+    expect(result === "Error: lost ledger response").toBe(kind !== "report");
+    const restore =
+      repair ?? (await damageScheduledEvidence(engine.directory, kind));
+    const attempts = ledger.attempts.length;
+    await wake();
+    await wake();
+    expect(ledger.attempts).toHaveLength(attempts);
+    expectScheduledHold(engine.directory);
+    await restore();
+    if (kind === "report")
+      expect(await wake().catch(String)).toBe("Error: lost ledger response");
+    await wake();
+    await wake();
+    const { runs } = factoryStatus(engine.directory);
+    expect(runStage(runs.A).status).toBe("accepted");
+    expect(runs.B).toMatchObject({ base: revision });
+    expect(ledger.attempts).toHaveLength(2);
+    expect(ledger.writes.map(({ sha }) => sha)).toEqual([revision]);
+    expect(await readFile(counter, "utf8")).toBe("full\n");
+  },
+  30_000,
+);
+
+async function scheduledEvidenceFixture() {
+  const ledger = scheduledLedger(true);
+  const f = await preparationFixture(() => "", undefined, ledger.open);
+  const configPath = join(f.root, ".factory.json");
+  const config = await Bun.file(configPath).json();
+  const counter = join(f.root, ".git/full-runs");
+  config.permissions.scheduleGates = true;
+  config.review = true;
+  config.scheduledGate = { landing: "true", schedule: "*/5 * * * *" };
+  config.verify = `echo full | tee -a '${counter}'`;
+  await writeFile(configPath, JSON.stringify(config));
+  await writeFile(
+    join(f.root, "tickets.json"),
+    JSON.stringify([
+      { id: "A", brief: "Keep the original file", after: [], size: "medium" },
+      { id: "B", brief: "Dependent", after: ["A"] },
+    ]),
+  );
+  f.git("commit", "-qam", "configure reviewed scheduled checks");
+  const engine = f.factory(() => 60_000);
+  const messages = captureScheduledReviews(f.host);
+  await engine.tick("start");
+  f.host.state = async () => "idle";
+  await mkdir(join(f.worktree, "src"));
+  await writeFile(join(f.worktree, "src/value"), "candidate");
+  f.git("-C", f.worktree, "add", "src");
+  f.git("-C", f.worktree, "commit", "-qm", "candidate");
+  const revision = f.git("-C", f.worktree, "rev-parse", "HEAD");
+  await writeFile(
+    join(engine.directory, "A.report.json"),
+    JSON.stringify({
+      kind: "candidate",
+      attempt: 1,
+      revision,
+      insight: "Fixture result",
+    }),
+  );
+  await passScheduledReview(
+    engine,
+    messages,
+    "Coordinator gate evidence: true passed",
+  );
+  await engine.tick("reconcile");
+  expectScheduledHold(engine.directory);
+  return {
+    engine,
+    ledger,
+    counter,
+    revision,
+    wake: () => f.factory(() => 300_000).tick("reconcile"),
+  };
+}
+
+async function damageScheduledEvidence(
+  directory: string,
+  kind: "report" | "review" | "gate",
+) {
+  const evidence = factoryEvidence(directory, "A")!;
+  const row = evidence.find((item) => item.kind === kind)!;
+  if (kind === "gate") {
+    const alternate = evidence.find((item) => item.kind === "landing-gate")!;
+    expect(alternate.sha256).not.toBe(row.sha256);
+    const set = (digest: string, bytes: number) => {
+      const db = new Database(join(directory, "state.sqlite"));
+      try {
+        db.query(
+          "UPDATE evidence SET sha256 = ?, bytes = ? WHERE ticket = 'A' AND kind = 'gate'",
+        ).run(digest, bytes);
+      } finally {
+        db.close();
+      }
+    };
+    set(alternate.sha256, alternate.bytes);
+    expect(
+      factoryEvidence(directory, "A")!.find((item) => item.kind === "gate")
+        ?.intact,
+    ).toBe(true);
+    return () => Promise.resolve(set(row.sha256, row.bytes));
+  }
+  const path = join(directory, "evidence", row.sha256);
+  const original = await readFile(path);
+  if (kind === "report") await rm(path);
+  else await writeFile(path, "damaged proof");
+  return () => writeFile(path, original);
+}
+
 function captureScheduledReviews(host: NativeHost) {
   const messages: string[] = [];
   const create = host.create.bind(host);

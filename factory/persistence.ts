@@ -237,7 +237,7 @@ type FullGate = {
   | { status: "pending" }
   | { status: "running"; process?: GateProcess }
   | { status: "interrupted" }
-  | { status: "verified"; ledgerPr: number }
+  | { status: "verified"; ledgerPr: number; sha256?: string }
   | { status: "passed" | "failed" | "stale"; exit: number | null }
 );
 
@@ -325,6 +325,7 @@ export type Run = (
       review?: Review;
       workerModel?: string;
       requirements?: string;
+      landingProof?: { report: string; gate: string; review?: string };
     }
 ) & {
   definition?: string;
@@ -2314,9 +2315,21 @@ function fullGateMatchesRun(
     positiveInteger(run.attempt) &&
     gate.revision === run.revision &&
     gate.base === run.acceptedBase &&
+    validLandingProof(run.landingProof) &&
     (gate.status === "passed"
       ? timestamp(run.acceptedAt)
       : run.acceptedAt === undefined && run.merge === undefined)
+  );
+}
+
+function validLandingProof(value: unknown) {
+  if (value === undefined) return true;
+  const proof = record(value);
+  return (
+    exactKeys(proof, ["report", "gate"], ["review"]) &&
+    validDigest(proof.report) &&
+    validDigest(proof.gate) &&
+    optionalFingerprint(proof.review)
   );
 }
 
@@ -2334,11 +2347,16 @@ function validFullGateStatus(
     return exactKeys(gate, keys);
   if (status === "verified")
     return (
-      exactKeys(gate, [...keys, "ledgerPr"]) && positiveInteger(gate.ledgerPr)
+      exactKeys(gate, [...keys, "ledgerPr"], ["sha256"]) &&
+      validFullGateReceipt(gate)
     );
   return (
     exactKeys(gate, [...keys, "exit"]) && validFullGateExit(status, gate.exit)
   );
+}
+
+function validFullGateReceipt(gate: Record<string, unknown>) {
+  return positiveInteger(gate.ledgerPr) && optionalFingerprint(gate.sha256);
 }
 
 function validFullGateExit(status: unknown, exit: unknown) {

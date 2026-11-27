@@ -1895,34 +1895,95 @@ function reportEvidence(
   );
 }
 
-// Landing needs persisted, intact records only: the exact report it accepts, a passing gate and,
-// when reviewed, a passing verdict. Callers pass rows already bound to the attempt and revision.
-function landingProven(
-  proof: (Omit<Evidence, "content"> & { sha256: string; intact: boolean })[],
+type ProofRows = (Omit<Evidence, "content"> & {
+  sha256: string;
+  intact: boolean;
+})[];
+type LandedRun = Extract<Run, { kind: "done" }>;
+
+function proofDigest(
+  proof: ProofRows,
+  kinds: Evidence["kind"][],
+  outcome: string,
+  digest?: string,
+) {
+  return proof.findLast(
+    (row) =>
+      row.intact &&
+      kinds.includes(row.kind) &&
+      row.outcome === outcome &&
+      (digest === undefined || digest === row.sha256),
+  )?.sha256;
+}
+
+const landingGateKinds: Evidence["kind"][] = [
+  "landing-gate",
+  "landing-gate-rerun",
+];
+
+function reportProofDigest(proof: ProofRows, report: CandidateSubmission) {
+  return (
+    proofDigest(
+      proof,
+      ["report"],
+      "candidate-typed",
+      sha256(reportContent(report)),
+    ) ??
+    (report.legacyDigest &&
+      proofDigest(proof, ["report"], "candidate", report.legacyDigest))
+  );
+}
+
+function landingProof(
+  proof: ProofRows,
   report: CandidateSubmission,
-  reviewed: boolean,
+  review: Review | undefined,
   fast: boolean,
 ) {
-  const digest = sha256(reportContent(report));
-  const proven = (kinds: Evidence["kind"][], outcome: string) =>
-    proof.some(
-      (item) =>
-        item.intact && kinds.includes(item.kind) && item.outcome === outcome,
-    );
+  const reported = reportProofDigest(proof, report);
+  const gate = proofDigest(
+    proof,
+    fast ? landingGateKinds : ["gate", "gate-rerun"],
+    "gate-passed",
+  );
+  const reviewed =
+    review?.evidence &&
+    proofDigest(proof, ["review"], "pass", sha256(review.evidence));
+  if (reported && gate && (!review || reviewed))
+    return {
+      report: reported,
+      gate,
+      ...optionalField("review", reviewed),
+    };
+}
+
+function fullProofIntact(
+  proof: ProofRows,
+  run: LandedRun,
+  fullDigest: string | undefined,
+) {
+  const landing = run.landingProof;
   return (
-    proof.some(
-      (item) =>
-        item.intact &&
-        item.kind === "report" &&
-        ((item.outcome === "candidate-typed" && item.sha256 === digest) ||
-          (item.outcome === "candidate" &&
-            item.sha256 === report.legacyDigest)),
-    ) &&
-    proven(
-      fast ? ["landing-gate", "landing-gate-rerun"] : ["gate", "gate-rerun"],
-      "gate-passed",
-    ) &&
-    (!reviewed || proven(["review"], "pass"))
+    !!landing &&
+    !!fullDigest &&
+    landing.review === (run.review?.evidence && sha256(run.review.evidence)) &&
+    [
+      [
+        proofDigest(proof, ["report"], "candidate-typed", landing.report) ??
+          proofDigest(proof, ["report"], "candidate", landing.report),
+        landing.report,
+      ],
+      [
+        proofDigest(proof, landingGateKinds, "gate-passed", landing.gate),
+        landing.gate,
+      ],
+      [
+        landing.review &&
+          proofDigest(proof, ["review"], "pass", landing.review),
+        landing.review,
+      ],
+      [proofDigest(proof, ["gate"], "gate-passed", fullDigest), fullDigest],
+    ].every(([found, expected]) => found === expected)
   );
 }
 
@@ -3988,15 +4049,15 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           return blockLanding(task, run);
         if (![run.base, revision].includes(target))
           return rebaseCandidate(task, run, report, revision);
-        if (
-          !landingProven(
-            persistence!.proof(task.id, run.attempt, revision),
-            report,
-            !!run.review,
-            !!scheduled,
-          )
-        )
-          return blockLanding(task, run, "evidenceMissing");
+        const proof = landingProof(
+          persistence!
+            .proof(task.id, run.attempt, revision)
+            .filter((row) => row.definition === (run.definition ?? null)),
+          report,
+          run.review,
+          !!scheduled,
+        );
+        if (!proof) return blockLanding(task, run, "evidenceMissing");
         if (target !== revision) git(root, "merge", "--ff-only", revision);
         await recordAcceptedLanding(
           task,
@@ -4004,7 +4065,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           report,
           revision,
           log,
-          !!scheduled,
+          scheduled ? proof : undefined,
         );
       }
 
@@ -4014,9 +4075,9 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         report: CandidateSubmission,
         revision: string,
         log: string,
-        scheduled: boolean,
+        proof: LandedRun["landingProof"],
       ) {
-        if (!scheduled)
+        if (!proof)
           await store.ledger.record({
             pr: queue.indexOf(task) + 1,
             sha: revision,
@@ -4031,8 +4092,8 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           ...laneField(run),
           revision,
           acceptedBase: run.fullGate?.base ?? run.base,
-          ...(scheduled
-            ? { requirements: run.requirements }
+          ...(proof
+            ? { requirements: run.requirements, landingProof: proof }
             : { acceptedAt: now() }),
           attempt: run.attempt,
           workerModel: run.workerModel,
@@ -4042,7 +4103,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           ...publicSummary(report.summary),
         };
         const landed = state.runs[task.id];
-        if (scheduled) {
+        if (proof) {
           landed.fullGate = {
             status: "pending",
             revision,
@@ -5180,8 +5241,16 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         run: Extract<Run, { kind: "done" }>,
         gate: Extract<NonNullable<Run["fullGate"]>, { status: "verified" }>,
       ) {
-        if (!unchanged(root, gate.revision)) return;
-        const { ledgerPr, ...attempt } = gate;
+        const { ledgerPr, sha256: digest, ...attempt } = gate;
+        const hasProof = () =>
+          fullProofIntact(
+            persistence!
+              .proof(ticket, run.attempt!, gate.revision)
+              .filter((row) => row.definition === gate.definition),
+            run,
+            digest,
+          );
+        if (!unchanged(root, gate.revision) || !hasProof()) return;
         // The store upserts by (pr, sha); a lost response can repeat only this write.
         await store.ledger.record({
           pr: ledgerPr,
@@ -5191,6 +5260,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         });
         if (!unchanged(root, gate.revision))
           return staleFullGate(ticket, run, gate);
+        if (!hasProof()) return;
         run.acceptedAt = now();
         run.fullGate = { ...attempt, status: "passed", exit: 0 };
         recordFullGate(ticket, run.fullGate);
@@ -5274,9 +5344,15 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         const outcome = failedSetup
           ? "gate-not-run"
           : fullGateEvidenceOutcome(status, result);
+        const content = gateContent(result, revision);
         const settled: NonNullable<Run["fullGate"]> =
           status === "passed"
-            ? { ...attempt, status: "verified", ledgerPr }
+            ? {
+                ...attempt,
+                status: "verified",
+                ledgerPr,
+                sha256: sha256(content),
+              }
             : { ...attempt, status, exit: result.status };
         run.fullGate = settled;
         if (settled.status === "verified")
@@ -5285,7 +5361,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           evidenceFor({ attempt: run.attempt!, definition }, revision)(
             "gate",
             outcome,
-            gateContent(result, revision),
+            content,
             failedSetup ?? verifyCommand,
           ),
         ]);
