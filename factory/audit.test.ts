@@ -168,8 +168,12 @@ test("weekly audit collects every in-range finding once, pages events, bounds ga
       evidence: "Second independent failure",
     },
   ]);
-  event(directory, "A", "review-verdict", JSON.stringify(a));
-  event(directory, "A", "rejected", JSON.stringify(a));
+  event(
+    directory,
+    "A",
+    "escalated",
+    JSON.stringify({ ...a, evidence: "Extra verdict field" }),
+  );
   const aPath = await verdictFile(directory, "A", to);
   await writeFile(aPath, JSON.stringify(a));
   event(
@@ -211,8 +215,26 @@ test("weekly audit collects every in-range finding once, pages events, bounds ga
       omitted: true,
     }),
   );
-  event(directory, "Gate", "rejected", "/private/path/Gate-3.log");
-  event(directory, "Gate", "escalated", "/private/path/Gate-3.log");
+  event(
+    directory,
+    "Gate",
+    "rejected",
+    JSON.stringify({
+      attempt: 3,
+      reason: "gate-failed",
+      evidence: "/private/path/Gate-3.log",
+    }),
+  );
+  event(
+    directory,
+    "Gate",
+    "escalated",
+    `factory-rejection-stop:v1:${JSON.stringify({
+      attempt: 3,
+      reason: "verification-rejected",
+      evidence: "/private/path/Gate-3.log",
+    })}`,
+  );
   event(directory, "Stop", "blocked", "PRIVATE BRIEF AND TRANSCRIPT");
   event(directory, "StoppedReview", "review-stopped", "error");
   event(directory, "Missing", "parked", "/private/Missing-4.log");

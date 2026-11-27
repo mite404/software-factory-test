@@ -981,6 +981,9 @@ test("dashboard keeps worker, failed reviewer and rejection history separate wit
     f.reload();
     expect((await f.status()).runs.A).toEqual(blocked);
     expect((await read()).tasks[0].stop).toEqual({
+      id: blocked.incident!.id,
+      owner: "T-owner",
+      notifiedAt: new Date(blocked.incident!.notifiedAt!).toISOString(),
       reason: "verification-rejected",
       role: null,
       thread: null,

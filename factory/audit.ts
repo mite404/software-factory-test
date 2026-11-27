@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { open, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
-import { factoryEvents } from "./persistence";
+import {
+  factoryEvents,
+  rejectionReasons,
+  rejectionStopPrefix,
+} from "./persistence";
 
 const AREAS = [
   "lifecycle and recovery",
@@ -363,11 +367,24 @@ async function gateExcerpt(path: string) {
   }
 }
 
-// A first rejection saves its private evidence beside its public reason code; older rejections
-// saved the evidence alone.
+// Rejection transitions may wrap their private evidence in decision metadata.
 function evidenceOf(event: { action: string; detail: string }) {
-  const wrapped = event.action === "rejected" ? json(event.detail) : {};
-  return typeof wrapped.evidence === "string" ? wrapped.evidence : event.detail;
+  const { action, detail } = event;
+  if (action === "rejected") {
+    const { kind, evidence, reason } = json(detail);
+    return kind === undefined &&
+      typeof evidence === "string" &&
+      Object.values(rejectionReasons).some((code) => code === reason)
+      ? evidence
+      : detail;
+  }
+  if (
+    !["escalated", "parked"].includes(action) ||
+    !detail.startsWith(rejectionStopPrefix)
+  )
+    return detail;
+  const { evidence } = json(detail.slice(rejectionStopPrefix.length));
+  return typeof evidence === "string" ? evidence : detail;
 }
 
 function allEvents(directory: string) {
