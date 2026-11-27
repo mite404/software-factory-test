@@ -4164,6 +4164,25 @@ test("a later unchanged tools sample opens one suspected stop and real edits res
     cause: { role: "worker", thread: "T-prepared" },
   });
   expect(runStage(stopped).stage).toBe("disconnected");
+  const oldEpisode = stopped.watchdog!.episode;
+  expect(oldEpisode).not.toBe(stopped.incident!.id);
+  const prior = openPersistence(engine.directory, [], () => at);
+  prior.event("A", "watchdog-nudge-intended", oldEpisode);
+  prior.close();
+  const dashboard = startDashboard({ root: f.root, port: 0 });
+  try {
+    const { tasks } = await (
+      await fetch(`http://localhost:${dashboard.port}/api/status`)
+    ).json();
+    expect(tasks[0].stall).toMatchObject({
+      id: stopped.incident!.id,
+      reason: "disconnected",
+      lastNudgedAt: null,
+      nudgeCount: 0,
+    });
+  } finally {
+    await dashboard.stop(true);
+  }
   const events = factoryEvents(engine.directory);
   expect((await sync()).runs.A).toEqual(stopped);
   expect(factoryEvents(engine.directory)).toEqual(events);
@@ -4731,6 +4750,7 @@ test("slow dashboard readers retain cold review decisions through repair and res
           waitingForForeman: true,
           attempt: 2,
           activity: null,
+          reviewDecision: { attempt: 2, outcome: "issues", revision },
           stop: {
             id: incident,
             reason: "verification-rejected",
@@ -4742,6 +4762,7 @@ test("slow dashboard readers retain cold review decisions through repair and res
           incident,
           decision: "Resume fixture repair",
         });
+        expect((await read("status")).tasks[0].reviewDecision).toBeNull();
       }
     }
     expect((await read("status")).tasks[0]).toMatchObject({
@@ -5877,6 +5898,23 @@ test("a running gate reads as gating and an interrupted gate reruns exactly once
   await writeFile(join(f.worktree, "src/value"), "dirty");
   await f.factory(() => 5500).tick("reconcile");
   expect(await runs()).toBe(before);
+  const preflight = startDashboard({ root: f.root, port: 0 });
+  try {
+    const { events } = await (
+      await fetch(`http://localhost:${preflight.port}/api/events`)
+    ).json();
+    expect(
+      events
+        .filter((event: { action: string }) => event.action.startsWith("gate-"))
+        .at(-1),
+    ).toMatchObject({
+      action: "gate-returned",
+      attempt: 1,
+      gateOutcome: "gate-not-run",
+    });
+  } finally {
+    await preflight.stop(true);
+  }
   const repairing = factoryStatus(engine.directory).runs.A;
   expect(repairing).toMatchObject({
     kind: "running",
@@ -5946,6 +5984,7 @@ test("a running gate reads as gating and an interrupted gate reruns exactly once
     "gate-started",
     "gate-returned",
     "gate-interrupted",
+    "gate-returned",
     "gate-interrupted",
     "gate-started",
     "gate-returned",

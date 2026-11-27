@@ -94,6 +94,7 @@ import {
   runStage,
   publicSummary,
   rejectionReasons,
+  rejectionStopPrefix,
   type reviewSkipReasons,
   providerResetAt,
   laneHeld,
@@ -2119,6 +2120,7 @@ async function candidateEvidence(
       log,
       "Candidate revision, clean tree, or allowed-path check failed",
     );
+    gate.returned("gate-not-run", []);
     return {
       revision: null,
       log,
@@ -2722,12 +2724,15 @@ function transitionDetail(
 ) {
   const incident = run?.incident;
   if (!incident || !["escalated", "parked"].includes(action)) return detail;
-  return JSON.stringify({
-    evidence: detail,
-    attempt: incident.attempt,
-    reason: incident.reason,
-    incident: incident.id,
-  });
+  return (
+    rejectionStopPrefix +
+    JSON.stringify({
+      evidence: detail,
+      attempt: incident.attempt,
+      reason: incident.reason,
+      incident: incident.id,
+    })
+  );
 }
 
 function stopCause(run: Run | undefined): StopIncident["cause"] {

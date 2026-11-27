@@ -1270,6 +1270,9 @@ export type State = {
 };
 type Event = { at: string; ticket: string; action: string; detail: string };
 
+/** Distinguishes coordinator stop metadata from legacy raw verdict JSON. */
+export const rejectionStopPrefix = "factory-rejection-stop:v1:";
+
 /** Closed reasons for a recorded decision not to run cold review. */
 export const reviewSkipReasons = ["review-disabled", "small-low-risk"] as const;
 

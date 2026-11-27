@@ -17,6 +17,7 @@ import {
   projectFullGate,
   lifecycleStatus,
   rejectionReasons,
+  rejectionStopPrefix,
   reviewSkipReasons,
   runCheckpoint,
   runStage,
@@ -49,7 +50,6 @@ export type DashboardEvent = {
 const DETAIL_ACTIONS = new Set([
   "preparing",
   "setup-spawned",
-  "rejected",
   "repair-resumed",
   "review-creating",
   "review-created",
@@ -57,9 +57,6 @@ const DETAIL_ACTIONS = new Set([
   "review-sent",
   "report-received",
   "review-skipped",
-  "gate-returned",
-  "escalated",
-  "parked",
 ]);
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const THREAD_ACTIONS = new Set([
@@ -87,18 +84,34 @@ function jsonDetail(detail: string): Record<string, unknown> {
   }
 }
 
+function rejectionDetail(action: string, detail: string) {
+  if (action === "rejected") {
+    const { attempt, nextAttempt, reason, kind } = jsonDetail(detail);
+    return kind === undefined ? { attempt, nextAttempt, reason } : {};
+  }
+  if (!detail.startsWith(rejectionStopPrefix)) return {};
+  const { attempt, reason, incident } = jsonDetail(
+    detail.slice(rejectionStopPrefix.length),
+  );
+  return { attempt, reason, incident };
+}
+
 function eventDetail(action: string, detail: string): Record<string, unknown> {
   if (action === "accepted") return { revision: detail };
   if (GATE_ATTEMPT_ACTIONS.has(action))
     return { attempt: matchingString(detail, /^\d+$/) ? Number(detail) : null };
   if (INCIDENT_ACTIONS.has(action)) return { incident: detail };
-  if (
-    action === "gate-returned" &&
-    evidenceOutcomes.gate.some((outcome) => outcome === detail)
-  )
-    return { gateOutcome: detail };
+  if (action === "gate-returned") return gateDetail(detail);
   if (THREAD_ACTIONS.has(action)) return { thread: detail };
+  if (["rejected", "escalated", "parked"].includes(action))
+    return rejectionDetail(action, detail);
   return DETAIL_ACTIONS.has(action) ? jsonDetail(detail) : {};
+}
+
+function gateDetail(detail: string) {
+  return evidenceOutcomes.gate.some((outcome) => outcome === detail)
+    ? { gateOutcome: detail }
+    : jsonDetail(detail);
 }
 
 function matchingString(value: unknown, pattern: RegExp): string | undefined {
@@ -373,6 +386,7 @@ export type DashboardSnapshot = {
     activity: "working" | "idle" | "blocked" | null;
     thread: string | null;
     revision: string | null;
+    reviewSent?: true;
   }[];
 };
 
@@ -461,6 +475,7 @@ function parseTask(value: unknown): DashboardSnapshot["tasks"][number] {
     activity: activity(task.activity),
     thread: reference(task.thread, /^T-[\w-]+$/),
     revision: reference(task.revision, /^[a-f0-9]{40}$/),
+    reviewSent: task.reviewSent === true ? true : undefined,
   };
 }
 
@@ -554,14 +569,40 @@ function matchesSkippedReview(
 
 function matchesDecision(
   event: DashboardEvent,
-  work: Run | undefined,
-  base: unknown,
+  run: Run | undefined,
+  detail: Record<string, unknown>,
+  created: Record<string, unknown> | undefined,
 ) {
   if (!event.reviewOutcome) return false;
+  const work = runCheckpoint(run);
   const review = reviewFor(event.ticket, work);
-  if (event.reviewOutcome !== "skipped")
-    return review?.revision === event.revision && review?.base === base;
-  return !review && matchesSkippedReview(event, work, base);
+  if (event.reviewOutcome === "skipped")
+    return !review && matchesSkippedReview(event, work, detail.base);
+  if (review)
+    return review.revision === event.revision && review.base === detail.base;
+  return (
+    event.reviewOutcome === "issues" &&
+    matchesStoppedReview(run, detail, created)
+  );
+}
+
+function matchesStoppedReview(
+  run: Run | undefined,
+  detail: Record<string, unknown>,
+  review: Record<string, unknown> | undefined,
+) {
+  const stop = run?.incident;
+  if (
+    stop?.reason !== "verification-rejected" ||
+    stop.cause?.role !== "reviewer"
+  )
+    return false;
+  const rejected = matchingRejection(detail, review);
+  return (
+    rejected?.thread === stop.cause.thread &&
+    rejected.attempt === stop.attempt &&
+    detail.base === stop.base
+  );
 }
 
 function recordedReferences(
@@ -569,15 +610,20 @@ function recordedReferences(
 ) {
   const receipts = new Map<string, DashboardEvent>();
   const decisions = new Map<string, DashboardEvent>();
+  const created = new Map<string, Record<string, unknown>>();
   for (const row of records.reviews) {
-    if (row.action === "review-created") continue;
+    const detail = jsonDetail(row.detail);
+    if (row.action === "review-created") {
+      created.set(row.ticket, detail);
+      continue;
+    }
     const run = Object.hasOwn(records.state.runs, row.ticket)
       ? records.state.runs[row.ticket]
       : undefined;
     const event = publicEvent(row);
     if (!event.attempt || event.attempt !== attemptOf(run)) continue;
     if (event.reportKind) receipts.set(row.ticket, event);
-    if (matchesDecision(event, runCheckpoint(run), jsonDetail(row.detail).base))
+    if (matchesDecision(event, run, detail, created.get(row.ticket)))
       decisions.set(row.ticket, event);
   }
   return { receipts, decisions };
@@ -621,12 +667,13 @@ function applyObservation(
   observed: DashboardSnapshot["tasks"][number] | undefined,
   fresh: boolean,
   open: boolean,
+  reviewing: boolean,
 ) {
   if (!observed) return;
+  if (reviewing && !observed.reviewSent) return;
   if (observed.thread !== row.thread || observed.revision !== row.revision)
     return;
-  if (fresh && open && row.activity === null && row.thread !== null)
-    row.activity = observed.activity;
+  if (fresh && open && row.thread !== null) row.activity = observed.activity;
 }
 
 function attemptOf(run: Run | undefined): number | null {
@@ -683,6 +730,7 @@ function iso(at: number | null | undefined) {
 function stallTiming(run: Run | undefined) {
   if (run?.incident?.reason === "disconnected")
     return {
+      id: run.incident.id,
       reason: "disconnected",
       since: run.kind === "running" ? run.stallSample?.since : undefined,
       detectedAt: run.stageAt,
@@ -694,6 +742,7 @@ function stallTiming(run: Run | undefined) {
   );
   return open
     ? {
+        id: timing.episode,
         reason: "no-lifecycle-progress",
         since: timing.progressAt,
         detectedAt: open.intendedAt,
@@ -704,14 +753,14 @@ function stallTiming(run: Run | undefined) {
 function projectStall(run: Run | undefined, nudgeCount: number) {
   const stall = stallTiming(run);
   if (!stall) return null;
-  const timing = run?.watchdog;
+  const timing = run?.watchdog?.episode === stall.id ? run.watchdog : undefined;
   return {
-    id: matchingString(timing?.episode ?? run?.incident?.id, uuid) ?? null,
+    id: matchingString(stall.id, uuid) ?? null,
     reason: stall.reason,
     since: iso(stall.since),
     detectedAt: iso(stall.detectedAt),
     lastNudgedAt: iso(timing?.nudgedAt),
-    nudgeCount,
+    nudgeCount: timing ? nudgeCount : 0,
   };
 }
 
@@ -800,7 +849,7 @@ function projectTask(
       thread,
     };
   }
-  applyObservation(row, observed, fresh, open);
+  applyObservation(row, observed, fresh, open, review !== null);
   return {
     ...row,
     workerThread,

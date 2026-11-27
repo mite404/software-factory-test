@@ -263,6 +263,19 @@ test("events are cursor ordered, bounded, read-only and expose only validated re
       }),
     );
     storage.event("A", "review-sent", "not JSON PRIVATE-EVENT-CANARY");
+    for (const action of ["escalated", "parked"]) {
+      storage.event(
+        "A",
+        action,
+        JSON.stringify({
+          ...secret,
+          attempt: 2,
+          revision,
+          kind: "issues",
+          evidence: "extra",
+        }),
+      );
+    }
     storage.close();
     const path = join(directory, "state.sqlite");
     const before = await readFile(path);
@@ -291,11 +304,13 @@ test("events are cursor ordered, bounded, read-only and expose only validated re
       { id: 5, at, ticket: "B", action: "sent", thread: "T-worker" },
       { id: 6, at, ticket: "A", action: "review-verdict" },
       { id: 7, at, ticket: "A", action: "review-sent" },
+      { id: 8, at, ticket: "A", action: "escalated" },
+      { id: 9, at, ticket: "A", action: "parked" },
     ]);
     const text = await (await fetch(url)).text();
     for (const value of Object.values(secret))
       expect(text).not.toContain(value);
-    expect(await (await fetch(`${url}?after=7`)).json()).toEqual({
+    expect(await (await fetch(`${url}?after=9`)).json()).toEqual({
       durable: "available",
       events: [],
     });
@@ -801,7 +816,7 @@ test("HTTP reads durable acceptance without a heartbeat and never discloses priv
         {
           id: "B",
           title: `Review title; evidence: ${canary}`,
-          activity: "working",
+          activity: "blocked",
           thread: "T-review",
           revision,
         },
@@ -822,6 +837,14 @@ test("HTTP reads durable acceptance without a heartbeat and never discloses priv
       ],
     };
     const path = join(directory, "dashboard.json");
+    await writeFile(path, JSON.stringify(snapshot));
+    expect((await (await fetch(url)).json()).tasks[1]).toMatchObject({
+      activity: null,
+    });
+    Object.assign(snapshot.tasks[1]!, {
+      activity: "working",
+      reviewSent: true,
+    });
     await writeFile(path, JSON.stringify(snapshot));
     const fresh = await (await fetch(url)).json();
     expect(fresh).toMatchObject({ fresh: true, enabled: true });

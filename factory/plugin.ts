@@ -759,14 +759,12 @@ export default function registerFactory(
     row.title = `${row.id} - post-graft review (${review.delivery})`;
     row.thread = review.thread ?? null;
     row.revision = review.revision;
-    if (run.kind === "done") return row;
-    const observed = review.thread
-      ? await observe(review.thread, tools)
-      : "unknown";
+    if (run.kind === "done" || !review.thread || review.delivery !== "sent")
+      return row;
+    const observed = await observe(review.thread, tools);
+    row.reviewSent = true;
     row.activity =
-      review.delivery === "creating" || review.delivery === "sending"
-        ? "blocked"
-        : activities[typeof observed === "object" ? "error" : observed];
+      activities[typeof observed === "object" ? "error" : observed];
     return row;
   }
 
@@ -798,15 +796,11 @@ export default function registerFactory(
               };
               if (!run) return row;
               if (run.kind === "done") row.revision = run.revision;
-              if ("thread" in run && run.thread) {
-                row.thread = run.thread;
-                if (run.kind === "running") {
-                  const activity = await observe(run.thread, tools);
-                  row.activity =
-                    activities[
-                      typeof activity === "object" ? "error" : activity
-                    ];
-                }
+              if ("thread" in run) row.thread = run.thread ?? null;
+              if (run.kind === "running" && !run.review) {
+                const activity = await observe(run.thread, tools);
+                row.activity =
+                  activities[typeof activity === "object" ? "error" : activity];
               }
               return reviewProjection(run, row, tools);
             },

@@ -1768,7 +1768,8 @@ and review creation or delivery supply only these validated fields.
 Legacy accepted revisions and created, sent, sending, or provider-continuation thread references
 are validated too. Unknown actions remain visible without any detail-derived fields.
 `report-received` adds `reportKind` (`candidate` or `blocked`), and `gate-returned` adds
-`gateOutcome`. A recorded `review-verdict` adds `reviewOutcome: "pass"` or `"issues"`.
+`gateOutcome`. A candidate that fails preflight records `gate-not-run` without `gate-started`.
+A recorded `review-verdict` adds `reviewOutcome: "pass"` or `"issues"`.
 `review-skipped` adds `reviewOutcome: "skipped"` and `skipReason` (`review-disabled` or
 `small-low-risk`). A new `rejected` row also supplies `nextAttempt`. Escalation, parking and
 watchdog rows can include `incident`, an opaque reference. Older events can lack these fields.
@@ -1837,7 +1838,9 @@ an observation: `observedAt` is never advanced by an HTTP read.
 `fresh` requires an observation less than 20 seconds old and no more than five seconds in the
 future.
 Missing, invalid, or stale observations cannot advertise working agents. Activity must also match
-the durable thread and revision; observations alone cannot accept work or introduce tickets.
+the durable thread and revision. Reviewer activity also requires a snapshot taken after prompt
+delivery; older snapshots without this fact do not supply reviewer activity. Observations alone
+cannot accept work or introduce tickets.
 Retained tickets without runs are displayed as queued even after removal from the manifest. They
 can inflate the displayed queue count, but the dispatcher will not start removed tickets. Status
 does not claim to be a current dispatch plan.
@@ -1877,7 +1880,8 @@ cause `role` and `thread`, and `notifiedAt`. A missing stop is `null`.
 `stall` is `null` unless storage records a watchdog suspicion or disconnection. Otherwise it
 contains `id`, `reason` (`no-lifecycle-progress` or `disconnected`), `since`, `detectedAt`,
 `lastNudgedAt`, and `nudgeCount` for the current episode. Counts are reservations, not confirmed
-deliveries. Reads do not issue alerts or nudges.
+deliveries. A disconnected stall uses the stop incident ID and excludes nudges from other episodes.
+Reads do not issue alerts or nudges.
 
 For example, the native HTTP fixture that accepts an attempt with review disabled produces these
 task fields (event IDs, timestamps, and revision shown as examples):
@@ -1907,6 +1911,8 @@ task fields (event IDs, timestamps, and revision shown as examples):
 The receipt names the submitted revision, which may differ from the rebased review revision.
 Its revision is `null` for a blocked report. `reportReceipt` and `reviewDecision` are `null`
 without a matching recorded fact. A legacy acceptance without a decision is unknown, not skipped.
+An `issues` verdict remains visible at a review-triggered escalation or park when the recorded
+review identity matches the stop. It does not carry forward to the resumed attempt.
 Each task adds `evidence`: an `acceptance` revision when done, and `gate`/`review` references only
 when a bound review record exists. References include revision, base, and post-graft stage; review
 also includes attempt, pending state, and the available reviewer thread. An absent reference is
