@@ -12,9 +12,11 @@ import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
   validNativeHooks,
+  validScheduledGatePolicy,
   validVerificationCapability,
   type Automation,
   type NativeHook,
+  type ScheduledGatePolicy,
 } from "./config";
 import { validCron } from "./cron";
 import { validReview, type Review } from "./review";
@@ -129,6 +131,7 @@ export type DefinitionPin = {
   verify: string;
   /** The gate's checks in run order, from `checks/`; absent for a flat `verify` command. */
   checks?: Check[];
+  scheduledGate?: ScheduledGatePolicy;
   review: boolean;
   workerModel: `${string}/${string}`;
   workerEffort?: AgentReasoningEffort;
@@ -215,6 +218,29 @@ export type StopIncident = {
   delivery: "queued" | "sent";
   notifiedAt?: number;
 };
+type GateProcess = {
+  at: number;
+  pid: number;
+  start?: string;
+  killed?: true;
+  deadline?: number;
+};
+
+// The attempt identity survives repeat wakes and restart; each transition is also an event.
+type FullGate = {
+  revision: string;
+  base: string;
+  definition: string;
+  landedAt: number;
+  id: string;
+} & (
+  | { status: "pending" }
+  | { status: "running"; process?: GateProcess }
+  | { status: "interrupted" }
+  | { status: "verified"; ledgerPr: number; sha256?: string }
+  | { status: "passed" | "failed" | "stale"; exit: number | null }
+);
+
 export type Run = (
   | (Preparation & { kind: "preparing" })
   | (Preparation & { kind: "preparation-failed"; reason: string })
@@ -245,14 +271,7 @@ export type Run = (
        * reconcile retires it once that group has stopped, and an idle report gates again.
        * `start` is the leader's boot ID and start tick, so only this gate is ever killed;
        * `killed` records that a reconcile killed it past its deadline. */
-      gate?: {
-        at: number;
-        pid: number;
-        start?: string;
-        killed?: true;
-        /** When the running command is past its own timeout; older markers use `at` plus 600000 ms. */
-        deadline?: number;
-      };
+      gate?: GateProcess;
       /** The pipeline step that rejected the previous attempt. */
       rejectedBy?: keyof typeof rejectionReasons;
       /** Identity of the malformed write, so reconciling it again costs no attempt. */
@@ -305,9 +324,12 @@ export type Run = (
       insight: string;
       review?: Review;
       workerModel?: string;
+      requirements?: string;
+      landingProof?: { report: string; gate: string; review?: string };
     }
 ) & {
   definition?: string;
+  fullGate?: FullGate;
   incident?: StopIncident;
   watchdog?: Watchdog;
   executor?: Executor;
@@ -1021,8 +1043,26 @@ function runningStage(run: Extract<Run, { kind: "running" }>): StageStep {
   return [run.review ? "reviewing" : "building", step];
 }
 
-// Retained checkpoints never hold a review, so a stopped worker sits at the builder step. A
-// rejection saved before `rejectedBy` existed names no step rather than a guessed one.
+/** Whether a run can satisfy an acceptance dependency. Landing proof alone never qualifies. */
+export function fullyVerified(run: Run | undefined): boolean {
+  return (
+    run?.kind === "done" && (!run.fullGate || run.fullGate.status === "passed")
+  );
+}
+
+/** Public proof identity, without the command, log path or process information. */
+export function projectFullGate(run: Run | undefined) {
+  const gate = run?.fullGate;
+  return (
+    gate && {
+      status: gate.status === "verified" ? "pending" : gate.status,
+      landedRevision: gate.revision,
+      verifiedRevision: gate.status === "passed" ? gate.revision : null,
+    }
+  );
+}
+
+// A retained repair names its original rejection step when that fact was saved.
 const kindStages: {
   [K in Run["kind"]]: (run: Extract<Run, { kind: K }>) => StageStep;
 } = {
@@ -1036,7 +1076,12 @@ const kindStages: {
       : ["blocked", run.checkpoint ? "builder" : null],
   parked: (run) => ["parked", run.repair.rejectedBy ?? null],
   uncertain: () => ["uncertain", "builder"],
-  done: (run) => [run.merge ? "merged" : "accepted", "merge"],
+  done: (run) =>
+    fullyVerified(run)
+      ? [run.merge ? "merged" : "accepted", "merge"]
+      : run.fullGate?.status === "stale" || run.fullGate?.status === "failed"
+        ? ["blocked", "gate"]
+        : ["gating", "gate"],
 };
 
 function stageOf(run: Run): StageStep {
@@ -1215,8 +1260,10 @@ type Event = { at: string; ticket: string; action: string; detail: string };
 /** Closed outcomes per evidence kind; anything else is refused at write and read. */
 export const evidenceOutcomes = {
   report: ["candidate", "candidate-typed"],
-  gate: ["gate-passed", "gate-failed", "post-gate-changed"],
+  gate: ["gate-passed", "gate-failed", "post-gate-changed", "gate-not-run"],
   "gate-rerun": ["gate-passed", "gate-failed", "post-gate-changed"],
+  "landing-gate": ["gate-passed", "gate-failed", "post-gate-changed"],
+  "landing-gate-rerun": ["gate-passed", "gate-failed", "post-gate-changed"],
   review: ["pass", "issues"],
 } as const;
 type EvidenceKind = keyof typeof evidenceOutcomes;
@@ -2109,6 +2156,8 @@ function optionalAgent(value: unknown) {
 function gateAndWatchdog(pin: Record<string, unknown>) {
   return (
     validPinnedChecks(pin.checks) &&
+    (pin.scheduledGate === undefined ||
+      validScheduledGatePolicy(pin.scheduledGate)) &&
     (pin.watchdog === undefined || validWatchdogPolicy(pin.watchdog))
   );
 }
@@ -2225,12 +2274,97 @@ function validateRun(id: string, value: unknown) {
   if (run.definition !== undefined && !validDigest(run.definition))
     throw new Error(`Invalid definition pin ${id}`);
   validateLane(id, run.lane);
+  if (!validRunKind(run) || !validFullGate(run) || !/^[a-zA-Z0-9_-]+$/.test(id))
+    throw new Error(`Invalid factory run ${id}`);
+}
+
+function validRunKind(run: Record<string, unknown>) {
   const validate =
     typeof run.kind === "string" && Object.hasOwn(runValidators, run.kind)
       ? runValidators[run.kind]
       : undefined;
-  if (!/^[a-zA-Z0-9_-]+$/.test(id) || !validate?.(run))
-    throw new Error(`Invalid factory run ${id}`);
+  return validate?.(run) ?? false;
+}
+
+function validFullGate(run: Record<string, unknown>) {
+  if (run.fullGate === undefined) return true;
+  const gate = record(run.fullGate);
+  const status = gate.status;
+  if (
+    !validDigest(gate.definition) ||
+    gate.definition !== run.definition ||
+    ![gate.base, gate.revision].every(
+      (sha) => typeof sha === "string" && /^[a-f0-9]{40}$/.test(sha),
+    ) ||
+    typeof gate.id !== "string" ||
+    !/^[a-f0-9-]{36}$/.test(gate.id) ||
+    !timestamp(gate.landedAt)
+  )
+    return false;
+  if (!fullGateMatchesRun(run, gate)) return false;
+  const keys = ["definition", "base", "revision", "id", "landedAt", "status"];
+  return validFullGateStatus(gate, status, keys);
+}
+
+function fullGateMatchesRun(
+  run: Record<string, unknown>,
+  gate: Record<string, unknown>,
+) {
+  if (run.kind !== "done") return gate.status === "failed";
+  return (
+    positiveInteger(run.attempt) &&
+    gate.revision === run.revision &&
+    gate.base === run.acceptedBase &&
+    validLandingProof(run.landingProof) &&
+    (gate.status === "passed"
+      ? timestamp(run.acceptedAt)
+      : run.acceptedAt === undefined && run.merge === undefined)
+  );
+}
+
+function validLandingProof(value: unknown) {
+  if (value === undefined) return true;
+  const proof = record(value);
+  return (
+    exactKeys(proof, ["report", "gate"], ["review"]) &&
+    validDigest(proof.report) &&
+    validDigest(proof.gate) &&
+    optionalFingerprint(proof.review)
+  );
+}
+
+function validFullGateStatus(
+  gate: Record<string, unknown>,
+  status: unknown,
+  keys: string[],
+) {
+  if (status === "running")
+    return (
+      exactKeys(gate, keys, ["process"]) &&
+      (gate.process === undefined || validGateMarker(record(gate.process)))
+    );
+  if (status === "pending" || status === "interrupted")
+    return exactKeys(gate, keys);
+  if (status === "verified")
+    return (
+      exactKeys(gate, [...keys, "ledgerPr"], ["sha256"]) &&
+      validFullGateReceipt(gate)
+    );
+  return (
+    exactKeys(gate, [...keys, "exit"]) && validFullGateExit(status, gate.exit)
+  );
+}
+
+function validFullGateReceipt(gate: Record<string, unknown>) {
+  return positiveInteger(gate.ledgerPr) && optionalFingerprint(gate.sha256);
+}
+
+function validFullGateExit(status: unknown, exit: unknown) {
+  if (status === "passed") return exit === 0;
+  return (
+    (status === "failed" || status === "stale") &&
+    (exit === null || Number.isInteger(exit))
+  );
 }
 
 function validateMonitor(value: unknown) {
@@ -3073,8 +3207,8 @@ export function openPersistence(
           if (task.intake === "admitted") return;
           const state = readState(db);
           if (
-            !task.after.every(
-              (dependency) => state.runs[dependency]?.kind === "done",
+            !task.after.every((dependency) =>
+              fullyVerified(state.runs[dependency]),
             )
           )
             throw new Error("Admission requires accepted prerequisites");

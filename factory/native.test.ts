@@ -29,6 +29,7 @@ import {
   readTicketFile,
   statusSummary,
   tasks,
+  type Bookkeeping,
   type NativeHost,
 } from "./native";
 import {
@@ -137,6 +138,7 @@ function waitingSetup(root: string) {
 async function preparationFixture(
   setup: (root: string) => string,
   timeoutMs = 60000,
+  bookkeeping = openStore,
 ) {
   const root = await mkdtemp(join(tmpdir(), "factory-preparation-"));
   preparationRoots.push(root);
@@ -208,7 +210,7 @@ async function preparationFixture(
   };
   const { tools, notifications } = watchdogFixture();
   const factory = (now?: () => number) => {
-    const engine = createFactory(root, host, openStore, now);
+    const engine = createFactory(root, host, bookkeeping, now);
     return {
       ...engine,
       tick(...args: Parameters<typeof engine.tick>) {
@@ -4999,6 +5001,526 @@ test("four rejections park the worker, release only independent work and require
   expect(notices[1]).toContain("Attempt cap reached");
   expect(notices[1]).toContain("authenticated human confirmation");
 }, 30_000);
+
+test.each(["pass", "fail", "stale", "restart", "default"] as const)(
+  "scheduled proof handles %s on the exact landed revision",
+  async (outcome) => {
+    const ledger = scheduledLedger(outcome === "pass");
+    const f = await preparationFixture(() => "", undefined, ledger.open);
+    const marks = join(f.root, ".git");
+    const configPath = join(f.root, ".factory.json");
+    const config = await Bun.file(configPath).json();
+    config.permissions.scheduleGates = outcome !== "default";
+    config.scheduledGate = { landing: "true", schedule: "*/5 * * * *" };
+    config.review = outcome === "fail";
+    config.verify = `test "$(cat node_modules/ready)" = prepared || exit 17; git rev-parse HEAD >> '${marks}/full-runs'; test "$(cat src/value)" = repaired || { for i in {1..500}; do test -f '${marks}/release' && break; sleep 0.01; done; test "$(cat '${marks}/release')" = pass; }`;
+    await writeFile(configPath, JSON.stringify(config));
+    await writeFile(
+      join(f.root, "tickets.json"),
+      JSON.stringify([
+        { id: "A", brief: "Keep the original file", after: [], size: "medium" },
+        { id: "B", brief: "Dependent", after: ["A"] },
+      ]),
+    );
+    if (outcome === "pass") await migrateDefinition(f.root);
+    await mkdir(join(f.root, "src"));
+    await writeFile(join(f.root, "src/value"), "candidate");
+    f.git("add", "-A");
+    f.git("commit", "-qm", "configure scheduled checks");
+    const base = f.git("rev-parse", "HEAD");
+    let at = 60_000;
+    const engine = f.factory(() => at);
+    const reviews = captureScheduledReviews(f.host);
+    await engine.tick("start");
+    f.host.state = async () => "idle";
+    await writeFile(join(f.worktree, "src/original"), "original ticket work");
+    const submit = async (attempt: number, value: string) => {
+      await writeFile(join(f.worktree, "src/value"), value);
+      execFileSync("git", ["-C", f.worktree, "add", "src"]);
+      execFileSync("git", ["-C", f.worktree, "commit", "-qm", value]);
+      const revision = execFileSync(
+        "git",
+        ["-C", f.worktree, "rev-parse", "HEAD"],
+        { encoding: "utf8" },
+      ).trim();
+      await writeFile(
+        join(engine.directory, "A.report.json"),
+        JSON.stringify({
+          kind: "candidate",
+          attempt,
+          revision,
+          insight: "Fixture result",
+        }),
+      );
+      return revision;
+    };
+    const revision = await submit(1, "candidate");
+    if (outcome === "default") {
+      const checking = engine.tick("reconcile");
+      await waitForFile(join(marks, "full-runs"));
+      expect(f.git("rev-parse", "HEAD")).toBe(base);
+      await writeFile(join(marks, "release"), "pass");
+      expect((await checking).runs.A).toMatchObject({ kind: "done", revision });
+      expect(factoryStatus(engine.directory).runs.A!.fullGate).toBeUndefined();
+      return;
+    }
+    const landed = await landScheduledFixture(
+      outcome,
+      engine,
+      reviews,
+      config.verify,
+    );
+    expect(f.git("rev-parse", "HEAD")).toBe(revision);
+    expect(landed.runs.A).toMatchObject({
+      fullGate: { status: "pending", revision, base },
+    });
+    expect(runStage(landed.runs.A).status).not.toBe("accepted");
+    expect(ledger.writes).toEqual([]);
+    expect(
+      factoryEvidence(engine.directory, "A")!.map(({ kind }) => kind),
+    ).toEqual(expect.arrayContaining(["landing-gate", "report"]));
+    expect(
+      factoryEvidence(engine.directory, "A")!.some(
+        ({ kind }) => kind === "gate",
+      ),
+    ).toBe(false);
+    await engine.tick("reconcile");
+    expect(await Bun.file(join(marks, "full-runs")).exists()).toBe(false);
+    const server = startDashboard({ root: f.root, port: 0 });
+    try {
+      const feed = await (
+        await fetch(`http://localhost:${server.port}/api/status`)
+      ).json();
+      expect(feed.tasks[0]).toMatchObject({
+        id: "A",
+        acceptedAt: null,
+        fullGate: {
+          landedRevision: revision,
+          verifiedRevision: null,
+          status: "pending",
+        },
+      });
+      expect(feed.tasks[0].evidence.acceptance).toBeNull();
+    } finally {
+      await server.stop(true);
+    }
+    at = 300_000;
+    const restarted = f.factory(() => at);
+    if (outcome === "restart") return proveScheduledRestart(f, revision);
+    const running = restarted.tick("reconcile");
+    await waitForFile(join(marks, "full-runs"));
+    if (outcome === "stale")
+      f.git(
+        "commit",
+        "--allow-empty",
+        "-qm",
+        "advance integration during verification",
+      );
+    await writeFile(
+      join(marks, "release"),
+      outcome === "fail" ? "fail" : "pass",
+    );
+    await settleScheduledFixture(outcome, running, restarted);
+    const settled = (await restarted.tick("status")).runs.A;
+    expect(settled).toMatchObject({
+      fullGate: {
+        status: { pass: "passed", fail: "failed", stale: "stale" }[outcome],
+        revision,
+        base,
+      },
+    });
+    expect((await readFile(join(marks, "full-runs"), "utf8")).trim()).toBe(
+      revision,
+    );
+    if (outcome === "pass") {
+      expect(runStage(settled).status).toBe("accepted");
+      expect(ledger.attempts).toHaveLength(2);
+      expect(ledger.writes).toEqual([
+        {
+          pr: 1,
+          sha: revision,
+          verdict: "unit-test-verified",
+          evidence: join(engine.directory, `full-${settled!.fullGate!.id}.log`),
+        },
+      ]);
+      expect(factoryEvidence(engine.directory, "A")).toContainEqual(
+        expect.objectContaining({
+          kind: "gate",
+          outcome: "gate-passed",
+          revision,
+        }),
+      );
+    } else expectScheduledHold(engine.directory);
+    if (outcome === "fail") {
+      expect(settled).toMatchObject({
+        kind: "running",
+        thread: "T-prepared",
+        base: revision,
+        attempt: 2,
+      });
+      const repaired = await submit(2, "repaired");
+      await passScheduledReview(
+        restarted,
+        reviews,
+        `Coordinator gate evidence: ${config.verify} passed`,
+      );
+      const accepted = await restarted.tick("reconcile");
+      expect(accepted.runs.A).toMatchObject({
+        kind: "done",
+        revision: repaired,
+        acceptedBase: base,
+      });
+      expect(runStage(accepted.runs.A).status).toBe("accepted");
+      expect(
+        (await readFile(join(marks, "full-runs"), "utf8")).trim().split("\n"),
+      ).toEqual([revision, repaired]);
+      await proveScheduledMerge(f, base, repaired);
+    }
+  },
+  30_000,
+);
+
+async function proveScheduledMerge(
+  f: Awaited<ReturnType<typeof preparationFixture>>,
+  base: string,
+  revision: string,
+) {
+  const checkout = join(f.root, ".git/merge-proof");
+  f.git("worktree", "add", "--detach", checkout, base);
+  f.git("-C", checkout, "cherry-pick", revision);
+  const repairOnly = f.git("-C", checkout, "rev-parse", "HEAD");
+  const branch = f.git("branch", "--show-current");
+  f.git("remote", "add", "origin", f.root);
+  const upstream = (commit: string) =>
+    f.git("update-ref", `refs/remotes/origin/${branch}`, commit);
+  upstream(repairOnly);
+  f.git("branch", `--set-upstream-to=origin/${branch}`, branch);
+  const record = (commit: string) => {
+    f.host.readPullRequest = () => ({
+      state: "MERGED",
+      merge: commit,
+      head: revision,
+      checks: [
+        {
+          __typename: "CheckRun",
+          name: "quality",
+          status: "COMPLETED",
+          conclusion: "SUCCESS",
+        },
+      ],
+    });
+    return f.factory().recordMerge(
+      {
+        ticket: "A",
+        revision,
+        commit,
+        pr: 32,
+        decision: "Permit fixture single-parent landing",
+      },
+      "T-owner",
+    );
+  };
+  expect(await record(repairOnly).catch(String)).toContain(
+    "does not contain the accepted change",
+  );
+  upstream(revision);
+  expect((await record(revision)).runs.A).toMatchObject({
+    merge: { pr: 32, commit: revision },
+  });
+}
+
+test.each(["report", "review", "gate"] as const)(
+  "scheduled proof refuses damaged %s until the exact evidence returns",
+  async (kind) => {
+    const { engine, wake, ledger, revision, counter } =
+      await scheduledEvidenceFixture();
+    const repair =
+      kind === "report"
+        ? await damageScheduledEvidence(engine.directory, kind)
+        : undefined;
+    const result = await wake().catch(String);
+    expect(result === "Error: lost ledger response").toBe(kind !== "report");
+    const restore =
+      repair ?? (await damageScheduledEvidence(engine.directory, kind));
+    const attempts = ledger.attempts.length;
+    await wake();
+    await wake();
+    expect(ledger.attempts).toHaveLength(attempts);
+    expectScheduledHold(engine.directory);
+    await restore();
+    if (kind === "report")
+      expect(await wake().catch(String)).toBe("Error: lost ledger response");
+    await wake();
+    await wake();
+    const { runs } = factoryStatus(engine.directory);
+    expect(runStage(runs.A).status).toBe("accepted");
+    expect(runs.B).toMatchObject({ base: revision });
+    expect(ledger.attempts).toHaveLength(2);
+    expect(ledger.writes.map(({ sha }) => sha)).toEqual([revision]);
+    expect(await readFile(counter, "utf8")).toBe("full\n");
+  },
+  30_000,
+);
+
+async function scheduledEvidenceFixture() {
+  const ledger = scheduledLedger(true);
+  const f = await preparationFixture(() => "", undefined, ledger.open);
+  const configPath = join(f.root, ".factory.json");
+  const config = await Bun.file(configPath).json();
+  const counter = join(f.root, ".git/full-runs");
+  config.permissions.scheduleGates = true;
+  config.review = true;
+  config.scheduledGate = { landing: "true", schedule: "*/5 * * * *" };
+  config.verify = `echo full | tee -a '${counter}'`;
+  await writeFile(configPath, JSON.stringify(config));
+  await writeFile(
+    join(f.root, "tickets.json"),
+    JSON.stringify([
+      { id: "A", brief: "Keep the original file", after: [], size: "medium" },
+      { id: "B", brief: "Dependent", after: ["A"] },
+    ]),
+  );
+  f.git("commit", "-qam", "configure reviewed scheduled checks");
+  const engine = f.factory(() => 60_000);
+  const messages = captureScheduledReviews(f.host);
+  await engine.tick("start");
+  f.host.state = async () => "idle";
+  await mkdir(join(f.worktree, "src"));
+  await writeFile(join(f.worktree, "src/value"), "candidate");
+  f.git("-C", f.worktree, "add", "src");
+  f.git("-C", f.worktree, "commit", "-qm", "candidate");
+  const revision = f.git("-C", f.worktree, "rev-parse", "HEAD");
+  await writeFile(
+    join(engine.directory, "A.report.json"),
+    JSON.stringify({
+      kind: "candidate",
+      attempt: 1,
+      revision,
+      insight: "Fixture result",
+    }),
+  );
+  await passScheduledReview(
+    engine,
+    messages,
+    "Coordinator gate evidence: true passed",
+  );
+  await engine.tick("reconcile");
+  expectScheduledHold(engine.directory);
+  return {
+    engine,
+    ledger,
+    counter,
+    revision,
+    wake: () => f.factory(() => 300_000).tick("reconcile"),
+  };
+}
+
+async function damageScheduledEvidence(
+  directory: string,
+  kind: "report" | "review" | "gate",
+) {
+  const evidence = factoryEvidence(directory, "A")!;
+  const row = evidence.find((item) => item.kind === kind)!;
+  if (kind === "gate") {
+    const alternate = evidence.find((item) => item.kind === "landing-gate")!;
+    expect(alternate.sha256).not.toBe(row.sha256);
+    const set = (digest: string, bytes: number) => {
+      const db = new Database(join(directory, "state.sqlite"));
+      try {
+        db.query(
+          "UPDATE evidence SET sha256 = ?, bytes = ? WHERE ticket = 'A' AND kind = 'gate'",
+        ).run(digest, bytes);
+      } finally {
+        db.close();
+      }
+    };
+    set(alternate.sha256, alternate.bytes);
+    expect(
+      factoryEvidence(directory, "A")!.find((item) => item.kind === "gate")
+        ?.intact,
+    ).toBe(true);
+    return () => Promise.resolve(set(row.sha256, row.bytes));
+  }
+  const path = join(directory, "evidence", row.sha256);
+  const original = await readFile(path);
+  if (kind === "report") await rm(path);
+  else await writeFile(path, "damaged proof");
+  return () => writeFile(path, original);
+}
+
+function captureScheduledReviews(host: NativeHost) {
+  const messages: string[] = [];
+  const create = host.create.bind(host);
+  const send = host.send.bind(host);
+  host.create = (...args) =>
+    args[3] === "reviewer" ? Promise.resolve("T-reviewer") : create(...args);
+  host.send = async (thread, message) => {
+    if (thread === "T-reviewer") messages.push(message);
+    else await send(thread, message);
+  };
+  return messages;
+}
+
+async function landScheduledFixture(
+  outcome: string,
+  engine: ReturnType<Awaited<ReturnType<typeof preparationFixture>>["factory"]>,
+  reviews: string[],
+  fullCommand: string,
+) {
+  if (outcome === "fail") {
+    await passScheduledReview(
+      engine,
+      reviews,
+      "Coordinator gate evidence: true passed",
+    );
+    expect(reviews.at(-1)).toContain("Full verification has not run.");
+    expect(reviews.at(-1)).not.toContain(fullCommand);
+  }
+  return engine.tick("reconcile");
+}
+
+async function passScheduledReview(
+  engine: ReturnType<Awaited<ReturnType<typeof preparationFixture>>["factory"]>,
+  messages: string[],
+  evidence: string,
+) {
+  const run = (await engine.tick("reconcile")).runs.A;
+  if (run?.kind !== "running" || !run.review)
+    throw new Error("Expected cold review");
+  expect(messages.at(-1)).toContain("Requirements: Keep the original file");
+  expect(messages.at(-1)).toContain(evidence);
+  const { ticket, attempt, revision, base, stage, report } = run.review;
+  await writeFile(
+    report,
+    JSON.stringify({
+      ticket,
+      attempt,
+      revision,
+      base,
+      stage,
+      kind: "pass",
+      findings: [],
+    }),
+  );
+}
+
+function scheduledLedger(loseResponse: boolean) {
+  type Entry = Parameters<Bookkeeping["ledger"]["record"]>[0];
+  const writes: Entry[] = [];
+  const attempts: Entry[] = [];
+  return {
+    writes,
+    attempts,
+    open: (): Bookkeeping => ({
+      ...openStore(),
+      ledger: {
+        async record(entry) {
+          attempts.push(entry);
+          if (loseResponse) {
+            loseResponse = false;
+            writes.push(entry);
+            throw new Error("lost ledger response");
+          }
+          if (writes[0]?.sha === entry.sha) expect(entry).toEqual(writes[0]!);
+          else writes.push(entry);
+        },
+      },
+    }),
+  };
+}
+
+async function settleScheduledFixture(
+  outcome: string,
+  running: Promise<State>,
+  factory: ReturnType<
+    Awaited<ReturnType<typeof preparationFixture>>["factory"]
+  >,
+) {
+  if (outcome !== "pass") {
+    await Promise.all([running, factory.tick("reconcile")]);
+    return;
+  }
+  expect(await running.catch(String)).toBe("Error: lost ledger response");
+  expectScheduledHold(factory.directory);
+  await factory.tick("reconcile");
+  await factory.tick("reconcile");
+}
+
+function expectScheduledHold(directory: string) {
+  const { runs } = factoryStatus(directory);
+  expect(runs.B).toBeUndefined();
+  expect(runStage(runs.A).status).not.toBe("accepted");
+}
+
+async function proveScheduledRestart(
+  f: Awaited<ReturnType<typeof preparationFixture>>,
+  revision: string,
+) {
+  const at = 300_000;
+  const restarted = f.factory(() => at);
+  const marks = join(f.root, ".git");
+  const script = join(marks, "scheduled-coordinator.ts");
+  await writeFile(
+    script,
+    `
+import { createFactory } from ${JSON.stringify(join(import.meta.dir, "native.ts"))};
+import { openStore } from ${JSON.stringify(join(import.meta.dir, "bookkeeping.fixture.ts"))};
+await createFactory(${JSON.stringify(f.root)}, {
+  async create() { throw new Error("Unexpected dispatch"); },
+  async send() {}, async state() { return "idle"; }, watch() {},
+}, openStore, () => 300_000).tick("reconcile", "T-owner");
+`,
+  );
+  const child = spawn("bun", [script], { stdio: "ignore" });
+  await waitForFile(join(marks, "full-runs"));
+  const exited = new Promise<void>((resolve) =>
+    child.once("exit", () => resolve()),
+  );
+  child.kill("SIGKILL");
+  await exited;
+  const held = factoryStatus(restarted.directory).runs.A;
+  expect(held?.fullGate).toMatchObject({
+    status: "running",
+    revision,
+    process: { pid: expect.any(Number) },
+  });
+  await Promise.all([
+    restarted.tick("reconcile"),
+    f.factory(() => at).tick("reconcile"),
+  ]);
+  expect(factoryStatus(restarted.directory).runs.A).toEqual(held);
+  expect((await readFile(join(marks, "full-runs"), "utf8")).trim()).toBe(
+    revision,
+  );
+  await writeFile(join(marks, "release"), "pass");
+  const gate = held!.fullGate;
+  if (gate?.status !== "running" || !gate.process)
+    throw new Error("Missing gate process");
+  await waitForGateExit(gate.process.pid);
+  await restarted.tick("pause");
+  expect(factoryStatus(restarted.directory).runs.A?.fullGate).toMatchObject({
+    status: "interrupted",
+    revision,
+    id: gate.id,
+  });
+  await restarted.tick("start");
+  await restarted.tick("reconcile");
+  expect(factoryStatus(restarted.directory).runs.A?.fullGate).toMatchObject({
+    status: "passed",
+    revision,
+  });
+  expect(
+    (await readFile(join(marks, "full-runs"), "utf8")).trim().split("\n"),
+  ).toEqual([revision, revision]);
+}
+
+async function waitForGateExit(pid: number) {
+  for (let i = 0; i < 500; i++) {
+    if (spawnSync("bash", ["-c", `kill -0 -- -${pid}`]).status !== 0) return;
+    await Bun.sleep(10);
+  }
+  throw new Error(`Gate process group ${pid} did not exit`);
+}
 
 test("a running gate reads as gating and an interrupted gate reruns exactly once, even after a pause", async () => {
   const f = await preparationFixture(() => "");

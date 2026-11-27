@@ -13,6 +13,8 @@ import {
   factoryEvidence,
   factoryEvents,
   factoryRecords,
+  fullyVerified,
+  projectFullGate,
   lifecycleStatus,
   rejectionReasons,
   runCheckpoint,
@@ -514,7 +516,7 @@ function iso(at: number | null | undefined) {
 
 // Curated at acceptance; the raw report insight never leaves storage.
 function projectAcceptance(run: Run | undefined) {
-  return run?.kind === "done"
+  return run?.kind === "done" && fullyVerified(run)
     ? { acceptedAt: iso(run.acceptedAt), summary: run.summary ?? null }
     : { acceptedAt: null, summary: null };
 }
@@ -600,8 +602,9 @@ function projectTask(
     ...projectRunLinks(id, run),
     merge: projectMerge(run, repository),
     checks: projectChecks(run),
+    ...(run?.fullGate ? { fullGate: projectFullGate(run) } : {}),
     evidence: {
-      acceptance: run?.kind === "done" ? { revision: row.revision } : null,
+      acceptance: fullyVerified(run) ? { revision: row.revision } : null,
       gate,
       review: reviewEvidence,
     },

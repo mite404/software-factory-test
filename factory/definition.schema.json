@@ -131,6 +131,15 @@
       "maximum": 2147483647
     },
     "bookkeepingSHA256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "scheduledGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["landing", "schedule"],
+      "properties": {
+        "landing": { "type": "string", "minLength": 1 },
+        "schedule": { "type": "string", "minLength": 1 }
+      }
+    },
     "permissions": {
       "type": "object",
       "additionalProperties": false,
@@ -139,7 +148,8 @@
         "execute": { "type": "boolean" },
         "publish": { "const": false },
         "externalTickets": { "const": false },
-        "backup": { "type": "boolean" }
+        "backup": { "type": "boolean" },
+        "scheduleGates": { "type": "boolean" }
       }
     },
     "backup": {

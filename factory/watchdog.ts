@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { lastFire, shortestGapMinutes } from "./cron";
 import {
   automationEnabled,
+  fullyVerified,
   providerResetAt,
   type State,
   type Task,
@@ -26,10 +27,13 @@ function wantsClock(state: State, queue: Task[], automations: Automations) {
   return (
     state.enabled &&
     (enabledAutomations(automations).length > 0 ||
+      Object.values(state.runs).some(
+        (run) => run.kind === "done" && !fullyVerified(run),
+      ) ||
       queue.some(
         (task) =>
           (task.intake !== "planned" || Object.hasOwn(state.runs, task.id)) &&
-          state.runs[task.id]?.kind !== "done",
+          !fullyVerified(state.runs[task.id]),
       ))
   );
 }
@@ -544,7 +548,13 @@ export async function reconcileSchedule(
     fingerprint,
     title,
     prompt,
-    interval: clockMinutes(automations, checkingStalls),
+    interval: clockMinutes(
+      automations,
+      checkingStalls ||
+        Object.values(state.runs).some(
+          (run) => run.kind === "done" && !fullyVerified(run),
+        ),
+    ),
   };
   const settled = wanted ? "installed" : "cleared";
   const resets = Object.values(state.runs).flatMap((run) => {
