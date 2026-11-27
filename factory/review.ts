@@ -82,17 +82,23 @@ function nonempty(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-/** Read a structured verdict; unavailable or invalid evidence never authorizes landing. */
-export async function reviewVerdict(review: Review) {
+/** Validate verdict bytes against the enclosing ticket and exact review assignment. */
+export function parseReviewVerdict(
+  ticket: string,
+  review: Review,
+  content: string,
+) {
+  if (review.ticket !== ticket) return null;
   try {
-    const raw: unknown = JSON.parse(await readFile(review.report, "utf8"));
+    const raw: unknown = JSON.parse(content);
     if (!raw || typeof raw !== "object") return null;
     const row = raw as Record<string, unknown>;
+    const { kind } = row;
     if (
       !["ticket", "attempt", "revision", "base", "stage", "gateId"].every(
         (key) => row[key] === review[key as keyof Review],
       ) ||
-      !new Set<unknown>(["pass", "issues"]).has(row.kind) ||
+      (kind !== "pass" && kind !== "issues") ||
       !Array.isArray(row.findings)
     )
       return null;
@@ -108,10 +114,23 @@ export async function reviewVerdict(review: Review) {
           )
         );
       }) ||
-      (row.kind === "pass" ? findings.length !== 0 : findings.length === 0)
+      (kind === "pass" ? findings.length !== 0 : findings.length === 0)
     )
       return null;
-    return { kind: row.kind, evidence: JSON.stringify(row) };
+    return { kind, evidence: JSON.stringify(row) };
+  } catch {
+    return null;
+  }
+}
+
+/** Read a structured verdict; unavailable or invalid evidence never authorizes landing. */
+export async function reviewVerdict(ticket: string, review: Review) {
+  try {
+    return parseReviewVerdict(
+      ticket,
+      review,
+      await readFile(review.report, "utf8"),
+    );
   } catch {
     return null;
   }

@@ -1156,6 +1156,10 @@ changed or missing worktree is refused with no state change. It then records `cr
 creates one reviewer for the saved review, which proceeds to delivery and a verdict as usual. The
 run keeps its lane, attempt and worker. A running run whose review is sending or sent is refused.
 
+For a post-landing reviewer whose full-gate proof became stale, the same owner decision clears the
+creation incident without creating a reviewer. A scheduled reconcile must verify the exact landed
+revision again before it can create a new reviewer. Dependents stay blocked until acceptance.
+
 The installed plugin API exposes only `threads.get(id)`, not thread listing or search.
 `CreateAgentThreadOptions` accepts a parent but no title, label, or initial message. Agent display
 labels are not verified searchable keys. Although the Foreman's `find_thread` can list children,

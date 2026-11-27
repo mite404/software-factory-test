@@ -61,6 +61,7 @@ import {
   WatchdogUnavailable,
 } from "./watchdog";
 import {
+  parseReviewVerdict,
   reviewPrompt,
   reviewVerdict,
   validReview,
@@ -408,7 +409,19 @@ function actionPermissions(raw: Record<string, unknown>) {
   };
 }
 
-function workerRole(raw: Record<string, unknown>) {
+function effectiveReviewStage(
+  review: boolean,
+  scheduleGates: boolean,
+  scheduledGate: ReturnType<typeof parseScheduledGate>,
+) {
+  return review && scheduleGates ? scheduledGate?.reviewStage : undefined;
+}
+
+function workerRole(
+  raw: Record<string, unknown>,
+  scheduledGate: ReturnType<typeof parseScheduledGate>,
+  scheduleGates: boolean,
+) {
   const model = text(raw.workerModel);
   if (!/^[^/]+\/.+$/.test(model)) throw new Error("Expected provider/model");
   const [provider, ...name] = model.split("/");
@@ -419,9 +432,10 @@ function workerRole(raw: Record<string, unknown>) {
   if (raw.review !== undefined && typeof raw.review !== "boolean")
     throw new Error("Invalid review; expected boolean");
   const review = raw.review === true;
-  if (review) reviewerModel(workerModel);
+  const stage = effectiveReviewStage(review, scheduleGates, scheduledGate);
+  if (review) reviewerModel(workerModel, stage);
   const providerLimit = raw.providerLimit;
-  if (!validProviderLimitPolicy(providerLimit, workerModel))
+  if (!validProviderLimitPolicy(providerLimit, workerModel, stage))
     throw new Error(
       "Invalid providerLimit; expected wait or fallback with a known independent, non-default reviewerModel and optional workerModel",
     );
@@ -431,14 +445,18 @@ function workerRole(raw: Record<string, unknown>) {
     workerRunner,
     review,
     providerLimit,
-    lightWorker: lightRole(raw, review),
+    lightWorker: lightRole(raw, review, stage),
   };
 }
 
 /** Validate the optional light lane against review and limit policy.
  * @throws When capacity 2 and lightWorker are not set together, or the light worker is invalid.
  */
-export function lightRole(raw: Record<string, unknown>, review: boolean) {
+export function lightRole(
+  raw: Record<string, unknown>,
+  review: boolean,
+  stage?: Review["stage"],
+) {
   if ((raw.capacity === 2) !== (raw.lightWorker !== undefined))
     throw new Error(
       "capacity 2 requires lightWorker, and lightWorker requires capacity 2",
@@ -449,8 +467,8 @@ export function lightRole(raw: Record<string, unknown>, review: boolean) {
     throw new Error(
       "Invalid lightWorker; expected a known provider/model and a supported effort",
     );
-  if (review) reviewerModel(light.model);
-  if (!validProviderLimitPolicy(raw.providerLimit, light.model))
+  if (review) reviewerModel(light.model, stage);
+  if (!validProviderLimitPolicy(raw.providerLimit, light.model, stage))
     throw new Error(
       "Invalid providerLimit for lightWorker; expected an independent reviewerModel",
     );
@@ -535,8 +553,9 @@ async function validateConfiguration(
     !/^[a-f0-9]{64}$/.test(text(raw.bookkeepingSHA256))
   )
     throw new Error("Invalid bookkeeping digest");
-  const role = workerRole(raw);
   const permissions = actionPermissions(raw);
+  const scheduledGate = parseScheduledGate(raw.scheduledGate);
+  const role = workerRole(raw, scheduledGate, permissions.scheduleGates);
   const prd = localPath(root, text(raw.prd));
   const tickets = localPath(root, text(raw.tickets));
   const ticketFiles = optionalLocalPath(root, raw.ticketFiles);
@@ -560,7 +579,7 @@ async function validateConfiguration(
     scope,
     verify,
     checks,
-    ...optionalField("scheduledGate", parseScheduledGate(raw.scheduledGate)),
+    ...optionalField("scheduledGate", scheduledGate),
     setup,
     ...optionalField("hooks", hooks),
     watchdog,
@@ -3778,7 +3797,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
       }
       watchRunning();
       // The Foreman's decision that no thread exists is the only license to repeat a creation.
-      async function retryCreate() {
+      function authorizeCreationRetry() {
         const request = repairRequest ?? {
           ticket: "",
           decision: "",
@@ -3790,19 +3809,36 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           text(owner) !== state.owner ||
           !task ||
           !admitsRun(run, "retry-create") ||
-          !run.incident ||
+          run.incident?.reason !== "creation-unknown" ||
           run.incident.id !== request.incident ||
           !request.decision.trim()
         )
           throw new Error(
             "Retry-create requires the owning Foreman, a parked creation, its exact current incident and a decision",
           );
+        return { task, run, decision: request.decision };
+      }
+
+      async function retryCreate() {
+        const { task, run, decision } = authorizeCreationRetry();
+        if (
+          run.kind === "done" &&
+          config.scheduleGates &&
+          run.fullGate?.status === "stale" &&
+          run.review?.delivery === "creating"
+        ) {
+          // The owner cleared the ambiguity, not the stale proof. Reconcile gates again.
+          delete run.review;
+          delete run.incident;
+          commit(task.id, "create-retried", decision);
+          return state;
+        }
         const create =
           run.kind === "creating"
             ? () => createWorker(task, run.base, run.worktree)
             : recreateReviewer(task, run);
         delete run.incident;
-        commit(task.id, "create-retried", request.decision);
+        commit(task.id, "create-retried", decision);
         return create();
       }
       // A reviewer is recreated only over the exact staged candidate it was creating for.
@@ -4848,7 +4884,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
 
       async function recordReviewVerdict(task: Task, run: ReviewRun) {
         const review = run.review!;
-        const verdict = await reviewVerdict(review);
+        const verdict = await reviewVerdict(task.id, review);
         if (
           !verdict ||
           (run.kind === "done" && !landedReviewIdentity(task.id, review))
@@ -5445,6 +5481,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
       function landedReviewIdentity(ticket: string, review: Review) {
         const paths = [review.worktree, join(directory, "worktrees", ticket)];
         return (
+          review.ticket === ticket &&
           unchanged(root, review.revision) &&
           paths.every(
             (path) => existsSync(path) && unchanged(path, review.revision),
@@ -5462,14 +5499,16 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
       }
 
       function reviewOutcome(ticket: string, run: LandedRun) {
-        const evidence = run.review?.evidence;
+        const review = run.review;
+        const evidence = review?.evidence;
         if (!evidence) return;
+        const verdict = parseReviewVerdict(ticket, review, evidence);
+        if (!verdict) return;
         const proof = persistence!
           .proof(ticket, run.attempt!, run.revision)
           .filter((row) => row.definition === run.definition);
-        return (["pass", "issues"] as const).find((outcome) =>
-          proofDigest(proof, ["review"], outcome, sha256(evidence)),
-        );
+        if (proofDigest(proof, ["review"], verdict.kind, sha256(evidence)))
+          return verdict.kind;
       }
 
       async function settleFullVerification(

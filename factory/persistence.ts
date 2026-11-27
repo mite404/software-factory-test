@@ -408,7 +408,9 @@ const reviewerCreation = {
   recovery: "inspect",
   matches: (run) =>
     (run.kind === "running" ||
-      (run.kind === "done" && run.fullGate?.status === "verified")) &&
+      (run.kind === "done" &&
+        (run.fullGate?.status === "verified" ||
+          run.fullGate?.status === "stale"))) &&
     run.review?.delivery === "creating",
   exits: [
     {
@@ -1811,6 +1813,7 @@ export function reviewerModel(
 export function validProviderLimitPolicy(
   value: unknown,
   workerModel: string,
+  stage?: Review["stage"],
 ): value is ProviderLimitPolicy | undefined {
   if (value === undefined) return true;
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -1829,7 +1832,8 @@ export function validProviderLimitPolicy(
     workerFamily !== undefined &&
     reviewerFamily !== undefined &&
     reviewerFamily !== workerFamily &&
-    policy.reviewerModel !== defaultReviewerModels.get(workerFamily) &&
+    (!defaultReviewerModels.has(workerFamily) ||
+      policy.reviewerModel !== reviewerModel(workerModel, stage)) &&
     (policy.workerModel === undefined || model(policy.workerModel))
   );
 }
@@ -2257,14 +2261,33 @@ export function laneHeld(
   );
 }
 
+function pinnedFallback(pin: Record<string, unknown>): boolean {
+  const stage =
+    pin.review === true &&
+    record(pin.scheduledGate ?? {}).reviewStage === "post-landing"
+      ? "post-landing"
+      : undefined;
+  return (
+    validProviderLimitPolicy(
+      pin.providerLimit,
+      String(pin.workerModel),
+      stage,
+    ) &&
+    (pin.lightWorker === undefined ||
+      (validLightWorker(pin.lightWorker) &&
+        validProviderLimitPolicy(
+          pin.providerLimit,
+          pin.lightWorker.model,
+          stage,
+        )))
+  );
+}
+
 function workerSettings(pin: Record<string, unknown>): boolean {
   return (
     optionalText(pin.workerRunner) &&
-    validProviderLimitPolicy(pin.providerLimit, String(pin.workerModel)) &&
     (pin.workerEffort === undefined || efforts.has(pin.workerEffort)) &&
-    (pin.lightWorker === undefined ||
-      (validLightWorker(pin.lightWorker) &&
-        validProviderLimitPolicy(pin.providerLimit, pin.lightWorker.model))) &&
+    pinnedFallback(pin) &&
     optionalAgent(pin.observer)
   );
 }
@@ -2385,6 +2408,12 @@ function validateLane(id: string, lane: unknown) {
     throw new Error(`Invalid factory lane ${id}`);
 }
 
+function reviewsBelongToRun(id: string, run: Record<string, unknown>) {
+  return [run, record(run.checkpoint ?? {}), record(run.repair ?? {})].every(
+    ({ review }) => review === undefined || record(review).ticket === id,
+  );
+}
+
 function validateRun(id: string, value: unknown) {
   const run = record(value);
   validateMerge(id, run);
@@ -2395,7 +2424,12 @@ function validateRun(id: string, value: unknown) {
   if (run.definition !== undefined && !validDigest(run.definition))
     throw new Error(`Invalid definition pin ${id}`);
   validateLane(id, run.lane);
-  if (!validRunKind(run) || !validFullGate(run) || !/^[a-zA-Z0-9_-]+$/.test(id))
+  if (
+    !validRunKind(run) ||
+    !validFullGate(run) ||
+    !/^[a-zA-Z0-9_-]+$/.test(id) ||
+    !reviewsBelongToRun(id, run)
+  )
     throw new Error(`Invalid factory run ${id}`);
 }
 
