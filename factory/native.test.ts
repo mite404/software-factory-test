@@ -5367,6 +5367,8 @@ test.each([
   { size: "small", risky: true, case: "foreign verdict" },
   { size: "medium", risky: false, case: "repair" },
   { size: "large", risky: false, case: "lost creation" },
+  { size: "large", risky: false, case: "stale send present" },
+  { size: "large", risky: false, case: "stale send absent" },
   { size: undefined, risky: false, case: "review" },
 ])(
   "post-landing review ($size, risky=$risky): $case",
@@ -5425,6 +5427,57 @@ test.each([
     expect(messages).toEqual([]);
     at = 300_000;
     if (scenario === "lost creation") return proveCreationRecovery();
+    if (scenario.startsWith("stale send")) return proveStaleSendRecovery();
+
+    async function proveStaleSendRecovery() {
+      const send = f.host.send.bind(f.host);
+      const obsolete: string[] = [];
+      f.host.send = async (thread, message) => {
+        const gateRuns = await readFile(log, "utf8");
+        if (thread !== "T-reviewer" || gateRuns !== `${first}\n`)
+          return send(thread, message);
+        obsolete.push(message);
+        throw new Error("lost stale reviewer send response");
+      };
+      let lookup: "inconclusive" | "present" | "absent" = "inconclusive";
+      const lookups: string[] = [];
+      f.host.lookupDelivery = async (thread, message) => {
+        expect(thread).toBe("T-reviewer");
+        lookups.push(message);
+        return lookup;
+      };
+      expect(await engine.tick("reconcile").catch(String)).toContain(
+        "lost stale reviewer send response",
+      );
+      f.git("commit", "--allow-empty", "-qm", "advance integration");
+      const stale = await f.factory(() => at).tick("reconcile");
+      expect(stale.runs.A?.fullGate?.status).toBe("stale");
+      expect(lookups).toEqual([]);
+      f.git("reset", "--hard", first);
+      at = 600_000;
+      const held = await f.factory(() => at).tick("reconcile");
+      expect(held.runs.A).toMatchObject({
+        fullGate: { status: "stale" },
+        review: { delivery: "sending" },
+      });
+      expect(held.runs.B).toBeUndefined();
+      expect(lookups).toEqual(obsolete);
+      expect(await readFile(log, "utf8")).toBe(`${first}\n`);
+
+      lookup = scenario === "stale send present" ? "present" : "absent";
+      const restarted = f.factory(() => at);
+      const recovered = await restarted.tick("reconcile");
+      const { review } = landedReview(recovered.runs.A);
+      expect(recovered.runs.A?.fullGate?.status).toBe("verified");
+      expect(review.gateId).not.toBe(stale.runs.A?.fullGate?.id);
+      expect(obsolete).toHaveLength(1);
+      expect(lookups).toEqual([obsolete[0], obsolete[0]]);
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).not.toBe(obsolete[0]);
+      expect(await readFile(log, "utf8")).toBe(`${first}\n${first}\n`);
+      expect((await restarted.tick("reconcile")).runs.B).toBeUndefined();
+      expect(ledger.writes).toEqual([]);
+    }
 
     async function proveCreationRecovery() {
       const create = f.host.create.bind(f.host);

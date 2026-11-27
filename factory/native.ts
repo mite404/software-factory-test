@@ -3900,21 +3900,26 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         };
       }
 
+      async function lookupDelivery(
+        thread: ThreadID,
+        intent: DeliveryIntent | undefined,
+      ) {
+        if (!intent || !host.lookupDelivery) return "inconclusive";
+        try {
+          return await host.lookupDelivery(thread, intent.message);
+        } catch {
+          return "inconclusive";
+        }
+      }
+
       async function recoverDelivery(
         task: Task,
         thread: ThreadID,
         intent: DeliveryIntent | undefined,
         worker?: Extract<Run, { kind: "running" }>,
       ) {
-        if (!intent || !host.lookupDelivery) return false;
-        let found: Awaited<
-          ReturnType<NonNullable<NativeHost["lookupDelivery"]>>
-        >;
-        try {
-          found = await host.lookupDelivery(thread, intent.message);
-        } catch {
-          return false;
-        }
+        if (!intent) return false;
+        const found = await lookupDelivery(thread, intent);
         if (found === "inconclusive") return false;
         if (found === "absent") {
           if (intent.repeated) return false;
@@ -5441,12 +5446,26 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           return staleFullGate(ticket, run, gate);
         if (gate.status === "verified")
           return settleFullVerification(ticket, run, gate);
-        if (
-          run.review?.delivery === "creating" ||
-          run.review?.delivery === "sending"
-        )
-          return;
+        if (await holdsFullGateForReview(ticket, run)) return;
         await runDueFullGate(ticket, run, gate);
+      }
+
+      async function holdsFullGateForReview(ticket: string, run: LandedRun) {
+        const review = run.review;
+        if (review?.delivery === "creating") return true;
+        if (review?.delivery !== "sending") return false;
+        const { thread, deliveryIntent: intent } = review;
+        const found = await lookupDelivery(thread!, intent);
+        if (found === "inconclusive") return true;
+        // Either conclusive result retires the obsolete brief, never replays it.
+        delete run.review;
+        delete run.incident;
+        commit(
+          ticket,
+          "stale-review-delivery-resolved",
+          JSON.stringify({ thread, key: intent?.key, evidence: found }),
+        );
+        return false;
       }
 
       function authorizedFullWake() {

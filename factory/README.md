@@ -1378,9 +1378,10 @@ match the ticket, worker attempt, revision, base, stage, and full-gate attempt I
 other factory landings wait for acceptance. A rejection keeps the landed commit in place and sends
 findings to the original worker. Its next candidate lands with the fast check and needs a new
 scheduled full gate and review. An external integration move makes the proof stale. Restoring the
-exact landed HEAD allows a fresh gate and reviewer, unless an ambiguous creation or delivery still
-requires operator inspection. Restart never creates a replacement reviewer or blindly repeats a
-correction send.
+exact landed HEAD allows a fresh gate and reviewer once any ambiguous creation or delivery is
+resolved. For a stale reviewer brief, a conclusive keyed lookup retires it without resending it;
+an inconclusive lookup keeps the hold. Restart never blindly creates a replacement reviewer or
+repeats a correction send.
 
 ## Record a merged pull request
 
