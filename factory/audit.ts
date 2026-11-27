@@ -251,7 +251,7 @@ function reviewIdentity(raw: Record<string, unknown>) {
     Number(raw.attempt) < 1 ||
     typeof raw.revision !== "string" ||
     !/^[a-f0-9]{40}$/.test(raw.revision) ||
-    raw.stage !== "post-graft"
+    !["post-graft", "post-landing"].includes(String(raw.stage))
   )
     return null;
   return {
@@ -474,7 +474,12 @@ async function collect(directory: string, from: number, to: number) {
   const records: Finding[] = [];
   const seen = new Set<string>();
   function addVerdict(raw: Record<string, unknown>, at: string) {
-    const key = JSON.stringify([raw.ticket, raw.attempt, raw.revision]);
+    const key = JSON.stringify([
+      raw.ticket,
+      raw.attempt,
+      raw.revision,
+      raw.gateId,
+    ]);
     const findings = verdict(raw, at);
     if (findings === null || seen.has(key)) return findings !== null;
     seen.add(key);

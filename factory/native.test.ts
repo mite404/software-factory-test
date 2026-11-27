@@ -50,6 +50,7 @@ import {
   factoryStatus,
   openPersistence,
   runStage,
+  type DefinitionPin,
   type State,
   type ThreadID,
 } from "./persistence";
@@ -1138,7 +1139,7 @@ async function handoffGuardFixture(fault: string) {
       storage.state.runs.Review = {
         ...run.repair,
         review: {
-          ticket: "A",
+          ticket: "Review",
           attempt: 2,
           base: run.repair.base,
           revision: "b".repeat(40),
@@ -2525,6 +2526,74 @@ test.each([
     expect(f.counts()).toEqual({ creates: 0, sends: 0 });
   },
 );
+
+test.each([
+  { scheduleGates: true, review: true, light: false, valid: false },
+  { scheduleGates: true, review: true, light: true, valid: false },
+  { scheduleGates: false, review: true, light: false, valid: true },
+  { scheduleGates: true, review: false, light: false, valid: true },
+])("fallback validation uses the effective review stage: %j", async (row) => {
+  const f = await preparationFixture(() => "");
+  const path = join(f.root, ".factory.json");
+  const raw = await Bun.file(path).json();
+  const pin = await configuration(f.root);
+  const scheduledGate = {
+    landing: "true",
+    schedule: "*/5 * * * *",
+    reviewStage: "post-landing",
+  } as const;
+  const providerLimit = {
+    mode: "fallback",
+    reviewerModel: "anthropic/claude-fable-5-2",
+  } as const;
+  const workerModel: `${string}/${string}` = row.light
+    ? "moonshotai/kimi-k3"
+    : "openai/gpt-6.2-sol";
+  const settings: Pick<
+    DefinitionPin,
+    "review" | "workerModel" | "providerLimit" | "lightWorker"
+  > = {
+    review: row.review,
+    workerModel,
+    providerLimit,
+    ...(row.light && {
+      lightWorker: { model: "openai/gpt-6.2-sol", effort: "low" },
+    }),
+  };
+  await writeFile(
+    path,
+    JSON.stringify({
+      ...raw,
+      ...settings,
+      capacity: row.light ? 2 : 1,
+      scheduledGate,
+      permissions: { ...raw.permissions, scheduleGates: row.scheduleGates },
+    }),
+  );
+  const directory = f.factory().directory;
+  const storage = openPersistence(directory, []);
+  try {
+    storage.definition(
+      {
+        ...pin,
+        ...settings,
+        scheduledGate: row.scheduleGates ? scheduledGate : undefined,
+      },
+      true,
+    );
+  } finally {
+    storage.close();
+  }
+  if (row.valid) {
+    expect((await configuration(f.root)).providerLimit).toEqual(providerLimit);
+    expect(factoryDefinition(directory)?.providerLimit).toEqual(providerLimit);
+  } else {
+    expect(await configuration(f.root).catch(String)).toMatch(/providerLimit/);
+    expect(() => factoryDefinition(directory)).toThrow(
+      "Invalid stored definition",
+    );
+  }
+});
 
 test.each([undefined, "google/gemini-2.5-pro"])(
   "worker fallback %s waits on the same thread when the API cannot switch models",
@@ -5292,6 +5361,434 @@ test("four rejections park the worker, release only independent work and require
   expect(notices[1]).toContain("Attempt cap reached");
   expect(notices[1]).toContain("authenticated human confirmation");
 }, 30_000);
+
+test.each([
+  { size: "small", risky: false, case: "skip" },
+  { size: "small", risky: true, case: "foreign verdict" },
+  { size: "medium", risky: false, case: "repair" },
+  { size: "large", risky: false, case: "lost creation" },
+  { size: "large", risky: false, case: "stale send present" },
+  { size: "large", risky: false, case: "stale send absent" },
+  { size: undefined, risky: false, case: "review" },
+])(
+  "post-landing review ($size, risky=$risky): $case",
+  async ({ size, risky, case: scenario }) => {
+    const ledger = scheduledLedger(false);
+    const f = await preparationFixture(() => "", undefined, ledger.open);
+    const configPath = join(f.root, ".factory.json");
+    const config = await Bun.file(configPath).json();
+    const log = join(f.root, ".git/full-runs");
+    config.permissions.scheduleGates = true;
+    config.review = true;
+    config.scheduledGate = {
+      landing: "true",
+      schedule: "*/5 * * * *",
+      reviewStage: "post-landing",
+    };
+    config.verify = `git rev-parse HEAD >> '${log}'`;
+    await writeFile(configPath, JSON.stringify(config));
+    await writeFile(
+      join(f.root, "tickets.json"),
+      JSON.stringify([
+        { id: "A", brief: "Keep the original file", after: [], size, risky },
+        { id: "B", brief: "Dependent", after: ["A"] },
+      ]),
+    );
+    await migrateDefinition(f.root);
+    f.git("add", "-A");
+    f.git("commit", "-qm", "configure post-landing review");
+    const base = f.git("rev-parse", "HEAD");
+    let at = 60_000;
+    const engine = f.factory(() => at);
+    const messages = captureScheduledReviews(f.host);
+    await engine.tick("start");
+    f.host.state = async () => "idle";
+    await mkdir(join(f.worktree, "src"), { recursive: true });
+    async function submit(attempt: number) {
+      await writeFile(join(f.worktree, "src/value"), String(attempt));
+      f.git("-C", f.worktree, "add", "src");
+      f.git("-C", f.worktree, "commit", "-qm", `attempt ${attempt}`);
+      const revision = f.git("-C", f.worktree, "rev-parse", "HEAD");
+      await writeFile(
+        join(engine.directory, "A.report.json"),
+        JSON.stringify({
+          kind: "candidate",
+          attempt,
+          revision,
+          insight: "PRIVATE INSIGHT",
+        }),
+      );
+      return revision;
+    }
+    const first = await submit(1);
+    const landed = await engine.tick("reconcile");
+    expect(f.git("rev-parse", "HEAD")).toBe(first);
+    expect(landed.runs.A?.fullGate?.status).toBe("pending");
+    expect(messages).toEqual([]);
+    at = 300_000;
+    if (scenario === "lost creation") return proveCreationRecovery();
+    if (scenario.startsWith("stale send")) return proveStaleSendRecovery();
+
+    async function proveStaleSendRecovery() {
+      const send = f.host.send.bind(f.host);
+      const obsolete: string[] = [];
+      f.host.send = async (thread, message) => {
+        const gateRuns = await readFile(log, "utf8");
+        if (thread !== "T-reviewer" || gateRuns !== `${first}\n`)
+          return send(thread, message);
+        obsolete.push(message);
+        throw new Error("lost stale reviewer send response");
+      };
+      let lookup: "inconclusive" | "present" | "absent" = "inconclusive";
+      const lookups: string[] = [];
+      f.host.lookupDelivery = async (thread, message) => {
+        expect(thread).toBe("T-reviewer");
+        lookups.push(message);
+        return lookup;
+      };
+      expect(await engine.tick("reconcile").catch(String)).toContain(
+        "lost stale reviewer send response",
+      );
+      f.git("commit", "--allow-empty", "-qm", "advance integration");
+      const stale = await f.factory(() => at).tick("reconcile");
+      expect(stale.runs.A?.fullGate?.status).toBe("stale");
+      expect(lookups).toEqual([]);
+      f.git("reset", "--hard", first);
+      at = 600_000;
+      const held = await f.factory(() => at).tick("reconcile");
+      expect(held.runs.A).toMatchObject({
+        fullGate: { status: "stale" },
+        review: { delivery: "sending" },
+      });
+      expect(held.runs.B).toBeUndefined();
+      expect(lookups).toEqual(obsolete);
+      expect(await readFile(log, "utf8")).toBe(`${first}\n`);
+
+      lookup = scenario === "stale send present" ? "present" : "absent";
+      const restarted = f.factory(() => at);
+      const recovered = await restarted.tick("reconcile");
+      const { review } = landedReview(recovered.runs.A);
+      expect(recovered.runs.A?.fullGate?.status).toBe("verified");
+      expect(review.gateId).not.toBe(stale.runs.A?.fullGate?.id);
+      expect(obsolete).toHaveLength(1);
+      expect(lookups).toEqual([obsolete[0], obsolete[0]]);
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).not.toBe(obsolete[0]);
+      expect(await readFile(log, "utf8")).toBe(`${first}\n${first}\n`);
+      expect((await restarted.tick("reconcile")).runs.B).toBeUndefined();
+      expect(ledger.writes).toEqual([]);
+    }
+
+    async function proveCreationRecovery() {
+      const create = f.host.create.bind(f.host);
+      let attempts = 0;
+      f.host.create = async (...args) => {
+        if (args[3] === "reviewer") {
+          attempts++;
+          expect(args.slice(1, 3)).toEqual([
+            "anthropic/claude-fable-5-2",
+            "high",
+          ]);
+          if (attempts === 1) throw new Error("lost reviewer creation");
+          expect(await readFile(log, "utf8")).toBe(`${first}\n${first}\n`);
+        }
+        return create(...args);
+      };
+      expect(await engine.tick("reconcile").catch(String)).toContain(
+        "lost reviewer creation",
+      );
+      const restarted = f.factory(() => at);
+      const held = await restarted.tick("reconcile");
+      expect(held.runs.A).toMatchObject({
+        kind: "done",
+        incident: { reason: "creation-unknown", attempt: 1, base },
+        review: { stage: "post-landing", delivery: "creating" },
+      });
+      expect(held.runs.B).toBeUndefined();
+      expect(attempts).toBe(1);
+      expect(ledger.writes).toEqual([]);
+      f.git("commit", "--allow-empty", "-qm", "advance integration");
+      const stale = (await restarted.tick("reconcile")).runs.A!;
+      expect(stale.fullGate?.status).toBe("stale");
+      f.git("reset", "--hard", first);
+      expect((await restarted.tick("reconcile")).runs.A?.fullGate?.status).toBe(
+        "stale",
+      );
+      expect(attempts).toBe(1);
+      const request = {
+        ticket: "A",
+        incident: stale.incident!.id,
+        decision: "Inspected reviewer creation; no thread exists",
+      };
+      const retry = (owner: ThreadID) =>
+        restarted.tick("retry-create", owner, undefined, request);
+      expect(await retry("T-other").catch(String)).toMatch(/owner|owning/i);
+      const cleared = await retry("T-owner");
+      expect(cleared.runs.A).toMatchObject({ fullGate: { status: "stale" } });
+      expect(cleared.runs.A).not.toHaveProperty("review");
+      expect(cleared.runs.A?.incident).toBeUndefined();
+      expect(cleared.runs.B).toBeUndefined();
+      expect(await retry("T-owner").catch(String)).toContain(
+        "exact current incident",
+      );
+      expect(attempts).toBe(1);
+      expect(await readFile(log, "utf8")).toBe(`${first}\n`);
+      await proveFreshCreation(stale.fullGate?.id);
+
+      async function proveFreshCreation(staleGateId: string | undefined) {
+        const recovered = await f.factory(() => at).tick("reconcile");
+        const fresh = recovered.runs.A;
+        if (fresh?.kind !== "done" || !fresh.review)
+          throw new Error("Expected fresh review");
+        expect(fresh.fullGate?.status).toBe("verified");
+        expect(fresh.review.gateId).toBe(fresh.fullGate?.id);
+        expect(fresh.review.gateId).not.toBe(staleGateId);
+        expect(recovered.runs.B).toBeUndefined();
+        expect(await readFile(log, "utf8")).toBe(`${first}\n${first}\n`);
+        expect(attempts).toBe(2);
+        expect(messages).toHaveLength(1);
+        expect(ledger.writes).toEqual([]);
+        await writeFile(
+          fresh.review.report,
+          JSON.stringify({
+            ticket: "A",
+            attempt: 1,
+            revision: first,
+            base,
+            stage: "post-landing",
+            gateId: fresh.fullGate?.id,
+            kind: "pass",
+            findings: [],
+          }),
+        );
+        const accepted = await restarted.tick("reconcile");
+        expect(accepted.runs.A?.fullGate?.status).toBe("passed");
+        expect((await restarted.tick("reconcile")).runs.B).toMatchObject({
+          kind: "running",
+          base: first,
+        });
+      }
+    }
+    const reviewed = await engine.tick("reconcile");
+    expect(reviewed.runs.B).toBeUndefined();
+    expect(await readFile(log, "utf8")).toBe(`${first}\n`);
+    if (scenario === "skip") {
+      expect(reviewed.runs.A).toMatchObject({
+        acceptedAt: at,
+        fullGate: { status: "passed" },
+      });
+      expect(messages).toEqual([]);
+      expect(ledger.writes.map(({ sha }) => sha)).toEqual([first]);
+      return;
+    }
+    expect(runStage(reviewed.runs.A).stage).toBe("reviewing");
+    expect(ledger.writes).toEqual([]);
+    const { run, review } = landedReview(reviewed.runs.A);
+    const { ticket, attempt, revision, stage, gateId, report, model } = review;
+    expect({ ticket, attempt, revision, stage }).toEqual({
+      ticket: "A",
+      attempt: 1,
+      revision: first,
+      stage: "post-landing",
+    });
+    expect(messages[0]).toContain(
+      `Coordinator gate evidence: ${config.verify} passed`,
+    );
+    expect(messages[0]).not.toContain("PRIVATE INSIGHT");
+    expect(gateId).toBe(run.fullGate?.id);
+    const firstIdentity = { ticket, attempt, revision, base, stage, gateId };
+    if (scenario === "foreign verdict")
+      return proveTicketOwnership(run.definition);
+
+    function landedReview(run: State["runs"][string] | undefined) {
+      if (run?.kind !== "done" || !run.review)
+        throw new Error("Expected landed review");
+      return { run, review: run.review };
+    }
+
+    async function proveTicketOwnership(definition: string | undefined) {
+      const foreign = JSON.stringify({
+        ...firstIdentity,
+        ticket: "B",
+        kind: "pass",
+        findings: [],
+      });
+      await writeFile(report, foreign);
+      const pending = await engine.tick("reconcile");
+      expect(pending.runs.A?.fullGate?.status).toBe("verified");
+      expect(pending.runs.B).toBeUndefined();
+      const saved = openPersistence(engine.directory, []);
+      try {
+        const persisted = saved.state.runs.A;
+        if (persisted?.kind !== "done" || !persisted.review)
+          throw new Error("Expected landed review");
+        persisted.review.evidence = foreign;
+        saved.commit(saved.state, "A", "review-verdict", foreign, [
+          {
+            attempt,
+            revision,
+            definition: definition ?? null,
+            kind: "review",
+            outcome: "pass",
+            tool: model,
+            content: foreign,
+          },
+        ]);
+      } finally {
+        saved.close();
+      }
+      const replayed = await f.factory(() => at).tick("reconcile");
+      expect(replayed.runs.A?.fullGate?.status).toBe("verified");
+      expect(replayed.runs.B).toBeUndefined();
+      const db = new Database(join(engine.directory, "state.sqlite"));
+      try {
+        db.run(
+          "UPDATE runs SET data = json_set(data, '$.review.ticket', 'B') WHERE ticket = 'A'",
+        );
+      } finally {
+        db.close();
+      }
+      expect(() => factoryStatus(engine.directory)).toThrow(
+        "Invalid factory run A",
+      );
+      expect(ledger.writes).toEqual([]);
+    }
+    if (scenario === "review") {
+      await writeFile(
+        report,
+        JSON.stringify({ ...firstIdentity, kind: "pass", findings: [] }),
+      );
+      expect((await engine.tick("reconcile")).runs.A).toMatchObject({
+        acceptedAt: at,
+      });
+      expect(messages).toHaveLength(1);
+      return;
+    }
+    await proveRepairAndStaleness(run.thread);
+
+    async function proveRepairAndStaleness(worker: ThreadID) {
+      const server = startDashboard({ root: f.root, port: 0 });
+      try {
+        const feed = await (
+          await fetch(`http://localhost:${server.port}/api/status`)
+        ).json();
+        expect(feed.tasks[0]).toMatchObject({
+          title: "A - post-landing review (sent)",
+          acceptedAt: null,
+          fullGate: { landedRevision: first, verifiedRevision: first },
+          evidence: { acceptance: null, review: { stage, pending: true } },
+        });
+        expect(JSON.stringify(feed)).not.toContain(gateId!);
+      } finally {
+        await server.stop(true);
+      }
+      await writeFile(
+        report,
+        JSON.stringify({
+          ...firstIdentity,
+          kind: "issues",
+          findings: [
+            {
+              severity: "warning",
+              location: "src/value:1",
+              evidence: "wrong value",
+              correction: "repair value",
+            },
+          ],
+        }),
+      );
+      const send = f.host.send.bind(f.host);
+      const corrections: string[] = [];
+      f.host.send = async (thread, message) => {
+        if (thread !== worker || !message.includes("repair value"))
+          return send(thread, message);
+        corrections.push(message);
+        throw new Error("lost correction response");
+      };
+      f.host.lookupDelivery = async () => "inconclusive";
+      expect(await engine.tick("reconcile").catch(String)).toContain(
+        "lost correction response",
+      );
+      let restarted = f.factory(() => at);
+      expect((await restarted.tick("reconcile")).runs.A?.kind).toBe(
+        "uncertain",
+      );
+      f.host.lookupDelivery = async (thread, message) =>
+        thread === worker && corrections.includes(message)
+          ? "present"
+          : "inconclusive";
+      restarted = f.factory(() => at);
+      const repairing = await restarted.tick("reconcile");
+      expect(repairing.runs.A).toMatchObject({
+        kind: "running",
+        thread: worker,
+        attempt: 2,
+        base: first,
+      });
+      expect(repairing.runs.B).toBeUndefined();
+      expect(messages).toHaveLength(1);
+      expect(corrections).toHaveLength(1);
+      const second = await submit(2);
+      await restarted.tick("reconcile");
+      expect(f.git("rev-parse", "HEAD")).toBe(second);
+      at = 600_000;
+      const rechecked = await restarted.tick("reconcile");
+      const repaired = rechecked.runs.A;
+      if (repaired?.kind !== "done" || !repaired.review)
+        throw new Error("Expected fresh review");
+      expect(repaired.review).toMatchObject({
+        attempt: 2,
+        revision: second,
+        base,
+      });
+      expect(await readFile(log, "utf8")).toBe(`${first}\n${second}\n`);
+      const pass = {
+        ...firstIdentity,
+        attempt: 2,
+        revision: second,
+        kind: "pass",
+        findings: [],
+      };
+      await writeFile(repaired.review.report, JSON.stringify(pass));
+      expect((await restarted.tick("reconcile")).runs.B).toBeUndefined();
+      expect(ledger.writes).toEqual([]);
+      await writeFile(
+        repaired.review.report,
+        JSON.stringify({ ...pass, gateId: repaired.review.gateId }),
+      );
+      f.git("commit", "--allow-empty", "-qm", "unreviewed integration advance");
+      const stale = await restarted.tick("reconcile");
+      expect(stale.runs.A?.fullGate?.status).toBe("stale");
+      expect(stale.runs.B).toBeUndefined();
+      expect(ledger.writes).toEqual([]);
+      f.git("reset", "--hard", second);
+      const refreshed = (await restarted.tick("reconcile")).runs.A;
+      if (refreshed?.kind !== "done" || !refreshed.review)
+        throw new Error("Expected revalidation");
+      expect(refreshed.review.gateId).not.toBe(repaired.review.gateId);
+      await writeFile(
+        refreshed.review.report,
+        JSON.stringify({ ...pass, gateId: repaired.review.gateId }),
+      );
+      expect((await restarted.tick("reconcile")).runs.B).toBeUndefined();
+      expect(ledger.writes).toEqual([]);
+      await writeFile(
+        refreshed.review.report,
+        JSON.stringify({ ...pass, gateId: refreshed.review.gateId }),
+      );
+      await restarted.tick("reconcile");
+      const accepted = await restarted.tick("reconcile");
+      expect(accepted.runs.A).toMatchObject({
+        acceptedBase: base,
+        acceptedAt: at,
+        revision: second,
+      });
+      expect(accepted.runs.B).toMatchObject({ kind: "running", base: second });
+      expect(ledger.writes.map(({ sha }) => sha)).toEqual([second]);
+      expect(messages).toHaveLength(3);
+    }
+  },
+);
 
 test.each(["pass", "fail", "stale", "restart", "default"] as const)(
   "scheduled proof handles %s on the exact landed revision",

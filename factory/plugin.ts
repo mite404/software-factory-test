@@ -629,7 +629,7 @@ export default function registerFactory(
         reasoningEffort,
         instructions:
           role === "reviewer"
-            ? "Independently review the named post-graft code artifact. Read only code, requirements, coordinator gate evidence, and the ce-code-review skill's SKILL.md and referenced files in the synced user skill caches. Do not implement or delegate. Write only the requested verdict report."
+            ? "Independently review the named code artifact. Read only code, requirements, coordinator gate evidence, and the ce-code-review skill's SKILL.md and referenced files in the synced user skill caches. Do not implement or delegate. Write only the requested verdict report."
             : role === "observer"
               ? observerInstructions
               : "Implement the assigned factory ticket in its named local repository. Keep tool output concise.",
@@ -756,10 +756,14 @@ export default function registerFactory(
   ) {
     if (!("review" in run) || !run.review) return row;
     const review = run.review;
-    row.title = `${row.id} - post-graft review (${review.delivery})`;
+    row.title = `${row.id} - ${review.stage} review (${review.delivery})`;
     row.thread = review.thread ?? null;
     row.revision = review.revision;
-    if (run.kind === "done" || !review.thread || review.delivery !== "sent")
+    if (
+      runStage(run).status !== "unknown" ||
+      !review.thread ||
+      review.delivery !== "sent"
+    )
       return row;
     const observed = await observe(review.thread, tools);
     row.reviewSent = true;
@@ -1106,7 +1110,7 @@ export default function registerFactory(
         return JSON.stringify(
           {
             ...state,
-            lifecycle: lifecycleStatus(),
+            lifecycle: lifecycleStatus(state.runs),
             pipelineSteps,
             stages,
             stage: Object.fromEntries(

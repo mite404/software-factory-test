@@ -137,7 +137,8 @@
       "required": ["landing", "schedule"],
       "properties": {
         "landing": { "type": "string", "minLength": 1 },
-        "schedule": { "type": "string", "minLength": 1 }
+        "schedule": { "type": "string", "minLength": 1 },
+        "reviewStage": { "const": "post-landing" }
       }
     },
     "permissions": {

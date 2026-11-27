@@ -61,6 +61,7 @@ import {
   WatchdogUnavailable,
 } from "./watchdog";
 import {
+  parseReviewVerdict,
   reviewPrompt,
   reviewVerdict,
   validReview,
@@ -408,7 +409,19 @@ function actionPermissions(raw: Record<string, unknown>) {
   };
 }
 
-function workerRole(raw: Record<string, unknown>) {
+function effectiveReviewStage(
+  review: boolean,
+  scheduleGates: boolean,
+  scheduledGate: ReturnType<typeof parseScheduledGate>,
+) {
+  return review && scheduleGates ? scheduledGate?.reviewStage : undefined;
+}
+
+function workerRole(
+  raw: Record<string, unknown>,
+  scheduledGate: ReturnType<typeof parseScheduledGate>,
+  scheduleGates: boolean,
+) {
   const model = text(raw.workerModel);
   if (!/^[^/]+\/.+$/.test(model)) throw new Error("Expected provider/model");
   const [provider, ...name] = model.split("/");
@@ -419,9 +432,10 @@ function workerRole(raw: Record<string, unknown>) {
   if (raw.review !== undefined && typeof raw.review !== "boolean")
     throw new Error("Invalid review; expected boolean");
   const review = raw.review === true;
-  if (review) reviewerModel(workerModel);
+  const stage = effectiveReviewStage(review, scheduleGates, scheduledGate);
+  if (review) reviewerModel(workerModel, stage);
   const providerLimit = raw.providerLimit;
-  if (!validProviderLimitPolicy(providerLimit, workerModel))
+  if (!validProviderLimitPolicy(providerLimit, workerModel, stage))
     throw new Error(
       "Invalid providerLimit; expected wait or fallback with a known independent, non-default reviewerModel and optional workerModel",
     );
@@ -431,14 +445,18 @@ function workerRole(raw: Record<string, unknown>) {
     workerRunner,
     review,
     providerLimit,
-    lightWorker: lightRole(raw, review),
+    lightWorker: lightRole(raw, review, stage),
   };
 }
 
 /** Validate the optional light lane against review and limit policy.
  * @throws When capacity 2 and lightWorker are not set together, or the light worker is invalid.
  */
-export function lightRole(raw: Record<string, unknown>, review: boolean) {
+export function lightRole(
+  raw: Record<string, unknown>,
+  review: boolean,
+  stage?: Review["stage"],
+) {
   if ((raw.capacity === 2) !== (raw.lightWorker !== undefined))
     throw new Error(
       "capacity 2 requires lightWorker, and lightWorker requires capacity 2",
@@ -449,8 +467,8 @@ export function lightRole(raw: Record<string, unknown>, review: boolean) {
     throw new Error(
       "Invalid lightWorker; expected a known provider/model and a supported effort",
     );
-  if (review) reviewerModel(light.model);
-  if (!validProviderLimitPolicy(raw.providerLimit, light.model))
+  if (review) reviewerModel(light.model, stage);
+  if (!validProviderLimitPolicy(raw.providerLimit, light.model, stage))
     throw new Error(
       "Invalid providerLimit for lightWorker; expected an independent reviewerModel",
     );
@@ -535,8 +553,9 @@ async function validateConfiguration(
     !/^[a-f0-9]{64}$/.test(text(raw.bookkeepingSHA256))
   )
     throw new Error("Invalid bookkeeping digest");
-  const role = workerRole(raw);
   const permissions = actionPermissions(raw);
+  const scheduledGate = parseScheduledGate(raw.scheduledGate);
+  const role = workerRole(raw, scheduledGate, permissions.scheduleGates);
   const prd = localPath(root, text(raw.prd));
   const tickets = localPath(root, text(raw.tickets));
   const ticketFiles = optionalLocalPath(root, raw.ticketFiles);
@@ -560,7 +579,7 @@ async function validateConfiguration(
     scope,
     verify,
     checks,
-    ...optionalField("scheduledGate", parseScheduledGate(raw.scheduledGate)),
+    ...optionalField("scheduledGate", scheduledGate),
     setup,
     ...optionalField("hooks", hooks),
     watchdog,
@@ -1911,6 +1930,7 @@ type ProofRows = (Omit<Evidence, "content"> & {
   intact: boolean;
 })[];
 type LandedRun = Extract<Run, { kind: "done" }>;
+type ReviewRun = LandedRun | Extract<Run, { kind: "running" }>;
 
 function proofDigest(
   proof: ProofRows,
@@ -1977,7 +1997,9 @@ function fullProofIntact(
   return (
     !!landing &&
     !!fullDigest &&
-    landing.review === (run.review?.evidence && sha256(run.review.evidence)) &&
+    (landing.postLandingReview ||
+      landing.review ===
+        (run.review?.evidence && sha256(run.review.evidence))) &&
     [
       [
         proofDigest(proof, ["report"], "candidate-typed", landing.report) ??
@@ -2053,11 +2075,21 @@ async function writeGateExcerpt(
 }
 
 function landingPolicy(run: Run, pin: DefinitionPin) {
-  return run.definition && !run.fullGate ? pin.scheduledGate : undefined;
+  return run.definition && (!run.fullGate || postLandingPolicy(pin))
+    ? pin.scheduledGate
+    : undefined;
+}
+
+function postLandingPolicy(pin: DefinitionPin) {
+  return pin.review && pin.scheduledGate?.reviewStage === "post-landing";
 }
 
 function preserveFullFailure(run: Run, saved: Run | undefined) {
-  if (run.kind !== "done" && saved?.fullGate?.status === "failed")
+  if (
+    run.kind !== "done" &&
+    (saved?.fullGate?.status === "failed" ||
+      saved?.fullGate?.status === "review-rejected")
+  )
     run.fullGate ??= saved.fullGate;
 }
 
@@ -2326,6 +2358,9 @@ function runSummary(ticket: string, run: Run) {
     progressAt: since,
     incident: incident ? { id: incident.id, reason: incident.reason } : null,
     review: "review" in run && run.review ? run.review.delivery : null,
+    ...("review" in run && run.review?.stage === "post-landing"
+      ? { reviewStage: run.review.stage }
+      : {}),
     ...optionalField("fullGate", projectFullGate(run)),
   };
 }
@@ -2683,18 +2718,19 @@ function retryAdmission(state: State, action: string, twoLanes: boolean) {
 
 function checkpointIdentity(run?: Run) {
   if (!run) return undefined;
-  const checkpoint =
-    run.kind === "parked"
-      ? run.repair
-      : run.kind === "blocked"
-        ? (run.repair ?? run.checkpoint ?? run)
-        : run;
+  if (run.kind === "done") return landedReviewCheckpoint(run.review);
+  const checkpoint = run.kind === "uncertain" ? run : runCheckpoint(run)!;
   if (!("base" in checkpoint) || typeof checkpoint.base !== "string")
     return undefined;
   return {
     base: checkpoint.base,
     attempt: "attempt" in checkpoint ? checkpoint.attempt : 0,
   };
+}
+
+function landedReviewCheckpoint(review: Review | undefined) {
+  if (review?.stage === "post-landing")
+    return { base: review.base, attempt: review.attempt };
 }
 
 function requireIncident(
@@ -3749,15 +3785,19 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         }
       };
       function watchRunning() {
-        for (const run of Object.values(state.runs))
-          if (run.kind === "running") {
-            watch(run.thread);
-            if (run.review?.thread) watch(run.review.thread);
-          }
+        for (const run of Object.values(state.runs)) {
+          if (run.kind === "running") watch(run.thread);
+          if (
+            (run.kind === "running" ||
+              (run.kind === "done" && run.fullGate?.status === "verified")) &&
+            run.review?.thread
+          )
+            watch(run.review.thread);
+        }
       }
       watchRunning();
       // The Foreman's decision that no thread exists is the only license to repeat a creation.
-      async function retryCreate() {
+      function authorizeCreationRetry() {
         const request = repairRequest ?? {
           ticket: "",
           decision: "",
@@ -3769,30 +3809,49 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           text(owner) !== state.owner ||
           !task ||
           !admitsRun(run, "retry-create") ||
-          !run.incident ||
+          run.incident?.reason !== "creation-unknown" ||
           run.incident.id !== request.incident ||
           !request.decision.trim()
         )
           throw new Error(
             "Retry-create requires the owning Foreman, a parked creation, its exact current incident and a decision",
           );
+        return { task, run, decision: request.decision };
+      }
+
+      async function retryCreate() {
+        const { task, run, decision } = authorizeCreationRetry();
+        if (
+          run.kind === "done" &&
+          config.scheduleGates &&
+          run.fullGate?.status === "stale" &&
+          run.review?.delivery === "creating"
+        ) {
+          // The owner cleared the ambiguity, not the stale proof. Reconcile gates again.
+          delete run.review;
+          delete run.incident;
+          commit(task.id, "create-retried", decision);
+          return state;
+        }
         const create =
           run.kind === "creating"
             ? () => createWorker(task, run.base, run.worktree)
             : recreateReviewer(task, run);
         delete run.incident;
-        commit(task.id, "create-retried", request.decision);
+        commit(task.id, "create-retried", decision);
         return create();
       }
       // A reviewer is recreated only over the exact staged candidate it was creating for.
-      function recreateReviewer(
-        task: Task,
-        run: Extract<Run, { kind: "running" }>,
-      ) {
-        const review = run.review!;
+      function recreateReviewer(task: Task, run: ReviewRun) {
+        const review = run.review;
         if (
+          review?.delivery !== "creating" ||
           !existsSync(review.worktree) ||
-          !unchanged(review.worktree, review.revision)
+          !unchanged(review.worktree, review.revision) ||
+          (run.kind === "done" &&
+            (!config.scheduleGates ||
+              !landedReviewIdentity(task.id, review) ||
+              !scheduledProof(task.id, run)))
         )
           throw new Error(
             "Retry-create refuses a reviewer whose staged worktree changed or is missing",
@@ -3841,21 +3900,26 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         };
       }
 
+      async function lookupDelivery(
+        thread: ThreadID,
+        intent: DeliveryIntent | undefined,
+      ) {
+        if (!intent || !host.lookupDelivery) return "inconclusive";
+        try {
+          return await host.lookupDelivery(thread, intent.message);
+        } catch {
+          return "inconclusive";
+        }
+      }
+
       async function recoverDelivery(
         task: Task,
         thread: ThreadID,
         intent: DeliveryIntent | undefined,
         worker?: Extract<Run, { kind: "running" }>,
       ) {
-        if (!intent || !host.lookupDelivery) return false;
-        let found: Awaited<
-          ReturnType<NonNullable<NativeHost["lookupDelivery"]>>
-        >;
-        try {
-          found = await host.lookupDelivery(thread, intent.message);
-        } catch {
-          return false;
-        }
+        if (!intent) return false;
+        const found = await lookupDelivery(thread, intent);
         if (found === "inconclusive") return false;
         if (found === "absent") {
           if (intent.repeated) return false;
@@ -4112,6 +4176,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         report: CandidateSubmission,
         revision: string,
         log: string,
+        postLandingReview = false,
       ) {
         const target = git(root, "rev-parse", "HEAD");
         const pin = runDefinition(run, config, directory);
@@ -4137,7 +4202,15 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           report,
           revision,
           log,
-          scheduled ? proof : undefined,
+          scheduled
+            ? {
+                ...proof,
+                ...optionalField(
+                  "postLandingReview",
+                  postLandingReview ? (true as const) : undefined,
+                ),
+              }
+            : undefined,
         );
       }
 
@@ -4149,6 +4222,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         log: string,
         proof: LandedRun["landingProof"],
       ) {
+        const acceptedBase = run.fullGate?.base ?? run.base;
         if (!proof)
           await store.ledger.record({
             pr: queue.indexOf(task) + 1,
@@ -4163,7 +4237,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           executor: run.executor,
           ...laneField(run),
           revision,
-          acceptedBase: run.fullGate?.base ?? run.base,
+          acceptedBase,
           ...(proof
             ? { requirements: run.requirements, landingProof: proof }
             : { acceptedAt: now() }),
@@ -4179,7 +4253,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           landed.fullGate = {
             status: "pending",
             revision,
-            base: run.base,
+            base: acceptedBase,
             definition: run.definition!,
             landedAt: now(),
             id: randomUUID(),
@@ -4216,12 +4290,9 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         run: Extract<Run, { kind: "running" }>,
         report: CandidateSubmission,
       ) {
-        if (
-          landingPermissionRevoked(
-            landingPolicy(run, runDefinition(run, config, directory)),
-          )
-        )
-          return;
+        const pin = runDefinition(run, config, directory);
+        const scheduled = landingPolicy(run, pin);
+        if (landingPermissionRevoked(scheduled)) return;
         const { revision, log, feedback, rerunLog, outcome, result } =
           await candidateEvidence(directory, task, run, report, config, {
             started(pid, timeoutMs) {
@@ -4260,19 +4331,29 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
               JSON.stringify({ log, rerunLog }),
             );
           const evidence = rerunLog ?? log;
-          const reason = skipReview(task, run);
-          if (!reason) {
-            await beginReview(task, run, report, revision, evidence);
-          } else {
-            recordOnce(task.id, "review-skipped", {
-              attempt: run.attempt,
-              revision,
-              base: run.base,
-              skipReason: reason,
-            });
-            await accept(task, run, report, revision, evidence);
-          }
+          await reviewOrLand(task, run, report, revision, evidence, scheduled);
         } else await reject(task, run, log, "gate", feedback);
+      }
+
+      async function reviewOrLand(
+        task: Task,
+        run: Extract<Run, { kind: "running" }>,
+        report: CandidateSubmission,
+        revision: string,
+        log: string,
+        scheduled: DefinitionPin["scheduledGate"],
+      ) {
+        const reason = skipReview(task, run);
+        if (!reason && scheduled?.reviewStage !== "post-landing")
+          return beginReview(task, run, report, revision, log);
+        if (reason)
+          recordOnce(task.id, "review-skipped", {
+            attempt: run.attempt,
+            revision,
+            base: run.base,
+            skipReason: reason,
+          });
+        await accept(task, run, report, revision, log, !reason);
       }
 
       // Read from the passed gate's evidence record, the fact recorded when that gate returned.
@@ -4303,6 +4384,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           Extract<Run, { kind: "running" }>["rejectedBy"]
         >,
         feedback = evidence,
+        durableFeedback = rejectedBy === "report",
       ) {
         const cause = stopCause(run);
         delete run.review;
@@ -4321,7 +4403,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           run.rejectedAttempt = run.attempt;
           run.attempt++;
           run.delivery = "queued";
-          if (rejectedBy === "report") run.feedback = feedback;
+          if (durableFeedback) run.feedback = feedback;
           commit(task.id, "rejected", JSON.stringify(rejected));
         } else {
           state.runs[task.id] = {
@@ -4342,7 +4424,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           );
           return;
         }
-        if (rejectedBy === "report") return settleWorkerDelivery(task, run);
+        if (durableFeedback) return settleWorkerDelivery(task, run);
         await send(
           task,
           run,
@@ -4351,10 +4433,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         return state;
       }
 
-      async function deliverReview(
-        task: Task,
-        run: Extract<Run, { kind: "running" }>,
-      ) {
+      async function deliverReview(task: Task, run: ReviewRun) {
         const review = run.review!;
         if (!review.thread || review.delivery !== "queued") return;
         const message = reviewPrompt(
@@ -4365,7 +4444,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         );
         review.deliveryIntent = deliveryIntent(
           task,
-          run.attempt,
+          review.attempt,
           "reviewer",
           message,
         );
@@ -4416,32 +4495,46 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
             `${task.id}-${run.attempt}-${revision}-post-graft.review.json`,
           ),
         };
+        await stageReview(task, run, review);
+      }
+
+      async function stageReview(task: Task, run: ReviewRun, review: Review) {
         run.review = review;
         commit(task.id, "review-creating", JSON.stringify(review));
-        git(
-          root,
-          "worktree",
-          "add",
-          "-b",
-          `factory-stage/${task.id}-${randomUUID()}`,
-          worktree,
-          run.base,
-        );
-        git(worktree, "merge", "--ff-only", revision);
-        if (!unchanged(worktree, revision))
+        if (review.stage === "post-landing") {
+          git(
+            root,
+            "worktree",
+            "add",
+            "--detach",
+            review.worktree,
+            review.revision,
+          );
+        } else {
+          git(
+            root,
+            "worktree",
+            "add",
+            "-b",
+            `factory-stage/${task.id}-${randomUUID()}`,
+            review.worktree,
+            review.base,
+          );
+          git(review.worktree, "merge", "--ff-only", review.revision);
+        }
+        if (!unchanged(review.worktree, review.revision))
           throw new Error("Staged artifact changed");
         await createReviewer(task, run);
       }
 
-      async function createReviewer(
-        task: Task,
-        run: Extract<Run, { kind: "running" }>,
-      ) {
+      async function createReviewer(task: Task, run: ReviewRun) {
         const review = run.review!;
         review.thread = await host.create(
           state.owner!,
           review.model,
-          review.fallback ? "high" : "medium",
+          review.fallback || review.stage === "post-landing"
+            ? "high"
+            : "medium",
           "reviewer",
           review.executor,
         );
@@ -4475,7 +4568,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
 
       async function fallbackReviewer(
         task: Task,
-        run: Extract<Run, { kind: "running" }>,
+        run: ReviewRun,
         thread: ThreadID,
         activity: Activity,
       ) {
@@ -4487,7 +4580,12 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         )
           return false;
         const policy = runDefinition(run, config, directory).providerLimit;
-        if (review.fallback || policy?.mode !== "fallback") return false;
+        if (
+          review.fallback ||
+          policy?.mode !== "fallback" ||
+          policy.reviewerModel === review.model
+        )
+          return false;
         run.review = {
           ...review,
           model: policy.reviewerModel,
@@ -4510,7 +4608,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
 
       async function providerWait(
         task: Task,
-        run: Extract<Run, { kind: "running" }>,
+        run: ReviewRun,
         thread: ThreadID,
         activity: Activity,
       ) {
@@ -4717,11 +4815,12 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         }
       }
 
-      async function reviewIdle(
-        task: Task,
-        run: Extract<Run, { kind: "running" }>,
-      ) {
-        const activity = await runActivity(task, run, run.review!.thread!);
+      async function reviewIdle(task: Task, run: ReviewRun) {
+        const thread = run.review!.thread!;
+        const activity =
+          run.kind === "running"
+            ? await runActivity(task, run, thread)
+            : await landedReviewActivity(task, run, thread);
         if (activity === "error" || activity === "awaiting-approval") {
           const created = incident(
             task.id,
@@ -4735,6 +4834,19 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           commit(task.id, "review-recovered", activity);
         }
         return activity === "idle";
+      }
+
+      async function landedReviewActivity(
+        task: Task,
+        run: LandedRun,
+        thread: ThreadID,
+      ) {
+        const activity = await observe(thread);
+        if (!landedReviewIdentity(task.id, run.review!)) return "unknown";
+        if (await fallbackReviewer(task, run, thread, activity))
+          return "unknown";
+        if (await providerWait(task, run, thread, activity)) return "unknown";
+        return typeof activity === "object" ? "unknown" : activity;
       }
 
       async function settleReview(
@@ -4762,8 +4874,27 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           return;
         }
         if (!(await reviewIdle(task, run))) return;
-        const verdict = await reviewVerdict(review);
+        const verdict = await recordReviewVerdict(task, run);
         if (!verdict) return;
+        if (verdict.kind === "issues")
+          return reject(
+            task,
+            run,
+            verdict.evidence,
+            "review",
+            `${verdict.evidence}${reviewedAdvisory(task, run, review)}`,
+          );
+        await acceptReviewedCandidate(task, run, review);
+      }
+
+      async function recordReviewVerdict(task: Task, run: ReviewRun) {
+        const review = run.review!;
+        const verdict = await reviewVerdict(task.id, review);
+        if (
+          !verdict ||
+          (run.kind === "done" && !landedReviewIdentity(task.id, review))
+        )
+          return;
         if (review.evidence !== verdict.evidence) {
           review.evidence = verdict.evidence;
           // The verdict is preserved with its event, before acceptance can rebase or block.
@@ -4781,15 +4912,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
             ],
           );
         }
-        if (verdict.kind === "issues")
-          return reject(
-            task,
-            run,
-            verdict.evidence,
-            "review",
-            `${verdict.evidence}${reviewedAdvisory(task, run, review)}`,
-          );
-        await acceptReviewedCandidate(task, run, review);
+        return verdict;
       }
 
       async function acceptReviewedCandidate(
@@ -4823,10 +4946,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         );
       }
 
-      async function settleReviewDelivery(
-        task: Task,
-        run: Extract<Run, { kind: "running" }>,
-      ) {
+      async function settleReviewDelivery(task: Task, run: ReviewRun) {
         const review = run.review!;
         if (review.delivery === "queued") return deliverReview(task, run);
         if (review.delivery !== "sending") return;
@@ -5269,6 +5389,11 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         const worktree = join(directory, "worktrees", ticket);
         requireWorktree(root, worktree);
         if (!unchanged(worktree, gate.revision)) return;
+        if (
+          gate.status === "review-rejected" &&
+          reviewOutcome(ticket, run) !== "issues"
+        )
+          return;
         const repair = {
           kind: "running" as const,
           thread: run.thread,
@@ -5280,10 +5405,15 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           requirements: run.requirements,
           definition: run.definition,
           executor: run.executor,
+          review: gate.status === "review-rejected" ? run.review : undefined,
           ...laneField(run),
           fullGate: gate,
         };
         state.runs[ticket] = repair;
+        if (gate.status === "review-rejected") {
+          const findings = run.review!.evidence!;
+          return reject(task, repair, findings, "review", findings, true);
+        }
         await reject(
           task,
           repair,
@@ -5298,21 +5428,44 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         if (!ticket) return false;
         const run = state.runs[ticket]!;
         if (run.kind !== "done" || !run.fullGate) return false;
-        const gate = run.fullGate;
         // Hold all coordinator landings while a fast landing lacks full proof.
-        if (!authorizedFullWake() || gate.status === "running") return true;
-        if (gate.status === "failed") {
-          await routeFullFailure(ticket, run);
-          return true;
-        }
-        if (git(root, "rev-parse", "HEAD") !== gate.revision) {
-          staleFullGate(ticket, run, gate);
-          return true;
-        }
-        if (gate.status === "verified")
-          await acceptFullProof(ticket, run, gate);
-        else await runDueFullGate(ticket, run, gate);
+        if (authorizedFullWake())
+          await settleLandedGate(ticket, run, run.fullGate);
         return true;
+      }
+
+      async function settleLandedGate(
+        ticket: string,
+        run: LandedRun,
+        gate: NonNullable<Run["fullGate"]>,
+      ) {
+        if (gate.status === "running") return;
+        if (["failed", "review-rejected"].includes(gate.status))
+          return routeFullFailure(ticket, run);
+        if (git(root, "rev-parse", "HEAD") !== gate.revision)
+          return staleFullGate(ticket, run, gate);
+        if (gate.status === "verified")
+          return settleFullVerification(ticket, run, gate);
+        if (await holdsFullGateForReview(ticket, run)) return;
+        await runDueFullGate(ticket, run, gate);
+      }
+
+      async function holdsFullGateForReview(ticket: string, run: LandedRun) {
+        const review = run.review;
+        if (review?.delivery === "creating") return true;
+        if (review?.delivery !== "sending") return false;
+        const { thread, deliveryIntent: intent } = review;
+        const found = await lookupDelivery(thread!, intent);
+        if (found === "inconclusive") return true;
+        // Either conclusive result retires the obsolete brief, never replays it.
+        delete run.review;
+        delete run.incident;
+        commit(
+          ticket,
+          "stale-review-delivery-resolved",
+          JSON.stringify({ thread, key: intent?.key, evidence: found }),
+        );
+        return false;
       }
 
       function authorizedFullWake() {
@@ -5344,20 +5497,126 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         recordFullGate(ticket, run.fullGate);
       }
 
+      function landedReviewIdentity(ticket: string, review: Review) {
+        const paths = [review.worktree, join(directory, "worktrees", ticket)];
+        return (
+          review.ticket === ticket &&
+          unchanged(root, review.revision) &&
+          paths.every(
+            (path) => existsSync(path) && unchanged(path, review.revision),
+          )
+        );
+      }
+
+      function scheduledProof(ticket: string, run: LandedRun) {
+        const gate = run.fullGate;
+        if (gate?.status !== "verified") return;
+        const proof = persistence!
+          .proof(ticket, run.attempt!, gate.revision)
+          .filter((row) => row.definition === gate.definition);
+        if (fullProofIntact(proof, run, gate.sha256)) return proof;
+      }
+
+      function reviewOutcome(ticket: string, run: LandedRun) {
+        const review = run.review;
+        const evidence = review?.evidence;
+        if (!evidence) return;
+        const verdict = parseReviewVerdict(ticket, review, evidence);
+        if (!verdict) return;
+        const proof = persistence!
+          .proof(ticket, run.attempt!, run.revision)
+          .filter((row) => row.definition === run.definition);
+        if (proofDigest(proof, ["review"], verdict.kind, sha256(evidence)))
+          return verdict.kind;
+      }
+
+      async function settleFullVerification(
+        ticket: string,
+        run: LandedRun,
+        gate: Extract<NonNullable<Run["fullGate"]>, { status: "verified" }>,
+      ) {
+        if (!unchanged(root, gate.revision) || !scheduledProof(ticket, run))
+          return;
+        if (!run.landingProof?.postLandingReview)
+          return acceptFullProof(ticket, run, gate);
+        const task = queue.find(({ id }) => id === ticket);
+        if (!task) return;
+        const review = run.review;
+        if (!review) return beginLandedReview(task, run, gate);
+        if (!landedReviewIdentity(ticket, review)) return;
+        if (review.delivery !== "sent") return settleReviewDelivery(task, run);
+        await finishLandedReview(task, run, gate, review);
+      }
+
+      async function finishLandedReview(
+        task: Task,
+        run: LandedRun,
+        gate: Extract<NonNullable<Run["fullGate"]>, { status: "verified" }>,
+        review: Review,
+      ) {
+        const ticket = task.id;
+        if (!review.evidence && (await reviewIdle(task, run)))
+          await recordReviewVerdict(task, run);
+        const outcome = reviewOutcome(ticket, run);
+        if (!outcome) return;
+        if (outcome === "pass") return acceptFullProof(ticket, run, gate);
+        const { revision, base, definition, landedAt, id } = gate;
+        run.fullGate = {
+          revision,
+          base,
+          definition,
+          landedAt,
+          id,
+          status: "review-rejected",
+          exit: 0,
+        };
+        recordFullGate(ticket, run.fullGate);
+        await routeFullFailure(ticket, run);
+      }
+
+      async function beginLandedReview(
+        task: Task,
+        run: LandedRun,
+        gate: NonNullable<Run["fullGate"]>,
+      ) {
+        const pin = runDefinition(run, config, directory);
+        const stem = `${task.id}-${run.attempt}-${gate.revision}-${gate.id}-post-landing`;
+        const review: Review = {
+          ticket: task.id,
+          attempt: run.attempt!,
+          revision: gate.revision,
+          base: gate.base,
+          stage: "post-landing",
+          gateId: gate.id,
+          worktree: join(directory, "staging", stem),
+          model: reviewerModel(run.workerModel!, "post-landing"),
+          log: fullLog(gate.id),
+          executor: run.executor ?? "local",
+          command: pin.verify,
+          delivery: "creating",
+          report: join(directory, `${stem}.review.json`),
+        };
+        const worker = join(directory, "worktrees", task.id);
+        if (!existsSync(worker) || !unchanged(worker, gate.revision)) return;
+        await stageReview(task, run, review);
+      }
+
       async function acceptFullProof(
         ticket: string,
         run: Extract<Run, { kind: "done" }>,
         gate: Extract<NonNullable<Run["fullGate"]>, { status: "verified" }>,
       ) {
-        const { ledgerPr, sha256: digest, ...attempt } = gate;
-        const hasProof = () =>
-          fullProofIntact(
-            persistence!
-              .proof(ticket, run.attempt!, gate.revision)
-              .filter((row) => row.definition === gate.definition),
-            run,
-            digest,
+        const { ledgerPr, sha256: _digest, ...attempt } = gate;
+        const hasProof = () => {
+          if (!scheduledProof(ticket, run)) return false;
+          if (!run.landingProof?.postLandingReview) return true;
+          const review = run.review;
+          return (
+            review &&
+            landedReviewIdentity(ticket, review) &&
+            reviewOutcome(ticket, run) === "pass"
           );
+        };
         if (!unchanged(root, gate.revision) || !hasProof()) return;
         // The store upserts by (pr, sha); a lost response can repeat only this write.
         await store.ledger.record({
@@ -5393,6 +5652,10 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           status: "running" as const,
           id: randomUUID(),
         };
+        if (run.review?.stage === "post-landing") {
+          delete run.review;
+          delete run.incident;
+        }
         run.fullGate = attempt;
         recordFullGate(ticket, attempt);
         const worktree = fullWorktree(attempt.id);
@@ -5474,7 +5737,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           ),
         ]);
         if (settled.status === "verified")
-          await acceptFullProof(ticket, run, settled);
+          await settleFullVerification(ticket, run, settled);
         else if (settled.status === "failed")
           await routeFullFailure(ticket, run);
       }
