@@ -34,6 +34,7 @@ import { PageWheel } from "@/components/ui/page-wheel";
 import { ItemList, type Column } from "@/components/ui/item-list";
 import { Lcd, LcdDigits } from "@/components/ui/lcd";
 import { Toasts, notify } from "@/components/ui/toaster";
+import type { DashboardEvidence } from "../../factory/dashboard";
 import {
   automationView,
   eventRows,
@@ -79,7 +80,8 @@ const NONE: Ticket = {
   plan: [],
   revision: "",
   pullRequest: null,
-  review: "none",
+  review: "No recorded review",
+  acceptance: "No recorded acceptance proof",
   attempt: null,
   stageLinks: [],
   stop: null,
@@ -265,11 +267,15 @@ function Sheet({ ticket }: { ticket: Ticket }) {
           <dt>Record</dt>
           <dd>
             <span>revision</span>
-            {ticket.revision || "not landed"}
+            {ticket.revision || "not recorded"}
           </dd>
           <dd>
             <span>thread</span>
             <Thread href={ticket.href} />
+          </dd>
+          <dd>
+            <span>review</span>
+            {ticket.review}
           </dd>
           <Reason text={ticket.reason} />
         </div>
@@ -291,11 +297,109 @@ function Sheet({ ticket }: { ticket: Ticket }) {
           ))}
         </ul>
       )}
-      <p>
-        <b>pass</b> → cold review · <b>fail</b> → same builder with the log ·
-        2nd fail → escalated
-      </p>
     </Lcd>
+  );
+}
+
+async function readEvidence(ticket: string, signal: AbortSignal) {
+  const response = await fetch(
+    `/api/evidence?${new URLSearchParams({ ticket })}`,
+    { signal },
+  );
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const body: {
+    ticket: string;
+    durable: string;
+    evidence: DashboardEvidence[];
+  } = await response.json();
+  if (body.ticket !== ticket || !Array.isArray(body.evidence))
+    throw new Error("Invalid evidence response");
+  return body;
+}
+
+function evidenceMessage(durable: string, count: number) {
+  if (durable === "missing") return "No durable evidence storage";
+  if (durable !== "available") return "Evidence service unavailable";
+  return count
+    ? `${count} evidence records`
+    : "No evidence recorded for this ticket";
+}
+
+function Evidence({ ticket }: { ticket: Ticket }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <details
+      className="ticket-evidence"
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary>Inspect evidence</summary>
+      <p>Ticket: {ticket.id}</p>
+      <p>Acceptance proof: {ticket.acceptance}</p>
+      {open && <EvidenceRecords id={ticket.id} />}
+    </details>
+  );
+}
+
+function EvidenceRecords({ id }: { id: string }) {
+  const [read, setRead] = useState<{
+    message: string;
+    rows: DashboardEvidence[];
+  }>({ message: "Loading evidence…", rows: [] });
+  useEffect(() => {
+    if (new URLSearchParams(location.search).has("demo")) {
+      setRead({
+        message: "Sample tickets have no recorded evidence",
+        rows: [],
+      });
+      return;
+    }
+    const controller = new AbortController();
+    void readEvidence(id, controller.signal)
+      .then(({ durable, evidence }) => {
+        if (controller.signal.aborted) return;
+        setRead({
+          message: evidenceMessage(durable, evidence.length),
+          rows: durable === "available" ? evidence : [],
+        });
+      })
+      .catch(() => {
+        if (!controller.signal.aborted)
+          setRead({ message: "Evidence service unavailable", rows: [] });
+      });
+    return () => controller.abort();
+  }, [id]);
+  return (
+    <>
+      <p role="status">{read.message}</p>
+      {read.rows.length > 0 && (
+        <ol>
+          {read.rows.map((row, i) => (
+            <li key={`${row.attempt}-${row.kind}-${row.sha256}-${i}`}>
+              <strong>
+                {row.kind} · attempt {row.attempt} · {row.outcome}
+              </strong>
+              <div>
+                {row.preserved
+                  ? "Artifact preserved"
+                  : "Artifact missing or changed"}{" "}
+                · {row.bytes} bytes · <time dateTime={row.at}>{row.at}</time>
+              </div>
+              <div>
+                Revision <code>{row.revision}</code>
+              </div>
+              <div>
+                SHA-256 <code>{row.sha256}</code>
+              </div>
+              {row.definition && (
+                <div>
+                  Definition <code>{row.definition}</code>
+                </div>
+              )}
+            </li>
+          ))}
+        </ol>
+      )}
+    </>
   );
 }
 
@@ -475,6 +579,7 @@ function Active({
       />
       <Stages ticket={shown} stages={stages} target={view.target} />
       <Sheet ticket={shown} />
+      {shown.id && <Evidence key={shown.id} ticket={shown} />}
     </section>
   );
 }
@@ -1090,7 +1195,7 @@ function EventLog({ events, status }: { events: EventRow[]; status: string }) {
             {rows.map((row) => (
               <li key={row.id}>
                 <time dateTime={row.at} title={row.at}>
-                  {row.time}
+                  #{row.id} · {row.time}
                 </time>
                 <span className="event-log-ticket">{row.ticket}</span>
                 <span>
@@ -1146,6 +1251,11 @@ function Tickets({
       <Hardware keyColor={KEY}>
         <Device model="SF-1" name="Tickets" on={view.state === "live"}>
           <Bar view={view} chosen={chosen} choose={setChosen} log={log} />
+          <div hidden={!view.sample}>
+            <Alert tone="warning" title="Sample feed, not live">
+              {view.project}
+            </Alert>
+          </div>
           <Warning view={view} active={active} />
           <Active
             view={view}

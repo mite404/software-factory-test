@@ -2,7 +2,7 @@
 // be worked on with no factory running. Not factory output: the sequence was observed on the
 // dogfood factory's feed on 2026-11-13 and 14, then trimmed to the fields the page reads.
 // Run: `amp orb services ensure`, or `PORT=4311 bun web/replay.ts`.
-import type { DashboardEvent } from "../factory/dashboard";
+import type { DashboardEvent, DashboardEvidence } from "../factory/dashboard";
 import type { Feed, FeedTask } from "./derive";
 import { pipelineSteps } from "../factory/pipeline";
 import { lifecycleStatus, stages } from "../factory/persistence";
@@ -388,10 +388,15 @@ function reviewFrame(
   landed: boolean,
   revision: string | null,
 ) {
+  const completed = !!attempt && landed;
   return {
     reviewerThread: attempt ? `T-replay-review-${attempt}` : null,
     attempt: attempt ?? null,
-    evidence: { review: attempt ? { pending: !landed, attempt } : null },
+    evidence: {
+      review: attempt ? { pending: !landed, attempt } : null,
+      acceptance: landed ? { revision } : null,
+    },
+    reviewDecision: completed ? { outcome: "pass" as const, attempt } : null,
     revision: attempt || landed ? revision : null,
   };
 }
@@ -445,6 +450,7 @@ export function feedAt(n: number): Feed {
   const frame = FRAMES[n % FRAMES.length]!;
   return {
     project: "recorded replay, illustrative events, not a live factory",
+    sample: true,
     target: "main",
     observedAt: new Date().toISOString(),
     enabled: true,
@@ -493,6 +499,26 @@ if (import.meta.main) {
     fetch: (request) => {
       const url = new URL(request.url);
       if (url.pathname === "/api/status") return Response.json(feedAt(poll++));
+      if (url.pathname === "/api/evidence") {
+        const ticket = url.searchParams.get("ticket");
+        const evidence: DashboardEvidence[] =
+          ticket === "v1-ticket1"
+            ? [
+                {
+                  attempt: 1,
+                  kind: "gate",
+                  revision: "a".repeat(40),
+                  outcome: "gate-passed",
+                  definition: "b".repeat(64),
+                  sha256: "c".repeat(64),
+                  bytes: 128,
+                  at: "2026-11-13T23:19:00Z",
+                  preserved: true,
+                },
+              ]
+            : [];
+        return Response.json({ durable: "available", ticket, evidence });
+      }
       if (url.pathname === "/api/events")
         return Response.json({
           durable: "available",

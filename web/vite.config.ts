@@ -1,6 +1,6 @@
 import { defineConfig } from "vite";
 
-// The page only reads /api/status and /api/events from the read-only factory/dashboard.ts service.
+// Status, events and ticket evidence use the same API proxy.
 export default defineConfig({
   // the SPEC-01 kit under web/spec imports its own files as "@/..."
   resolve: { alias: { "@": new URL("./spec", import.meta.url).pathname } },

@@ -14,11 +14,17 @@
     <link rel="stylesheet" href="./themes/spec.css" />
   </head>
   <body>
+    <p id="status-unread" role="status">Loading factory status…</p>
+    <div class="pipeline-controls">
+      <label><input id="reduce-motion" type="checkbox" /> Reduce motion</label>
+      <button id="play" type="button">Replay sample motion</button>
+    </div>
     <!-- One fixed 1280x1152 canvas; the foreman layer sits at negative y. CSS owns every animation; main.ts only sets attributes and text. -->
     <svg
       id="stage"
       viewBox="0 -120 1280 1152"
       data-state="offline"
+      hidden
       role="img"
       aria-label="Software factory pipeline"
     >
@@ -500,7 +506,6 @@
       </g>
     </svg>
     <div id="tip" hidden></div>
-    <button id="play" type="button">▶ replay</button>
     <script type="module" src="./main.ts"></script>
   </body>
 </html>
