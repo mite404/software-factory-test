@@ -240,7 +240,10 @@ type FullGate = {
   | { status: "running"; process?: GateProcess }
   | { status: "interrupted" }
   | { status: "verified"; ledgerPr: number; sha256?: string }
-  | { status: "passed" | "failed" | "stale"; exit: number | null }
+  | {
+      status: "passed" | "failed" | "stale" | "review-rejected";
+      exit: number | null;
+    }
 );
 
 export type Run = (
@@ -327,7 +330,12 @@ export type Run = (
       review?: Review;
       workerModel?: string;
       requirements?: string;
-      landingProof?: { report: string; gate: string; review?: string };
+      landingProof?: {
+        report: string;
+        gate: string;
+        review?: string;
+        postLandingReview?: true;
+      };
     }
 ) & {
   definition?: string;
@@ -392,6 +400,24 @@ type LifecycleKind = {
   /** Actions are admitted only while the stop holding the run's incident declares them. */
   heldActions?: true;
 };
+
+const reviewerCreation = {
+  actor: "foreman",
+  trigger: "interrupted",
+  reasons: ["creation-unknown"],
+  recovery: "inspect",
+  matches: (run) =>
+    (run.kind === "running" ||
+      (run.kind === "done" && run.fullGate?.status === "verified")) &&
+    run.review?.delivery === "creating",
+  exits: [
+    {
+      action: "retry-create",
+      when: "the owner proves no reviewer exists and supplies the exact incident and decision; the staged worktree is unchanged",
+      actor: "foreman",
+    },
+  ],
+} as const satisfies LifecycleStop;
 
 /** Declared lifecycle rules. Conditions describe evidence, never grant authority. */
 export const runLifecycle = {
@@ -542,21 +568,7 @@ export const runLifecycle = {
         exits: [],
         foremanOnly: "No saved review assignment key; manual inspection only.",
       },
-      reviewerCreation: {
-        actor: "foreman",
-        trigger: "interrupted",
-        reasons: ["creation-unknown"],
-        recovery: "inspect",
-        matches: (run) =>
-          run.kind === "running" && run.review?.delivery === "creating",
-        exits: [
-          {
-            action: "retry-create",
-            when: "the owner proves no reviewer exists and supplies the exact incident and decision; the staged worktree is unchanged",
-            actor: "foreman",
-          },
-        ],
-      },
+      reviewerCreation,
       reviewerError: {
         actor: "foreman",
         trigger: "activity",
@@ -843,7 +855,7 @@ export const runLifecycle = {
   },
   done: {
     actor: "computer",
-    actions: ["record-merge", "record-insight"],
+    actions: ["record-merge", "record-insight", "retry-create"],
     blocks: [],
     exits: [
       {
@@ -857,7 +869,7 @@ export const runLifecycle = {
         actor: "foreman",
       },
     ],
-    stops: {},
+    stops: { reviewerCreation },
   },
 } as const satisfies Record<Run["kind"], LifecycleKind>;
 
@@ -933,10 +945,26 @@ export function lifecycleActivity(
   return [stop.reasons[0], stop.recovery];
 }
 
-/** Compact static status reference; never includes run state or predicate source. */
-export function lifecycleStatus() {
+/** Compact status reference. Include the opt-in landed reviewer stop only while it applies. */
+export function lifecycleStatus(runs: State["runs"] = {}) {
+  const landedReview = Object.values(runs).some(
+    (run) =>
+      run.kind === "done" &&
+      run.fullGate?.status === "verified" &&
+      run.landingProof?.postLandingReview,
+  );
+  const entries = {
+    ...runLifecycle,
+    done: landedReview
+      ? runLifecycle.done
+      : {
+          ...runLifecycle.done,
+          actions: ["record-merge", "record-insight"] as const,
+          stops: {},
+        },
+  };
   return Object.fromEntries(
-    Object.entries(runLifecycle).map(([kind, entry]) => [
+    Object.entries(entries).map(([kind, entry]) => [
       kind,
       {
         actor: entry.actor,
@@ -1066,7 +1094,14 @@ export function projectFullGate(run: Run | undefined) {
     gate && {
       status: gate.status === "verified" ? "pending" : gate.status,
       landedRevision: gate.revision,
-      verifiedRevision: gate.status === "passed" ? gate.revision : null,
+      verifiedRevision:
+        gate.status === "passed" ||
+        gate.status === "review-rejected" ||
+        (gate.status === "verified" &&
+          run.kind === "done" &&
+          run.landingProof?.postLandingReview)
+          ? gate.revision
+          : null,
     }
   );
 }
@@ -1088,10 +1123,17 @@ const kindStages: {
   done: (run) =>
     fullyVerified(run)
       ? [run.merge ? "merged" : "accepted", "merge"]
-      : run.fullGate?.status === "stale" || run.fullGate?.status === "failed"
-        ? ["blocked", "gate"]
-        : ["gating", "gate"],
+      : landedStage(run),
 };
+
+function landedStage(run: Extract<Run, { kind: "done" }>): StageStep {
+  const status = run.fullGate?.status;
+  if (status === "review-rejected") return ["blocked", "review"];
+  if (status === "stale" || status === "failed") return ["blocked", "gate"];
+  return status === "verified" && run.landingProof?.postLandingReview
+    ? ["reviewing", "review"]
+    : ["gating", "gate"];
+}
 
 function stageOf(run: Run): StageStep {
   return (kindStages[run.kind] as (run: Run) => StageStep)(run);
@@ -1750,8 +1792,14 @@ function modelFamily(model: string) {
 }
 
 /** Resolve the native cold reviewer. @throws On unsupported worker families. */
-export function reviewerModel(worker: string): `${string}/${string}` {
-  const model = defaultReviewerModels.get(modelFamily(worker) ?? "");
+export function reviewerModel(
+  worker: string,
+  stage?: Review["stage"],
+): `${string}/${string}` {
+  const family = modelFamily(worker);
+  if (stage === "post-landing" && family === "openai")
+    return "anthropic/claude-fable-5-2";
+  const model = defaultReviewerModels.get(family ?? "");
   if (!model)
     throw new Error(
       "Review requires an OpenAI, Anthropic, or Moonshot AI implementation worker",
@@ -2383,15 +2431,45 @@ function fullGateMatchesRun(
   run: Record<string, unknown>,
   gate: Record<string, unknown>,
 ) {
-  if (run.kind !== "done") return gate.status === "failed";
+  if (run.kind !== "done")
+    return ["failed", "review-rejected"].includes(String(gate.status));
   return (
     positiveInteger(run.attempt) &&
     gate.revision === run.revision &&
     gate.base === run.acceptedBase &&
     validLandingProof(run.landingProof) &&
+    validLandedReview(run, gate) &&
     (gate.status === "passed"
       ? timestamp(run.acceptedAt)
       : run.acceptedAt === undefined && run.merge === undefined)
+  );
+}
+
+function validLandedReview(
+  run: Record<string, unknown>,
+  gate: Record<string, unknown>,
+) {
+  const { status } = gate;
+  const review = record(run.review ?? {});
+  if (record(run.landingProof ?? {}).postLandingReview !== true)
+    return ![review.stage, status].some((value) =>
+      ["post-landing", "review-rejected"].includes(String(value)),
+    );
+  const settled = ["passed", "review-rejected"].includes(String(status));
+  if (run.review === undefined) return !settled;
+  const identity = {
+    stage: "post-landing",
+    gateId: gate.id,
+    revision: run.revision,
+    base: run.acceptedBase,
+    attempt: run.attempt,
+  };
+  return (
+    ["verified", "review-rejected", "passed", "stale"].includes(
+      String(status),
+    ) &&
+    Object.entries(identity).every(([key, value]) => review[key] === value) &&
+    (!settled || (review.delivery === "sent" && text(review.evidence)))
   );
 }
 
@@ -2399,10 +2477,12 @@ function validLandingProof(value: unknown) {
   if (value === undefined) return true;
   const proof = record(value);
   return (
-    exactKeys(proof, ["report", "gate"], ["review"]) &&
+    exactKeys(proof, ["report", "gate"], ["review", "postLandingReview"]) &&
     validDigest(proof.report) &&
     validDigest(proof.gate) &&
-    optionalFingerprint(proof.review)
+    optionalFingerprint(proof.review) &&
+    (proof.postLandingReview === undefined ||
+      (proof.postLandingReview === true && proof.review === undefined))
   );
 }
 
@@ -2433,7 +2513,7 @@ function validFullGateReceipt(gate: Record<string, unknown>) {
 }
 
 function validFullGateExit(status: unknown, exit: unknown) {
-  if (status === "passed") return exit === 0;
+  if (status === "passed" || status === "review-rejected") return exit === 0;
   return (
     (status === "failed" || status === "stale") &&
     (exit === null || Number.isInteger(exit))

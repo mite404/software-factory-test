@@ -3,18 +3,19 @@ import type { ThreadID } from "./persistence";
 import { validExecutor, type Executor } from "./executor";
 import { validDeliveryIntent, type DeliveryIntent } from "./delivery";
 
-export type Review = {
+export type Review = (
+  | { stage: "post-graft"; landingOnly?: true; gateId?: never }
+  | { stage: "post-landing"; gateId: string; landingOnly?: never }
+) & {
   ticket: string;
   attempt: number;
   revision: string;
   base: string;
-  stage: "post-graft";
   worktree: string;
   model: `${string}/${string}`;
   report: string;
   log: string;
   command: string;
-  landingOnly?: true;
   delivery: "creating" | "queued" | "sending" | "sent";
   thread?: ThreadID;
   evidence?: string;
@@ -36,6 +37,16 @@ function validFallback(value: unknown): boolean {
   );
 }
 
+function validReviewStage(row: Record<string, unknown>) {
+  return row.stage === "post-graft"
+    ? row.gateId === undefined &&
+        (row.landingOnly === undefined || row.landingOnly === true)
+    : row.stage === "post-landing" &&
+        row.landingOnly === undefined &&
+        typeof row.gateId === "string" &&
+        /^[a-f0-9-]{36}$/.test(row.gateId);
+}
+
 /** Validate persisted review ownership at the storage boundary. */
 export function validReview(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
@@ -53,8 +64,7 @@ export function validReview(value: unknown): boolean {
     ].every((key) => typeof row[key] === "string" && row[key].length > 0) &&
     Number.isSafeInteger(row.attempt) &&
     Number(row.attempt) > 0 &&
-    row.stage === "post-graft" &&
-    (row.landingOnly === undefined || row.landingOnly === true) &&
+    validReviewStage(row) &&
     validExecutor(row.executor) &&
     validDeliveryIntent(row.deliveryIntent) &&
     validFallback(row.fallback) &&
@@ -79,7 +89,7 @@ export async function reviewVerdict(review: Review) {
     if (!raw || typeof raw !== "object") return null;
     const row = raw as Record<string, unknown>;
     if (
-      !["ticket", "attempt", "revision", "base", "stage"].every(
+      !["ticket", "attempt", "revision", "base", "stage", "gateId"].every(
         (key) => row[key] === review[key as keyof Review],
       ) ||
       !new Set<unknown>(["pass", "issues"]).has(row.kind) ||
@@ -127,6 +137,6 @@ Do not force findings, pad nits, or block on unsupported style opinions. An empt
 Do not read worker threads, worker reports, self-reviews, or other reviewer opinions.
 Do not edit code, commit, delegate, push, deploy or control the factory.
 Your only permitted write is ${review.report}, a JSON verdict:
-${JSON.stringify({ ticket: review.ticket, attempt: review.attempt, revision: review.revision, base: review.base, stage: review.stage, kind: "pass | issues | blocked", findings: [{ severity: "critical | warning | nit", location: "file:line", evidence: "concrete problem and why", correction: "actionable correction" }] })}
+${JSON.stringify({ ticket: review.ticket, attempt: review.attempt, revision: review.revision, base: review.base, stage: review.stage, gateId: review.gateId, kind: "pass | issues | blocked", findings: [{ severity: "critical | warning | nit", location: "file:line", evidence: "concrete problem and why", correction: "actionable correction" }] })}
 Use kind pass with findings [] when there are no supported issues. Narrative text or idle state is not a verdict.`;
 }

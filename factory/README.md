@@ -63,11 +63,11 @@ explicit ISO timestamps. The start is inclusive; the end is exclusive:
 bun factory/audit.ts /path/to/repository/.git/factory 2026-11-09T00:00:00Z 2026-11-16T00:00:00Z
 ```
 
-The collector reads SQLite events and post-graft verdicts without changing them. Event timestamps
-take precedence; verdicts without an event use file modification time. Copies in verdict files,
-review events, and rejection events count once. Each finding becomes one record. A rejected gate
-uses its `<log>.excerpt.json` companion, containing an explicit outcome, exit status, and the same
-stdout and stderr tails sent to the worker. The tails share an 8,192-byte budget and are cut at
+The collector reads SQLite events and legacy post-graft verdict files without changing them. Event
+timestamps take precedence; verdicts without an event use file modification time. Copies in verdict
+files, review events, and rejection events count once. Each finding becomes one record. A rejected
+gate uses its `<log>.excerpt.json` companion, containing an explicit outcome, exit status, and the
+same stdout and stderr tails sent to the worker. The tails share an 8,192-byte budget and are cut at
 line boundaries. Noisy stderr cannot displace a stdout diagnostic. When a rerun log exists, the
 collector uses that attempt's rerun excerpt rather than the first failure. Candidate verification
 writes the final companion before
@@ -1359,6 +1359,25 @@ attempt cap. The repaired candidate runs the full gate before acceptance. Pause 
 `permissions.scheduleGates` to prevent new scheduled checks. Revocation does not promote pending
 landings or stop a command already running. A policy reload does not rewrite an existing pin.
 
+### Review after the scheduled full gate (opt-in)
+
+To move the conditional cold review after landing and full verification, enable the reviewer
+(`agents/reviewer/agent.md`, or `review: true` in a flat definition) and add
+`reviewStage: post-landing` inside `scheduledGate`. Reload to apply it to new pins. Without this
+setting, the existing review timing stays unchanged. Small, low-risk first attempts skip the
+model, not the checks. Other attempts get one opposite-family review at high effort, with no
+pre-landing model review.
+
+Landing, full verification, and acceptance are separate facts. The reviewer gets a detached
+worktree at the landed SHA and compares it against the original integration base. Its verdict must
+match the ticket, worker attempt, revision, base, stage, and full-gate attempt ID. Dependents and
+other factory landings wait for acceptance. A rejection keeps the landed commit in place and sends
+findings to the original worker. Its next candidate lands with the fast check and needs a new
+scheduled full gate and review. An external integration move makes the proof stale. Restoring the
+exact landed HEAD allows a fresh gate and reviewer, unless an ambiguous creation or delivery still
+requires operator inspection. Restart never creates a replacement reviewer or blindly repeats a
+correction send.
+
 ## Record a merged pull request
 
 After merging an accepted ticket, the owning Foreman calls the factory control tool with
@@ -1842,7 +1861,7 @@ The plugin publishes a sanitized observation file under the target Git directory
 state and title subscriptions trigger updates; a five-second heartbeat refreshes observations.
 The browser polls the read-only `/api/status` endpoint every five seconds. SQLite supplies retained
 ticket/run identity, enabled state, and acceptance, even without a heartbeat or current manifest
-entry. Public titles use ticket IDs, with a delivery label for post-graft reviews. Private briefs
+entry. Public titles use ticket IDs, with a delivery label for reviews. Private briefs
 and native thread titles are not public title sources. HTTP ignores observed titles, including
 matching fresh or stale legacy observations, without rewriting historical files. Activity remains
 an observation: `observedAt` is never advanced by an HTTP read.
@@ -1924,8 +1943,8 @@ Its revision is `null` for a blocked report. `reportReceipt` and `reviewDecision
 without a matching recorded fact. A legacy acceptance without a decision is unknown, not skipped.
 An `issues` verdict remains visible at a review-triggered escalation or park when the recorded
 review identity matches the stop. It does not carry forward to the resumed attempt.
-Each task adds `evidence`: an `acceptance` revision when done, and `gate`/`review` references only
-when a bound review record exists. References include revision, base, and post-graft stage; review
+Each task adds `evidence`: an `acceptance` revision when accepted, and `gate`/`review` references
+only when a bound review record exists. References include revision, base, and stage; review
 also includes attempt, pending state, and the available reviewer thread. An absent reference is
 `null`, not an inferred success. Legacy gate-only acceptance has no retained gate reference.
 Private report/log paths, commands, requirements, verdict contents, worker rationale, configuration,

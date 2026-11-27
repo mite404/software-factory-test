@@ -5293,6 +5293,264 @@ test("four rejections park the worker, release only independent work and require
   expect(notices[1]).toContain("authenticated human confirmation");
 }, 30_000);
 
+test.each([
+  { size: "small", risky: false, case: "skip" },
+  { size: "small", risky: true, case: "review" },
+  { size: "medium", risky: false, case: "repair" },
+  { size: "large", risky: false, case: "lost creation" },
+  { size: undefined, risky: false, case: "review" },
+])(
+  "post-landing review ($size, risky=$risky): $case",
+  async ({ size, risky, case: scenario }) => {
+    const ledger = scheduledLedger(false);
+    const f = await preparationFixture(() => "", undefined, ledger.open);
+    const configPath = join(f.root, ".factory.json");
+    const config = await Bun.file(configPath).json();
+    const log = join(f.root, ".git/full-runs");
+    config.permissions.scheduleGates = true;
+    config.review = true;
+    config.scheduledGate = {
+      landing: "true",
+      schedule: "*/5 * * * *",
+      reviewStage: "post-landing",
+    };
+    config.verify = `git rev-parse HEAD >> '${log}'`;
+    await writeFile(configPath, JSON.stringify(config));
+    await writeFile(
+      join(f.root, "tickets.json"),
+      JSON.stringify([
+        { id: "A", brief: "Keep the original file", after: [], size, risky },
+        { id: "B", brief: "Dependent", after: ["A"] },
+      ]),
+    );
+    await migrateDefinition(f.root);
+    f.git("add", "-A");
+    f.git("commit", "-qm", "configure post-landing review");
+    const base = f.git("rev-parse", "HEAD");
+    let at = 60_000;
+    const engine = f.factory(() => at);
+    const messages = captureScheduledReviews(f.host);
+    await engine.tick("start");
+    f.host.state = async () => "idle";
+    await mkdir(join(f.worktree, "src"), { recursive: true });
+    async function submit(attempt: number) {
+      await writeFile(join(f.worktree, "src/value"), String(attempt));
+      f.git("-C", f.worktree, "add", "src");
+      f.git("-C", f.worktree, "commit", "-qm", `attempt ${attempt}`);
+      const revision = f.git("-C", f.worktree, "rev-parse", "HEAD");
+      await writeFile(
+        join(engine.directory, "A.report.json"),
+        JSON.stringify({
+          kind: "candidate",
+          attempt,
+          revision,
+          insight: "PRIVATE INSIGHT",
+        }),
+      );
+      return revision;
+    }
+    const first = await submit(1);
+    const landed = await engine.tick("reconcile");
+    expect(f.git("rev-parse", "HEAD")).toBe(first);
+    expect(landed.runs.A?.fullGate?.status).toBe("pending");
+    expect(messages).toEqual([]);
+    at = 300_000;
+    if (scenario === "lost creation") {
+      const create = f.host.create.bind(f.host);
+      let attempts = 0;
+      f.host.create = async (...args) => {
+        if (args[3] === "reviewer") {
+          attempts++;
+          expect(args.slice(1, 3)).toEqual([
+            "anthropic/claude-fable-5-2",
+            "high",
+          ]);
+          throw new Error("lost reviewer creation");
+        }
+        return create(...args);
+      };
+      expect(await engine.tick("reconcile").catch(String)).toContain(
+        "lost reviewer creation",
+      );
+      const restarted = f.factory(() => at);
+      const held = await restarted.tick("reconcile");
+      expect(held.runs.A).toMatchObject({
+        kind: "done",
+        incident: { reason: "creation-unknown", attempt: 1, base },
+        review: { stage: "post-landing", delivery: "creating" },
+      });
+      expect(held.runs.B).toBeUndefined();
+      expect(attempts).toBe(1);
+      expect(ledger.writes).toEqual([]);
+      return;
+    }
+    const reviewed = await engine.tick("reconcile");
+    expect(reviewed.runs.B).toBeUndefined();
+    expect(await readFile(log, "utf8")).toBe(`${first}\n`);
+    if (scenario === "skip") {
+      expect(reviewed.runs.A).toMatchObject({
+        acceptedAt: at,
+        fullGate: { status: "passed" },
+      });
+      expect(messages).toEqual([]);
+      expect(ledger.writes.map(({ sha }) => sha)).toEqual([first]);
+      return;
+    }
+    expect(runStage(reviewed.runs.A).stage).toBe("reviewing");
+    expect(ledger.writes).toEqual([]);
+    const run = reviewed.runs.A;
+    if (run?.kind !== "done" || !run.review)
+      throw new Error("Expected landed review");
+    const { ticket, attempt, revision, stage, gateId, report } = run.review;
+    expect({ ticket, attempt, revision, stage }).toEqual({
+      ticket: "A",
+      attempt: 1,
+      revision: first,
+      stage: "post-landing",
+    });
+    expect(messages[0]).toContain(
+      `Coordinator gate evidence: ${config.verify} passed`,
+    );
+    expect(messages[0]).not.toContain("PRIVATE INSIGHT");
+    expect(gateId).toBe(run.fullGate?.id);
+    const firstIdentity = { ticket, attempt, revision, base, stage, gateId };
+    if (scenario === "review") {
+      await writeFile(
+        report,
+        JSON.stringify({ ...firstIdentity, kind: "pass", findings: [] }),
+      );
+      expect((await engine.tick("reconcile")).runs.A).toMatchObject({
+        acceptedAt: at,
+      });
+      expect(messages).toHaveLength(1);
+      return;
+    }
+    await proveRepairAndStaleness(run.thread);
+
+    async function proveRepairAndStaleness(worker: ThreadID) {
+      const server = startDashboard({ root: f.root, port: 0 });
+      try {
+        const feed = await (
+          await fetch(`http://localhost:${server.port}/api/status`)
+        ).json();
+        expect(feed.tasks[0]).toMatchObject({
+          title: "A - post-landing review (sent)",
+          acceptedAt: null,
+          fullGate: { landedRevision: first, verifiedRevision: first },
+          evidence: { acceptance: null, review: { stage, pending: true } },
+        });
+        expect(JSON.stringify(feed)).not.toContain(gateId!);
+      } finally {
+        await server.stop(true);
+      }
+      await writeFile(
+        report,
+        JSON.stringify({
+          ...firstIdentity,
+          kind: "issues",
+          findings: [
+            {
+              severity: "warning",
+              location: "src/value:1",
+              evidence: "wrong value",
+              correction: "repair value",
+            },
+          ],
+        }),
+      );
+      const send = f.host.send.bind(f.host);
+      const corrections: string[] = [];
+      f.host.send = async (thread, message) => {
+        if (thread !== worker || !message.includes("repair value"))
+          return send(thread, message);
+        corrections.push(message);
+        throw new Error("lost correction response");
+      };
+      f.host.lookupDelivery = async () => "inconclusive";
+      expect(await engine.tick("reconcile").catch(String)).toContain(
+        "lost correction response",
+      );
+      let restarted = f.factory(() => at);
+      expect((await restarted.tick("reconcile")).runs.A?.kind).toBe(
+        "uncertain",
+      );
+      f.host.lookupDelivery = async (thread, message) =>
+        thread === worker && corrections.includes(message)
+          ? "present"
+          : "inconclusive";
+      restarted = f.factory(() => at);
+      const repairing = await restarted.tick("reconcile");
+      expect(repairing.runs.A).toMatchObject({
+        kind: "running",
+        thread: worker,
+        attempt: 2,
+        base: first,
+      });
+      expect(repairing.runs.B).toBeUndefined();
+      expect(messages).toHaveLength(1);
+      expect(corrections).toHaveLength(1);
+      const second = await submit(2);
+      await restarted.tick("reconcile");
+      expect(f.git("rev-parse", "HEAD")).toBe(second);
+      at = 600_000;
+      const rechecked = await restarted.tick("reconcile");
+      const repaired = rechecked.runs.A;
+      if (repaired?.kind !== "done" || !repaired.review)
+        throw new Error("Expected fresh review");
+      expect(repaired.review).toMatchObject({
+        attempt: 2,
+        revision: second,
+        base,
+      });
+      expect(await readFile(log, "utf8")).toBe(`${first}\n${second}\n`);
+      const pass = {
+        ...firstIdentity,
+        attempt: 2,
+        revision: second,
+        kind: "pass",
+        findings: [],
+      };
+      await writeFile(repaired.review.report, JSON.stringify(pass));
+      expect((await restarted.tick("reconcile")).runs.B).toBeUndefined();
+      expect(ledger.writes).toEqual([]);
+      await writeFile(
+        repaired.review.report,
+        JSON.stringify({ ...pass, gateId: repaired.review.gateId }),
+      );
+      f.git("commit", "--allow-empty", "-qm", "unreviewed integration advance");
+      const stale = await restarted.tick("reconcile");
+      expect(stale.runs.A?.fullGate?.status).toBe("stale");
+      expect(stale.runs.B).toBeUndefined();
+      expect(ledger.writes).toEqual([]);
+      f.git("reset", "--hard", second);
+      const refreshed = (await restarted.tick("reconcile")).runs.A;
+      if (refreshed?.kind !== "done" || !refreshed.review)
+        throw new Error("Expected revalidation");
+      expect(refreshed.review.gateId).not.toBe(repaired.review.gateId);
+      await writeFile(
+        refreshed.review.report,
+        JSON.stringify({ ...pass, gateId: repaired.review.gateId }),
+      );
+      expect((await restarted.tick("reconcile")).runs.B).toBeUndefined();
+      expect(ledger.writes).toEqual([]);
+      await writeFile(
+        refreshed.review.report,
+        JSON.stringify({ ...pass, gateId: refreshed.review.gateId }),
+      );
+      await restarted.tick("reconcile");
+      const accepted = await restarted.tick("reconcile");
+      expect(accepted.runs.A).toMatchObject({
+        acceptedBase: base,
+        acceptedAt: at,
+        revision: second,
+      });
+      expect(accepted.runs.B).toMatchObject({ kind: "running", base: second });
+      expect(ledger.writes.map(({ sha }) => sha)).toEqual([second]);
+      expect(messages).toHaveLength(3);
+    }
+  },
+);
+
 test.each(["pass", "fail", "stale", "restart", "default"] as const)(
   "scheduled proof handles %s on the exact landed revision",
   async (outcome) => {

@@ -147,7 +147,7 @@ function verdictFields(
   const outcome = detail.kind;
   if (
     detail.ticket !== ticket ||
-    detail.stage !== "post-graft" ||
+    (detail.stage !== "post-graft" && detail.stage !== "post-landing") ||
     !attempt ||
     !revision ||
     !base ||
@@ -522,7 +522,7 @@ function matchingRejection(
     detail.kind !== "issues" ||
     !thread ||
     !review ||
-    !["ticket", "attempt", "revision", "base", "stage"].every(
+    !["ticket", "attempt", "revision", "base", "stage", "gateId"].every(
       (key) => detail[key] === review[key],
     ) ||
     !Number.isSafeInteger(detail.attempt) ||
@@ -579,7 +579,12 @@ function matchesDecision(
   if (event.reviewOutcome === "skipped")
     return !review && matchesSkippedReview(event, work, detail.base);
   if (review)
-    return review.revision === event.revision && review.base === detail.base;
+    return (
+      review.revision === event.revision &&
+      review.base === detail.base &&
+      review.stage === detail.stage &&
+      review.gateId === detail.gateId
+    );
   return (
     event.reviewOutcome === "issues" &&
     matchesStoppedReview(run, detail, created)
@@ -809,9 +814,9 @@ function projectStage(run: Run | undefined, intake: Task["intake"]) {
 }
 
 function delivered(run: Run | undefined, review: ReturnType<typeof reviewFor>) {
-  return (
-    run?.kind === "running" && (review?.delivery ?? run.delivery) === "sent"
-  );
+  return review
+    ? review.delivery === "sent"
+    : run?.kind === "running" && run.delivery === "sent";
 }
 
 function projectTask(
@@ -837,7 +842,7 @@ function projectTask(
     const base = reference(review.base, /^[a-f0-9]{40}$/);
     const thread = reference(review.thread ?? null, /^T-[\w-]+$/);
     if (pending) {
-      row.title = `${id} - post-graft review (${review.delivery})`;
+      row.title = `${id} - ${review.stage} review (${review.delivery})`;
       row.thread = thread;
     }
     row.revision = revision;
@@ -1070,6 +1075,7 @@ export function startDashboard({
         if (!records)
           return Response.json({ ...empty, durable: "missing" }, { headers });
         const { state, tickets, reviews } = records;
+        empty.lifecycle = lifecycleStatus(state.runs);
         const steps = new Map(tickets.map((task) => [task.id, task.steps]));
         const observed = new Map(
           snapshot?.tasks.map((task) => [task.id, task]),

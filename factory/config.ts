@@ -104,16 +104,23 @@ export type Automation = {
 };
 
 /** Opt-in fast landing command and UTC cron for the ordinary full gate. */
-export type ScheduledGatePolicy = { landing: string; schedule: string };
+export type ScheduledGatePolicy = {
+  landing: string;
+  schedule: string;
+  reviewStage?: "post-landing";
+};
 
 /** Check the same policy at the authored definition and persisted pin boundaries. */
 export function validScheduledGatePolicy(
   value: unknown,
 ): value is ScheduledGatePolicy {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const { landing, schedule } = value as Data;
+  const { landing, schedule, reviewStage } = value as Data;
   return (
-    Object.keys(value).length === 2 &&
+    Object.keys(value).every((key) =>
+      ["landing", "schedule", "reviewStage"].includes(key),
+    ) &&
+    (reviewStage === undefined || reviewStage === "post-landing") &&
     typeof landing === "string" &&
     /\S/.test(landing) &&
     !landing.includes("\0") &&
