@@ -47,6 +47,12 @@ import {
 } from "./config";
 import { lastFire } from "./cron";
 import definitionSchema from "./definition.schema.json";
+import {
+  discoveryFinding,
+  discoveryPolicy,
+  type DiscoveryPass,
+  withinDiscoveryScope,
+} from "./discovery";
 import type { Executor } from "./executor";
 import type { DeliveryIntent } from "./delivery";
 import { greenMergeCheck, type readPullRequest } from "./github";
@@ -543,6 +549,7 @@ async function validateConfiguration(
   if (raw.version !== 1 || (raw.capacity !== 1 && raw.capacity !== 2))
     throw new Error("This slice requires version 1 and capacity 1 or 2");
   if (raw.mode !== undefined) text(raw.mode);
+  const discovery = discoveryPolicy(raw.discovery, raw.mode);
   if (
     raw.orchestratorModel !== undefined &&
     !/^[^/]+\/.+$/.test(text(raw.orchestratorModel))
@@ -582,6 +589,8 @@ async function validateConfiguration(
     ...optionalField("scheduledGate", scheduledGate),
     setup,
     ...optionalField("hooks", hooks),
+    discovery,
+    discoveryPrd: relative(root, prd) as DefinitionPin["discoveryPrd"],
     watchdog,
     observer,
     instructions,
@@ -703,6 +712,8 @@ export async function effectiveConfiguration(root: string) {
         checks: loaded.checks,
         scheduledGate: loaded.scheduledGate,
         hooks: loaded.hooks,
+        discovery: current.discovery && loaded.discovery,
+        discoveryPrd: loaded.discoveryPrd,
         watchdog: loaded.watchdog ?? defaultWatchdog,
         workerEffort: loaded.workerEffort,
         workerRunner: loaded.workerRunner,
@@ -730,6 +741,8 @@ function definitionPin(
     tickets,
     setup,
     hooks,
+    discovery,
+    discoveryPrd,
     watchdog,
     providerLimit,
     lightWorker,
@@ -752,6 +765,8 @@ function definitionPin(
     tickets,
     setup,
     ...optionalField("hooks", hooks),
+    ...optionalField("discovery", discovery),
+    ...optionalField("discoveryPrd", discovery && discoveryPrd),
     watchdog,
     ...(providerLimit === undefined ? {} : { providerLimit }),
     ...(lightWorker === undefined ? {} : { lightWorker }),
@@ -1401,6 +1416,14 @@ function gateState(
     : "alive";
 }
 
+function permittedChangePath(path: string, scope: string[]) {
+  return (
+    path !== "factory/definition.yaml" &&
+    !isConfigPath(path) &&
+    withinDiscoveryScope(path, scope)
+  );
+}
+
 function allowedChanges(
   worktree: string,
   base: string,
@@ -1419,16 +1442,7 @@ function allowedChanges(
     .filter(Boolean);
   return (
     changed.length > 0 &&
-    changed.every(
-      (path) =>
-        path !== "factory/definition.yaml" &&
-        !isConfigPath(path) &&
-        scope.some(
-          (prefix) =>
-            path === prefix ||
-            (prefix.endsWith("/") && path.startsWith(prefix)),
-        ),
-    )
+    changed.every((path) => permittedChangePath(path, scope))
   );
 }
 
@@ -2698,6 +2712,24 @@ function restoreTickets(queue: Task[], persisted: Task[], state: State) {
     else if (index < 0 && (task.intake || state.runs[task.id]))
       queue.push(task);
   }
+}
+
+function permitsDiscoveryPath(task: Task, scope: string[]) {
+  return !task.discoveryPath || permittedChangePath(task.discoveryPath, scope);
+}
+
+function discoveryTaskConfig(
+  task: Task,
+  config: Awaited<ReturnType<typeof configuration>>,
+) {
+  if (!task.discoveryPath) return config;
+  if (!permitsDiscoveryPath(task, config.scope))
+    throw new Error("Discovery ticket is outside the permitted scope");
+  return {
+    ...config,
+    scope: [task.discoveryPath],
+    digest: sha256(JSON.stringify([config.digest, task.discoveryPath])),
+  };
 }
 
 function retryAdmission(state: State, action: string, twoLanes: boolean) {
@@ -5112,8 +5144,9 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         task: Task,
         base: string,
         worktree: string,
-        preparationConfig = config,
+        baseConfig = config,
       ) {
+        const preparationConfig = discoveryTaskConfig(task, baseConfig);
         if (!preparationConfig.setup)
           throw new Error("Configure setup before retrying preparation");
         persistence!.definition(definitionPin(preparationConfig));
@@ -5202,7 +5235,6 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           !fullGateBarrier() &&
           !state.runs[task.id] &&
           task.after.every((id) => fullyVerified(state.runs[id])) &&
-          // A light ticket waits until a loaded definition has the light lane.
           (!task.lane || !!config.lightWorker) &&
           !laneHeld(
             state.runs,
@@ -5218,7 +5250,8 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         const next = queue.find(
           (task) =>
             (!creation || task.id === creation.ticket) &&
-            dispatchEligible(task),
+            dispatchEligible(task) &&
+            permitsDiscoveryPath(task, config.scope),
         );
         if (!next || !state.owner) return state;
         if (git(root, "status", "--porcelain"))
@@ -5245,11 +5278,13 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         const worktree = join(directory, "worktrees", next.id);
         if (config.setup) await prepare(next, base, worktree);
         else {
+          const pin = definitionPin(discoveryTaskConfig(next, config));
+          if (next.discoveryPath) persistence!.definition(pin);
           state.runs[next.id] = {
             kind: "creating",
             base,
             worktree,
-            definition: config.digest,
+            definition: pin.digest,
             executor: workerExecutor(config.workerRunner),
             ...taskLane(next),
           };
@@ -5313,6 +5348,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           const next = await configuration(root);
           // Refuse before any Git or saved-state change when the new pin lacks the run's lane.
           laneWorker(next, laneField(run));
+          discoveryTaskConfig(task, next);
           if (git(root, "status", "--porcelain"))
             throw new Error("Commit existing changes before retrying setup");
           const base = git(root, "rev-parse", "HEAD");
@@ -5788,6 +5824,164 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
     } finally {
       await store.close();
     }
+  }
+
+  function completeDiscovery(
+    storage: ReturnType<typeof openPersistence>,
+    pass: DiscoveryPass,
+    queue: Task[],
+    input: unknown,
+  ) {
+    const { revision, prd } = pass;
+    const tracked = (path: string) =>
+      /^100(?:644|755) blob /.test(
+        git(root, "--literal-pathspecs", "ls-tree", revision, "--", path),
+      );
+    const finding = discoveryFinding(input, pass, {
+      tracked: (path) => permittedChangePath(path, pass.scope) && tracked(path),
+      prd: (line) => (tracked(prd) ? discoveryPrdLine(pass, line) : undefined),
+    });
+    if (git(root, "rev-parse", "HEAD") !== revision || now() >= pass.expiresAt)
+      return storage.settleDiscovery(pass.id, { kind: "expired" });
+    if (finding.kind !== "work")
+      return storage.settleDiscovery(pass.id, finding);
+    const ticket =
+      finding.duplicate === "none" ? finding.task.id : finding.duplicate;
+    if (queue.some(({ id }) => id === ticket))
+      return storage.settleDiscovery(pass.id, { kind: "duplicate", ticket });
+    if (finding.duplicate !== "none")
+      throw new Error("Unknown duplicate ticket");
+    return storage.settleDiscovery(
+      pass.id,
+      { kind: "admitted", ticket },
+      finding.task,
+    );
+  }
+
+  function discoveryPrdLine(pass: DiscoveryPass, line: number) {
+    const contents = execFileSync(
+      "git",
+      ["-C", root, "show", `${pass.revision}:${pass.prd}`],
+      { encoding: "utf8" },
+    );
+    if (sha256(contents) !== pass.prdDigest)
+      throw new Error(
+        "Pinned revision does not contain the loaded PRD contents",
+      );
+    return contents.split("\n")[line - 1]?.trim().slice(0, 500) || undefined;
+  }
+
+  async function discoveryConfiguration(owner: ThreadID, enabled: boolean) {
+    if (!enabled) throw new Error("Discovery requires an unpaused factory");
+    await requireExecution("discover", owner);
+    const config = await effectiveConfiguration(root);
+    if (
+      !factoryDefinition(directory) ||
+      !config.execute ||
+      !config.discovery ||
+      !config.discoveryPrd
+    )
+      throw new Error(
+        "Discovery requires loaded opt-in and execution permission",
+      );
+    return {
+      ...config,
+      discovery: config.discovery,
+      discoveryPrd: config.discoveryPrd,
+    };
+  }
+
+  function expiredDiscovery(
+    pass: DiscoveryPass,
+    snapshot: Pick<DiscoveryPass, "revision" | "scope" | "prd" | "prdDigest">,
+  ) {
+    return (
+      now() >= pass.expiresAt ||
+      pass.revision !== snapshot.revision ||
+      !isDeepStrictEqual(pass.scope, snapshot.scope) ||
+      (pass.mode === "feature-creation" &&
+        (pass.prd !== snapshot.prd || pass.prdDigest !== snapshot.prdDigest))
+    );
+  }
+
+  function claimDiscovery(
+    storage: ReturnType<typeof openPersistence>,
+    queue: Task[],
+    config: Awaited<ReturnType<typeof discoveryConfiguration>>,
+    snapshot: Pick<DiscoveryPass, "revision" | "scope" | "prd" | "prdDigest">,
+  ) {
+    if (git(root, "rev-parse", "HEAD") !== snapshot.revision)
+      throw new Error("Checkout changed before discovery claim");
+    if (
+      queue.some(
+        (task) =>
+          task.intake !== "planned" &&
+          (storage.state.runs[task.id] ||
+            permitsDiscoveryPath(task, snapshot.scope)) &&
+          !fullyVerified(storage.state.runs[task.id]),
+      )
+    )
+      return { kind: "queue-not-empty" as const };
+    const at = now();
+    return storage.startDiscovery(
+      {
+        ...snapshot,
+        kind: "active",
+        id: randomUUID(),
+        mode: config.discovery.mode,
+        startedAt: at,
+        expiresAt: at + 15 * 60_000,
+      },
+      config.discovery.cooldownMs,
+    );
+  }
+
+  function claimedDiscovery(
+    storage: ReturnType<typeof openPersistence>,
+    id?: string,
+  ) {
+    const saved = storage.discoveryPass(id);
+    if (id && !saved) throw new Error("Unknown discovery pass");
+    return saved;
+  }
+
+  /** Claim or settle one local pass through the owning Foreman. Never dispatches or runs probes. @throws On unsafe state or invalid evidence. */
+  function discovery(
+    action: "discover" | "settle-discovery",
+    value: unknown,
+    owner: ThreadID,
+  ) {
+    const result = pending
+      .catch(() => {})
+      .then(() => {
+        const input = object(value);
+        const id = action === "settle-discovery" ? text(input.pass) : undefined;
+        return saveRecord(action, owner, async (storage) => {
+          const saved = claimedDiscovery(storage, id);
+          if (saved?.outcome) return saved.outcome;
+          const config = await discoveryConfiguration(
+            owner,
+            storage.state.enabled,
+          );
+          const snapshot = {
+            scope: [...new Set(config.scope)].sort(),
+            revision: git(root, "rev-parse", "HEAD"),
+            prd: config.discoveryPrd,
+            prdDigest: sha256(config.instructions),
+          };
+          const pass = saved?.pass;
+          if (pass && expiredDiscovery(pass, snapshot))
+            return storage.settleDiscovery(pass.id, { kind: "expired" });
+          if (!id && pass) return pass;
+          const { queue } = await queueWithTickets(root, config);
+          restoreTickets(queue, storage.tickets, storage.state);
+          return pass
+            ? completeDiscovery(storage, pass, queue, input.result)
+            : claimDiscovery(storage, queue, config, snapshot);
+        });
+      });
+    pending = result;
+    return result;
   }
 
   /** Checked scoped read, preserving SDK pagination and content. @throws On missing authority. */
@@ -6522,6 +6716,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
   }
   return {
     tick,
+    discovery,
     nativeHook,
     automation,
     recordMerge,

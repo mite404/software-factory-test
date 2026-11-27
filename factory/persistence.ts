@@ -21,6 +21,12 @@ import {
   type ScheduledGatePolicy,
 } from "./config";
 import { validCron } from "./cron";
+import {
+  validDiscoveryPolicy,
+  type discoveryPolicy,
+  type DiscoveryPass,
+  type DiscoveryOutcome,
+} from "./discovery";
 import { validReview, type Review } from "./review";
 import { validExecutor, type Executor } from "./executor";
 import { validDeliveryIntent, type DeliveryIntent } from "./delivery";
@@ -106,6 +112,8 @@ export type Task = {
   file?: string;
   /** Affected files and directories for lesson matching, not permissions. */
   lessonScope?: string[];
+  /** Exact permitted file for a native discovery ticket. Authored input cannot set it. */
+  discoveryPath?: string;
 };
 type Preparation = {
   base: string;
@@ -149,6 +157,9 @@ export type DefinitionPin = {
   setup?: { command: string; timeoutMs: number };
   /** Accepted native hook declarations; never treated as execution permission. */
   hooks?: NativeHook[];
+  discovery?: ReturnType<typeof discoveryPolicy>;
+  /** Repository-relative PRD path accepted with the discovery policy. */
+  discoveryPrd?: string;
 };
 type HookOutcome =
   "refused" | "succeeded" | "failed" | "timed-out" | "uncertain";
@@ -2323,7 +2334,11 @@ function definitionFields(value: unknown) {
     pin.scope.every(text) &&
     typeof pin.review === "boolean" &&
     typeof pin.instructions === "string" &&
-    validNativeHooks(pin.hooks) &&
+    [
+      validDiscoveryPolicy(pin.discovery),
+      optionalText(pin.discoveryPrd),
+      validNativeHooks(pin.hooks),
+    ].every(Boolean) &&
     gateAndWatchdog(pin) &&
     workerSettings(pin)
   );
@@ -3162,7 +3177,8 @@ function configuredTicket(
   replaceAdmitted: boolean,
 ) {
   const intake = saved ? ticketIntake(saved).intake : undefined;
-  if (intake === "admitted" && !replaceAdmitted) return;
+  if (intake === "admitted" && (!replaceAdmitted || saved?.discoveryPath))
+    return;
   return JSON.stringify({
     ...task,
     ...(intake ? { intake, outcome: task.outcome ?? saved!.outcome } : {}),
@@ -3301,6 +3317,12 @@ export function openPersistence(
       }
       definitionTables(db);
       automationRequestTable(db);
+      db.run(`CREATE TABLE IF NOT EXISTS discovery_passes (
+        id TEXT PRIMARY KEY, scope TEXT NOT NULL, revision TEXT NOT NULL, mode TEXT NOT NULL,
+        pass TEXT NOT NULL, outcome TEXT, finished_at INTEGER);
+        CREATE UNIQUE INDEX IF NOT EXISTS discovery_active ON discovery_passes ((1))
+          WHERE outcome IS NULL;
+        CREATE INDEX IF NOT EXISTS discovery_scope ON discovery_passes (scope, finished_at);`);
       db.run(`CREATE TABLE IF NOT EXISTS native_hook_attempts (
         id TEXT PRIMARY KEY, definition TEXT NOT NULL, owner TEXT NOT NULL,
         outcome TEXT NOT NULL CHECK (outcome IN
@@ -3336,6 +3358,94 @@ export function openPersistence(
     }
     return {
       state,
+      /** Read the active pass or recover a particular result on replay. @throws On failed I/O. */
+      discoveryPass(
+        id?: string,
+      ): { pass: DiscoveryPass; outcome?: DiscoveryOutcome } | undefined {
+        type Row = { pass: string; outcome: string | null };
+        const row =
+          id === undefined
+            ? db
+                .query<Row, []>(
+                  "SELECT pass, outcome FROM discovery_passes WHERE outcome IS NULL",
+                )
+                .get()
+            : db
+                .query<Row, [string]>(
+                  "SELECT pass, outcome FROM discovery_passes WHERE id = ?",
+                )
+                .get(id);
+        if (row)
+          return {
+            pass: JSON.parse(row.pass),
+            outcome: row.outcome ? JSON.parse(row.outcome) : undefined,
+          };
+      },
+      /** Claim a bounded pass or return the saved cooldown/result without changing storage. @throws On failed I/O. */
+      startDiscovery(pass: DiscoveryPass, cooldownMs: number) {
+        const scope = JSON.stringify(pass.scope);
+        const until = db
+          .query<{ finished_at: number }, [string]>(
+            "SELECT finished_at FROM discovery_passes WHERE scope = ? AND finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 1",
+          )
+          .get(scope);
+        if (until && pass.startedAt < until.finished_at + cooldownMs)
+          return {
+            kind: "cooldown" as const,
+            until: until.finished_at + cooldownMs,
+          };
+        const previous = db
+          .query<{ outcome: string }, [string, string, string, string, string]>(
+            `SELECT outcome FROM discovery_passes WHERE scope = ? AND revision = ? AND mode = ?
+           AND json_extract(outcome, '$.kind') NOT IN ('expired', 'evidence-unavailable')
+           AND (mode != 'feature-creation' OR
+             (json_extract(pass, '$.prd') = ? AND json_extract(pass, '$.prdDigest') = ?)) LIMIT 1`,
+          )
+          .get(scope, pass.revision, pass.mode, pass.prd, pass.prdDigest);
+        if (previous) {
+          const outcome: DiscoveryOutcome = JSON.parse(previous.outcome);
+          return outcome;
+        }
+        db.query(
+          "INSERT INTO discovery_passes (id, scope, revision, mode, pass) VALUES (?, ?, ?, ?, ?)",
+        ).run(pass.id, scope, pass.revision, pass.mode, JSON.stringify(pass));
+        return pass;
+      },
+      /** Settle the pass and its existing-queue admission atomically. @throws On a missing claim or failed I/O. */
+      settleDiscovery(id: string, outcome: DiscoveryOutcome, task?: Task) {
+        taskLessonScope(task?.lessonScope);
+        return db.transaction(() => {
+          const at = now();
+          const stamp = new Date(at).toISOString();
+          if (task) {
+            const inserted = db
+              .query("INSERT OR IGNORE INTO tickets (id, data) VALUES (?, ?)")
+              .run(task.id, JSON.stringify(task));
+            if (inserted.changes) {
+              saveEvent(db, {
+                at: stamp,
+                ticket: task.id,
+                action: "admitted",
+                detail: "Foreman discovery admission",
+              });
+            } else outcome = { kind: "duplicate", ticket: task.id };
+          }
+          const settled = db
+            .query(
+              "UPDATE discovery_passes SET outcome = ?, finished_at = ? WHERE id = ? AND outcome IS NULL",
+            )
+            .run(JSON.stringify(outcome), at, id);
+          if (!settled.changes)
+            throw new Error("Missing active discovery pass");
+          saveEvent(db, {
+            at: stamp,
+            ticket: "factory",
+            action: `discovery-${outcome.kind}`,
+            detail: id,
+          });
+          return outcome;
+        })();
+      },
       /** Reserve the native event once across owners, reloads and restarts. @throws On failed I/O. */
       claimHook(id: string, definition: string, owner: ThreadID) {
         return db.transaction(() => {

@@ -41,6 +41,97 @@ import pr103 from "./fixtures/pr103-live.json";
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 
+test("native discovery controls settle an exhausted pass without creating a child", async () => {
+  const root = await mkdtemp(join(tmpdir(), "factory-plugin-discovery-"));
+  const directory = join(root, ".git/factory");
+  let dispose = () => {};
+  let execute!: (
+    input: Record<string, unknown>,
+    ctx: PluginToolContext,
+  ) => Promise<unknown>;
+  try {
+    git(root, "init", "-q");
+    git(
+      root,
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "commit",
+      "--allow-empty",
+      "-qm",
+      "Fixture",
+    );
+    await writeFile(join(root, "prd.md"), "Fixture");
+    await writeFile(join(root, "tickets.json"), "[]");
+    await writeFile(
+      join(root, ".factory.json"),
+      JSON.stringify({
+        version: 1,
+        capacity: 1,
+        workerModel: "openai/gpt-6-luna",
+        prd: "prd.md",
+        tickets: "tickets.json",
+        scope: ["src/"],
+        verify: "true",
+        discovery: { cooldownMs: 1000 },
+        permissions: { execute: true, publish: false, externalTickets: false },
+      }),
+    );
+    const storage = openPersistence(directory, []);
+    storage.commit(
+      { enabled: true, owner: "T-owner", runs: {} },
+      "factory",
+      "fixture",
+      "Owner ready",
+    );
+    storage.close();
+    registerFactory(
+      {
+        logger: { log() {} },
+        createAgent() {
+          throw new Error("Discovery must not create agents");
+        },
+        registerTool(tool: { execute: typeof execute }) {
+          execute = tool.execute;
+        },
+        on() {},
+        onDispose(handler: () => void) {
+          dispose = handler;
+        },
+      } as unknown as PluginAPI,
+      root,
+      openStore,
+    );
+    const context = {
+      thread: { id: "T-owner" },
+    } as unknown as PluginToolContext;
+    await execute({ action: "reload" }, context);
+    const claim = JSON.parse(
+      String(await execute({ action: "discover" }, context)),
+    );
+    expect(claim).toMatchObject({ kind: "active", mode: "bug-finding" });
+    const finish = {
+      action: "settle-discovery",
+      pass: claim.id,
+      result: {
+        kind: "exhausted",
+        observation: "Local quality checks found no reproduction",
+      },
+    };
+    expect(JSON.parse(String(await execute(finish, context)))).toEqual({
+      kind: "exhausted",
+    });
+    expect(JSON.parse(String(await execute(finish, context)))).toEqual({
+      kind: "exhausted",
+    });
+    expect(factoryRecords(directory)?.tickets).toEqual([]);
+  } finally {
+    dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("installed policy refuses legacy, unknown and mismatched owners across recovery without changing native state", async () => {
   const root = await mkdtemp(join(tmpdir(), "factory-installed-policy-"));
   const directory = join(root, ".git/factory");

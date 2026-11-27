@@ -39,6 +39,14 @@
       }
     },
     "mode": { "type": "string", "minLength": 1 },
+    "discovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cooldownMs"],
+      "properties": {
+        "cooldownMs": { "type": "integer", "minimum": 1, "maximum": 604800000 }
+      }
+    },
     "workerModel": { "type": "string", "pattern": "^[^/]+/.+$" },
     "workerRunner": { "type": "string", "pattern": "\\S" },
     "workerEffort": {
