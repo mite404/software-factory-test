@@ -2,6 +2,8 @@ import { expect, test } from "bun:test";
 import type { PluginAPI, PluginToolContext } from "@ampcode/plugin";
 import { Database } from "bun:sqlite";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import {
   chmod,
   mkdtemp,
@@ -15,6 +17,31 @@ import { join } from "node:path";
 import { backup } from "./backup";
 import registerFactory from "./plugin";
 import { factoryStatus, openPersistence, type State } from "./persistence";
+
+const hash = (bytes: string | Buffer) =>
+  createHash("sha256").update(bytes).digest("hex");
+
+async function waitForBackupLock(directory: string) {
+  const lock = join(directory, "backup/lock");
+  for (let i = 0; i < 200 && !existsSync(lock); i++) await Bun.sleep(5);
+  expect(existsSync(lock)).toBe(true);
+}
+
+function expectCapturedEvidence(
+  db: Database,
+  archived: Record<string, string>,
+) {
+  const capturedDigests = db
+    .query<{ sha256: string }, []>(
+      "SELECT DISTINCT sha256 FROM evidence ORDER BY sha256",
+    )
+    .all()
+    .map((row) => row.sha256);
+  expect(capturedDigests.length).toBeGreaterThan(1);
+  expect(Object.keys(archived).sort()).toEqual(capturedDigests);
+  for (const digest of capturedDigests)
+    expect(hash(Buffer.from(archived[digest], "base64"))).toBe(digest);
+}
 
 test("backup CLI rejects destination overrides without publishing", async () => {
   const proc = Bun.spawn(
@@ -274,13 +301,19 @@ process.exit(code);
         "-r",
         revision,
       ).split("\n"),
-    ).toEqual(["projects/alpha/manifest.json", "projects/alpha/state.sqlite"]);
+    ).toEqual([
+      "projects/alpha/evidence.json",
+      "projects/alpha/manifest.json",
+      "projects/alpha/state.sqlite",
+    ]);
     expect(
       JSON.parse(git(remote, "show", "main:projects/alpha/manifest.json")),
-    ).toEqual({
+    ).toMatchObject({
       projectKey: "alpha",
       schemaVersion: 2,
       applicationRevision: git(project, "rev-parse", "HEAD"),
+      evidence: [],
+      lessons: [],
     });
     expect((await backup(project)).lastConfirmed?.revision).toBe(revision);
     expect(await readFile(pushes, "utf8")).toBe("push\n");
@@ -452,8 +485,10 @@ try {
         .split("\n")
         .filter((p) => p.startsWith("projects/")),
     ).toEqual([
+      "projects/alpha/evidence.json",
       "projects/alpha/manifest.json",
       "projects/alpha/state.sqlite",
+      "projects/beta/evidence.json",
       "projects/beta/manifest.json",
       "projects/beta/state.sqlite",
     ]);
@@ -609,6 +644,113 @@ try {
       } as unknown as PluginToolContext,
     );
     retainedState.foreman = factoryStatus(directory).foreman;
+    const phase = openPersistence(directory, []);
+    const content = "Gate passed for the accepted candidate.\n";
+    const digest = hash(content);
+    phase.record("protected", [
+      {
+        attempt: 1,
+        revision,
+        kind: "gate",
+        outcome: "gate-passed",
+        definition: null,
+        tool: "bun test",
+        content,
+      },
+    ]);
+    const lesson = phase.recordLesson({
+      project: phase.lessonProject,
+      ticket: "protected",
+      phase: "gate",
+      sourceThread: "T-worker",
+      revision,
+      attempt: 1,
+      scope: ["src/"],
+      evidence: [digest],
+      findings: ["Keep verification bound to the candidate."],
+      failedApproaches: [],
+      questions: [],
+    });
+    phase.close();
+    const checkpoint = { action: "backup", lessonID: lesson.id };
+    const foreman = {
+      thread: { id: "T-foreman" },
+    } as unknown as PluginToolContext;
+    expect(execute(checkpoint, operatorContext)).rejects.toThrow(
+      "owning Foreman",
+    );
+    const beforeCheckpoint = git(remote, "rev-parse", "main");
+    expect(
+      execute({ ...checkpoint, lessonID: "a".repeat(64) }, foreman),
+    ).rejects.toThrow("lesson");
+    const evidencePath = join(directory, "evidence", digest);
+    await writeFile(
+      join(directory, "evidence", "unreferenced"),
+      "credential-canary",
+    );
+    await rm(evidencePath);
+    expect(execute(checkpoint, foreman)).rejects.toThrow("evidence");
+    await writeFile(evidencePath, "X".repeat(Buffer.byteLength(content)));
+    expect(backup(project)).rejects.toThrow("evidence");
+    expect(git(remote, "rev-parse", "main")).toBe(beforeCheckpoint);
+    await writeFile(evidencePath, content);
+    await writeFile(modePath, "lost");
+    const checkpointResult = JSON.parse(
+      String(await execute(checkpoint, foreman)),
+    );
+    await writeFile(modePath, "");
+    expect(checkpointResult.status).toBe("confirmed");
+    const checkpointHead = git(remote, "rev-parse", "main");
+    expect(checkpointResult.lastConfirmed.revision).toBe(checkpointHead);
+    const manifestBytes = execFileSync(gitExecutable, [
+      "-C",
+      remote,
+      "show",
+      `${checkpointHead}:projects/beta/manifest.json`,
+    ]);
+    expect(checkpointResult.lastConfirmed.manifestSHA256).toBe(
+      hash(manifestBytes),
+    );
+    expect(checkpointResult.lastConfirmed.applicationRevision).toBe(
+      git(project, "rev-parse", "HEAD"),
+    );
+    const manifest = JSON.parse(manifestBytes.toString());
+    expect(manifest.evidence).toEqual([
+      {
+        ticket: "protected",
+        attempt: 1,
+        revision,
+        kind: "gate",
+        outcome: "gate-passed",
+        sha256: digest,
+        bytes: Buffer.byteLength(content),
+      },
+    ]);
+    expect(manifest.lessons).toEqual([
+      {
+        id: lesson.id,
+        project: lesson.project,
+        ticket: "protected",
+        phase: "gate",
+        attempt: 1,
+        revision,
+      },
+    ]);
+    expect(
+      JSON.parse(git(remote, "show", "main:projects/beta/evidence.json")),
+    ).toEqual({
+      [digest]: Buffer.from(content).toString("base64"),
+    });
+    expect(git(remote, "show", "main:projects/alpha/evidence.json")).toBe("{}");
+    expect(
+      git(project, "log", "--all", "--format=", "--name-only"),
+    ).not.toMatch(/state\.sqlite|evidence\.json|manifest\.json/);
+    change();
+    const beforeRepeat = await readFile(pushes, "utf8");
+    expect(JSON.parse(String(await execute(checkpoint, foreman)))).toEqual(
+      checkpointResult,
+    );
+    expect(await readFile(pushes, "utf8")).toBe(beforeRepeat);
     let writes = 0;
     writer = setInterval(() => {
       const storage = openPersistence(directory, []);
@@ -618,15 +760,25 @@ try {
         "factory",
         "concurrent",
         String(writes),
+        [
+          {
+            attempt: 1,
+            revision,
+            kind: "gate",
+            outcome: "gate-passed",
+            definition: null,
+            tool: "bun test",
+            content: `Concurrent gate ${writes}`,
+          },
+        ],
       );
       storage.close();
     }, 5);
     const running = backup(project);
-    const concurrent = backup(project);
-    const results = await Promise.allSettled([running, concurrent]);
+    await waitForBackupLock(directory);
+    expect(execute(checkpoint, foreman)).rejects.toThrow("already locked");
+    expect((await running).status).toBe("confirmed");
     clearInterval(writer);
-    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
-    expect(results.filter((r) => r.status === "rejected")).toHaveLength(1);
     const bytes = execFileSync(gitExecutable, [
       "-C",
       remote,
@@ -641,6 +793,13 @@ try {
     expect(db.query("PRAGMA integrity_check").get()).toEqual({
       integrity_check: "ok",
     });
+    expect(db.query("SELECT id FROM lessons").all()).toEqual([
+      { id: lesson.id },
+    ]);
+    const archived = JSON.parse(
+      git(remote, "show", "main:projects/beta/evidence.json"),
+    );
+    expectCapturedEvidence(db, archived);
     const event = db
       .query(
         "SELECT detail FROM events WHERE action='concurrent' ORDER BY id DESC LIMIT 1",
@@ -786,6 +945,26 @@ try {
     ).toBe(
       "Factory backup <factory@localhost>\nFactory backup <factory@localhost>",
     );
+    const safeHead = git(remote, "rev-parse", "main");
+    const safeReceipt = (await receipt()).lastConfirmed;
+    const secret = "ghp_fixturecredentialcanary1234567890";
+    const unsafe = openPersistence(directory, []);
+    unsafe.record("protected", [
+      {
+        attempt: 1,
+        revision,
+        kind: "gate",
+        outcome: "gate-failed",
+        definition: null,
+        tool: "bun test",
+        content: `Unexpected token output: ${secret}`,
+      },
+    ]);
+    unsafe.close();
+    expect(backup(project)).rejects.toThrow("may contain credentials");
+    expect(git(remote, "rev-parse", "main")).toBe(safeHead);
+    expect((await receipt()).lastConfirmed).toEqual(safeReceipt);
+    expect(git(remote, "log", "--all", "-G", secret, "--format=%H")).toBe("");
   } finally {
     clearInterval(writer);
     dispose();

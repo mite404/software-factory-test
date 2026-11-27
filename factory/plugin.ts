@@ -277,6 +277,32 @@ function creationInput(
   return { ticket: input.ticket, role: input.role };
 }
 
+function backupLesson(input: Record<string, unknown>) {
+  const { action, lessonID } = input;
+  if (lessonID === undefined) return;
+  if (
+    action !== "backup" ||
+    typeof lessonID !== "string" ||
+    !/^[a-f0-9]{64}$/.test(lessonID)
+  )
+    throw new Error(
+      "A valid lesson ID is only accepted for backup checkpoints",
+    );
+  return lessonID;
+}
+
+function authorizeBackup(
+  state: State,
+  caller: PluginToolContext["thread"]["id"],
+  lessonID: string | undefined,
+) {
+  assertControlCaller(
+    state,
+    caller,
+    lessonID === undefined ? "backup" : "backup-checkpoint",
+  );
+}
+
 function resetTime(message: string, observedAt: number) {
   const match = /\bresets (\d{1,2})(?::([0-5]\d))?\s*(am|pm) \(UTC\)/i.exec(
     message,
@@ -920,6 +946,12 @@ export default function registerFactory(
           description:
             "Canonical ticket ID for admit, record-insight, record-merge or record-landing. Only the owning Foreman may use these actions; none starts or dispatches work.",
         },
+        lessonID: {
+          type: "string",
+          pattern: "^[a-f0-9]{64}$",
+          description:
+            "With backup, request an owner-only phase checkpoint for this recorded lesson ID. Only call backup with explicit user authorization; permissions.backup must be enabled.",
+        },
         insight: {
           type: "string",
           minLength: 1,
@@ -1013,13 +1045,14 @@ export default function registerFactory(
     async execute(input, ctx) {
       const requested = input.action;
       const creation = creationInput(input);
+      const lessonID = backupLesson(input);
       if (requested === "backup") {
-        assertControlCaller(
+        authorizeBackup(
           factoryStatus(factory.directory),
           ctx.thread.id,
-          requested,
+          lessonID,
         );
-        return JSON.stringify(await backup(root));
+        return JSON.stringify(await backup(root, lessonID));
       }
       const record = recordings.get(requested);
       if (record)

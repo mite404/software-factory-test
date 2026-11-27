@@ -2541,6 +2541,7 @@ export function assertControlCaller(
     throw new Error(
       "This thread no longer owns the factory. The operator decides any handoff.",
     );
+  if (action === "backup-checkpoint") assertOwner(state, owner);
 }
 
 function assertWatchdogCaller(
