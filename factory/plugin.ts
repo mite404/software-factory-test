@@ -902,6 +902,15 @@ export default function registerFactory(
       "list-lessons",
       (input, ctx) => factory.listLessons(input.ticket, ctx.thread.id),
     ],
+    [
+      "discover",
+      (_input, ctx) => factory.discovery("discover", {}, ctx.thread.id),
+    ],
+    [
+      "settle-discovery",
+      (input, ctx) =>
+        factory.discovery("settle-discovery", input, ctx.thread.id),
+    ],
     ["note", (input, ctx) => factory.note(input.message, ctx.thread.id)],
     [
       "register-observer",
@@ -954,6 +963,16 @@ export default function registerFactory(
           pattern: "^[a-f0-9]{64}$",
           description:
             "With backup, request an owner-only phase checkpoint for this recorded lesson ID. Only call backup with explicit user authorization; permissions.backup must be enabled.",
+        },
+        pass: {
+          type: "string",
+          description:
+            "For owner-only settle-discovery: ID returned by discover. Discover claims one local pass on an idle, opted-in factory; neither action dispatches or files externally.",
+        },
+        result: {
+          type: "object",
+          description:
+            "For settle-discovery: use evidence-unavailable if required local evidence cannot be collected. Use exhausted only with an observation from a completed inspection that found no qualifying work. Investigations and work follow the pinned mode in factory/README.md. Supply no credentials, exploit details, or commands to execute.",
         },
         insight: {
           type: "string",

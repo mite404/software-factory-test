@@ -24,6 +24,9 @@
         "mode": {
           "$ref": "definition.schema.json#/properties/mode"
         },
+        "discovery": {
+          "$ref": "definition.schema.json#/properties/discovery"
+        },
         "prd": {
           "$ref": "definition.schema.json#/properties/prd"
         },

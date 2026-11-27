@@ -126,7 +126,7 @@ includes the leftovers of an interrupted migration, which `--migrate` completes.
 factory/config/
   factory.yaml                  version, capacity, mode, prd, tickets, scope, verify, permissions,
                                 ticketFiles, backup, bookkeepingSHA256, watchdog, providerLimit,
-                                hooks
+                                hooks, discovery
   agents/foreman/agent.md       front matter: model (orchestratorModel). Body: the Foreman prompt
   agents/implementer/agent.md   front matter: model, effort, runner (workerModel, workerEffort,
                                 workerRunner). Body must be empty
@@ -392,6 +392,58 @@ admission until execution begins. Each task includes `outcome`, or `null` when n
 authored. It never falls back to the private brief. Top-level `counts` contains separate `planned`,
 `queued`, and `accepted` totals. Reads do not import or refresh records. Importing the full planned
 inventory remains a separate Foreman action after acceptance.
+
+### Local discovery
+
+Discovery is off unless the loaded definition sets `discovery: { cooldownMs: 3600000 }` (one
+hour in this example). The cooldown must be 1 ms to 7 days. With discovery enabled, `mode` is
+`bug-finding` by default, or `feature-creation` or `ui-polish`. The owner loads changes with
+`reload`. Removing discovery or `permissions.execute` takes effect without waiting for reload.
+
+1. Once ordinary work is settled, the owning Foreman calls `discover`. No new pass starts while
+   non-planned queue entries are unfinished, except undispatched discovery entries held outside
+   the loaded scope. An active pass returns its existing ID, Git `revision`,
+   allowed `scope`, mode, and deadline. It permits one result and expires after 15 minutes. Use
+   only local repository quality checks on the pinned revision, never a network target. If you
+   cannot collect evidence in the available environment, do not claim a finding.
+2. Call `settle-discovery` with that ID in `pass` and the evidence in `result`. The factory checks
+   the submitted structure, the file in the pinned tree, and the PRD reference for a feature.
+   The Foreman is responsible for having actually observed and checked the evidence. The factory
+   does not execute commands from the report, launch probes, or infer evidence from transcripts.
+   These actions do not grant the restricted Foreman repository, check execution, or render access.
+3. An admitted finding enters the normal queue in the same transaction as the saved result. A
+   later `reconcile` can dispatch it, with the named file as the implementation and gate scope.
+   Existing verified lessons can match that file through `lessonScope`; they remain advisory.
+
+Submit `kind: "exhausted"` with an `observation` from a completed inspection only when no finding
+qualifies. If required repository reads, checks, or renders are unavailable, submit
+`kind: "evidence-unavailable"` instead. It admits no work and allows a new pass after cooldown.
+An `observation` is owner-attested, not independently verified by the factory.
+A `kind: "investigation"` result
+takes a `path` and `question` without priority or implementation work. For defensive security
+observations, also set `category: "defensive-security"` and provide `blastRadius`. Describe only
+the control and affected scope, not exploitation, intrusion, payloads or live-system testing.
+
+For `kind: "work"`, supply a stable lowercase `key` (words separated by hyphens), one tracked
+in-scope `path`, `problem`, `observation`, and an observable `acceptance` criterion. Set `duplicate`
+to the existing ticket ID after checking the queue, or `"none"` if there is no match. A previously
+admitted `(path, key)` deduplicates across modes and revisions even if `duplicate` says `"none"`.
+Use short single-line, credential-free summaries. In addition, each mode requires:
+
+| Mode | Extra fields |
+| --- | --- |
+| Bug finding | `expected`, `affectedUsers`, `blastRadius`, `fixScope`, `bugType` (`functional`, `accessibility`, `cosmetic`), `confidence: "reproduced"`, `priority` (`P0` to `P3`; cosmetic findings at most `P2`), and `blockers: []`. If blocked or unverified, record an investigation instead; a blocker does not reduce severity. |
+| Feature creation | `prdLine` (one-based, nonblank in the tracked PRD at the pinned revision) and `userStory`. The tracked PRD must match the loaded PRD content. |
+| UI polish | `state`, `rendering` (describe the observed local render), `uiType` (`accessibility`, `cosmetic`, `interaction`). |
+
+A restart keeps the active pass and a repeated settlement returns the previous outcome without
+another admission. Pause or permission refusal leaves the pass untouched. A changed Git revision,
+changed loaded scope, changed loaded PRD for a feature pass, or passed deadline expires it without
+admission. Authored PRD edits do not change loaded PRD evidence until `reload`. Mode reloads select
+the next pass only. The cooldown runs from settlement for that scope, even across mode changes.
+After the cooldown, a completed scope, revision, mode, and feature PRD still returns its saved
+result rather than opening a new pass. No discovery action files externally, publishes, or changes
+live state.
 
 ### Ticket file sync
 

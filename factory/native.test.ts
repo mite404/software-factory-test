@@ -1,5 +1,6 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { rejects } from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { renameSync, symlinkSync } from "node:fs";
@@ -57,6 +58,473 @@ import {
 
 const installer = resolve(import.meta.dir, "setup-factory.ts");
 const preparationRoots: string[] = [];
+
+async function discoveryFixture(mode?: string) {
+  const { root, host } = await preparationFixture(() => "");
+  const path = join(root, ".factory.json");
+  await Bun.write(
+    path,
+    JSON.stringify({
+      ...(await Bun.file(path).json()),
+      mode,
+      workerModel: "openai/gpt-6-luna",
+      discovery: { cooldownMs: 1000 },
+      setup: undefined,
+      setupTimeoutMs: undefined,
+    }),
+  );
+  await Bun.write(join(root, "tickets.json"), "[]");
+  await mkdir(join(root, "src"));
+  await Bun.write(join(root, "src/card.ts"), "export const label = '';\n");
+  const git = (...args: string[]) => execFileSync("git", ["-C", root, ...args]);
+  git("add", ".");
+  git("commit", "-qm", "discovery fixture");
+  const creates: string[] = [];
+  const nativeHost: NativeHost = {
+    ...host,
+    async create(_owner, model) {
+      creates.push(model);
+      return "T-discovered";
+    },
+    async send() {},
+  };
+  const owner = "T-owner" as const;
+  let clock = 10_000;
+  const restart = () => createFactory(root, nativeHost, openStore, () => clock);
+  const engine = restart();
+  const storage = openPersistence(engine.directory, []);
+  storage.commit(
+    { enabled: true, owner, runs: {} },
+    "factory",
+    "fixture",
+    "Owner ready",
+  );
+  storage.close();
+  await engine.tick("reload", owner);
+  return {
+    root,
+    engine,
+    restart,
+    owner,
+    creates,
+    git,
+    advance: (ms: number) => {
+      clock += ms;
+    },
+    edit: async (update: Record<string, unknown>) => {
+      await Bun.write(
+        path,
+        JSON.stringify({ ...(await Bun.file(path).json()), ...update }),
+      );
+    },
+    result: {
+      kind: "work",
+      key: "empty-card-label",
+      path: "src/card.ts",
+      problem: "The card has no accessible name.",
+      acceptance: "The card has an accessible name in its default state.",
+      observation:
+        "Local fixture: the accessibility tree shows an unnamed card.",
+      duplicate: "none",
+    },
+  };
+}
+
+test("discovery rejects a path whose lesson scope cannot reopen", async () => {
+  const { root, engine, owner, git, restart, result } =
+    await discoveryFixture("feature-creation");
+  const path = `src/${"a".repeat(161)}.ts`;
+  await Bun.write(join(root, path), "export {};\n");
+  git("add", path);
+  git("commit", "-qm", "Long path fixture");
+  const pass = await engine.discovery("discover", {}, owner);
+  if (!("id" in pass)) throw new Error("Expected a pass");
+  await rejects(
+    engine.discovery(
+      "settle-discovery",
+      {
+        pass: pass.id,
+        result: {
+          ...result,
+          path,
+          prdLine: 1,
+          userStory: "As a reader I need a label",
+        },
+      },
+      owner,
+    ),
+    /lesson scope/,
+  );
+  expect((await restart().tick("reconcile", owner)).runs).toEqual({});
+  expect(factoryRecords(engine.directory)?.tickets).toEqual([]);
+});
+
+test("discovery can claim a new scope without dispatching an old admission", async () => {
+  const { engine, owner, restart, edit, creates, result } =
+    await discoveryFixture("feature-creation");
+  const pass = await engine.discovery("discover", {}, owner);
+  if (!("id" in pass)) throw new Error("Expected a pass");
+  expect(
+    await engine.discovery(
+      "settle-discovery",
+      {
+        pass: pass.id,
+        result: {
+          ...result,
+          prdLine: 1,
+          userStory: "As a reader I need a label",
+        },
+      },
+      owner,
+    ),
+  ).toMatchObject({ kind: "admitted" });
+  await edit({ scope: ["web/"] });
+  await engine.tick("reload", owner);
+  const reopened = restart();
+  expect((await reopened.tick("reconcile", owner)).runs).toEqual({});
+  expect(await reopened.discovery("discover", {}, owner)).toMatchObject({
+    kind: "active",
+    scope: ["web/"],
+  });
+  expect(creates).toEqual([]);
+  expect(factoryRecords(engine.directory)?.tickets).toHaveLength(1);
+});
+
+test("discovery refuses tracked factory configuration that the candidate gate protects", async () => {
+  const { engine, root, owner, edit, git, result } =
+    await discoveryFixture("feature-creation");
+  const path = "factory/definition.yaml";
+  await mkdir(join(root, "factory"));
+  await Bun.write(join(root, path), "version: 1\n");
+  git("add", path);
+  git("commit", "-qm", "Protected path fixture");
+  await rm(join(root, path));
+  await edit({ scope: ["factory/"] });
+  await engine.tick("reload", owner);
+  const pass = await engine.discovery("discover", {}, owner);
+  if (!("id" in pass)) throw new Error("Expected a pass");
+  await rejects(
+    engine.discovery(
+      "settle-discovery",
+      {
+        pass: pass.id,
+        result: {
+          ...result,
+          path,
+          prdLine: 1,
+          userStory: "As a reader I need a label",
+        },
+      },
+      owner,
+    ),
+    /protected|in-scope/,
+  );
+  expect(factoryRecords(engine.directory)?.tickets).toEqual([]);
+});
+
+test("feature discovery uses the loaded PRD until reload and expires claims when that PRD changes", async () => {
+  const { engine, owner, edit, advance, result } =
+    await discoveryFixture("feature-creation");
+  await edit({ prd: "tickets.json" });
+  const pass = await engine.discovery("discover", {}, owner);
+  expect(pass).toMatchObject({ kind: "active", prd: "prd.md" });
+  if (!("id" in pass)) throw new Error("Expected a pass");
+  await engine.tick("reload", owner);
+  expect(
+    await engine.discovery(
+      "settle-discovery",
+      {
+        pass: pass.id,
+        result: {
+          ...result,
+          prdLine: 1,
+          userStory: "As a reader I need a label",
+        },
+      },
+      owner,
+    ),
+  ).toEqual({ kind: "expired" });
+  advance(1000);
+  expect(await engine.discovery("discover", {}, owner)).toMatchObject({
+    kind: "active",
+    prd: "tickets.json",
+  });
+  expect(factoryRecords(engine.directory)?.tickets).toEqual([]);
+});
+
+test("feature discovery refuses a tracked PRD that differs from the loaded copy", async () => {
+  const { root, engine, owner, result } =
+    await discoveryFixture("feature-creation");
+  await Bun.write(join(root, "prd.md"), "The card needs a visible title.\n");
+  await engine.tick("reload", owner);
+  const pass = await engine.discovery("discover", {}, owner);
+  if (!("id" in pass)) throw new Error("Expected a pass");
+  await rejects(
+    engine.discovery(
+      "settle-discovery",
+      {
+        pass: pass.id,
+        result: {
+          ...result,
+          prdLine: 1,
+          userStory: "As a reader I need a title",
+        },
+      },
+      owner,
+    ),
+    /does not contain the loaded PRD contents/,
+  );
+  expect(factoryRecords(engine.directory)?.tickets).toEqual([]);
+});
+
+test("unavailable discovery evidence can be retried after cooldown", async () => {
+  const { engine, owner, advance, restart } =
+    await discoveryFixture("ui-polish");
+  const pass = await engine.discovery("discover", {}, owner);
+  if (!("id" in pass)) throw new Error("Expected a pass");
+  await rejects(
+    engine.discovery(
+      "settle-discovery",
+      { pass: pass.id, result: { kind: "exhausted" } },
+      owner,
+    ),
+    /completed inspection observation/,
+  );
+  expect(
+    await engine.discovery(
+      "settle-discovery",
+      { pass: pass.id, result: { kind: "evidence-unavailable" } },
+      owner,
+    ),
+  ).toEqual({ kind: "evidence-unavailable" });
+  const reopened = restart();
+  expect(await reopened.discovery("discover", {}, owner)).toMatchObject({
+    kind: "cooldown",
+  });
+  advance(1000);
+  expect(await reopened.discovery("discover", {}, owner)).toMatchObject({
+    kind: "active",
+  });
+  expect(factoryRecords(engine.directory)?.tickets).toEqual([]);
+});
+
+test("discovery admits one scoped ticket across restart and repeated intake", async () => {
+  const { engine, restart, owner, creates, result } = await discoveryFixture();
+  const pass = await engine.discovery("discover", {}, owner);
+  expect(pass).toMatchObject({ mode: "bug-finding", kind: "active" });
+  if (!("id" in pass)) throw new Error("Expected a pass");
+  const input = {
+    pass: pass.id,
+    result: {
+      ...result,
+      expected: "The default card has an accessible name.",
+      affectedUsers: "Screen-reader users",
+      blastRadius: "Default card instances",
+      fixScope: "The card label",
+      bugType: "accessibility",
+      confidence: "reproduced",
+      priority: "P1",
+      blockers: [],
+    },
+  };
+  await rejects(
+    engine.discovery(
+      "settle-discovery",
+      {
+        ...input,
+        result: { ...input.result, confidence: "hypothesis" },
+      },
+      owner,
+    ),
+    /reproduced/,
+  );
+  await rejects(
+    engine.discovery(
+      "settle-discovery",
+      {
+        ...input,
+        result: { ...input.result, bugType: "security" },
+      },
+      owner,
+    ),
+    /investigations only/,
+  );
+  const db = new Database(join(engine.directory, "state.sqlite"));
+  try {
+    db.run(`CREATE TRIGGER break_discovery BEFORE UPDATE ON discovery_passes
+      BEGIN SELECT RAISE(ABORT, 'fixture interrupted intake'); END`);
+    await rejects(
+      engine.discovery("settle-discovery", input, owner),
+      /fixture interrupted intake/,
+    );
+    expect(factoryRecords(engine.directory)?.tickets).toEqual([]);
+    db.run("DROP TRIGGER break_discovery");
+  } finally {
+    db.close();
+  }
+  const restarted = restart();
+  expect(await restarted.discovery("discover", {}, owner)).toEqual(pass);
+  const outcome = await restarted.discovery("settle-discovery", input, owner);
+  expect(outcome).toMatchObject({ kind: "admitted" });
+  expect(creates).toEqual([]);
+  const dispatched = await restarted.tick("reconcile", owner);
+  expect(Object.values(dispatched.runs)).toMatchObject([
+    { thread: "T-discovered" },
+  ]);
+  const run = Object.values(dispatched.runs)[0]!;
+  expect(factoryDefinition(engine.directory, run.definition)?.scope).toEqual([
+    "src/card.ts",
+  ]);
+  const again = restart();
+  expect(await again.discovery("settle-discovery", input, owner)).toEqual(
+    outcome,
+  );
+  expect(factoryRecords(engine.directory)?.tickets).toHaveLength(1);
+  expect(
+    Object.values((await again.tick("reconcile", owner)).runs),
+  ).toMatchObject([{ thread: "T-discovered" }]);
+  expect(creates).toEqual(["openai/gpt-6-luna"]);
+});
+
+test("discovery keeps the active mode and gates the next pass on cooldown, pause and revision", async () => {
+  const { engine, owner, edit, advance, git, result } =
+    await discoveryFixture("feature-creation");
+  await rejects(
+    engine.discovery("discover", {}, "T-stranger"),
+    /owning Foreman/,
+  );
+  const [pass, concurrent] = await Promise.all([
+    engine.discovery("discover", {}, owner),
+    engine.discovery("discover", {}, owner),
+  ]);
+  expect(concurrent).toEqual(pass);
+  if (!("id" in pass)) throw new Error("Expected a pass");
+  await edit({ mode: "ui-polish" });
+  await engine.tick("reload", owner);
+  expect(await engine.discovery("discover", {}, owner)).toEqual(pass);
+  await rejects(
+    engine.discovery(
+      "settle-discovery",
+      {
+        pass: pass.id,
+        result: {
+          ...result,
+          prdLine: 99,
+          userStory: "As a reader, I want to locate the card.",
+        },
+      },
+      owner,
+    ),
+    /PRD line/,
+  );
+  expect(
+    await engine.discovery(
+      "settle-discovery",
+      {
+        pass: pass.id,
+        result: {
+          kind: "exhausted",
+          observation: "Compared tracked card with the PRD; no gap found",
+        },
+      },
+      owner,
+    ),
+  ).toEqual({ kind: "exhausted" });
+  advance(999);
+  expect(await engine.discovery("discover", {}, owner)).toEqual({
+    kind: "cooldown",
+    until: 11_000,
+  });
+  advance(1);
+  const ui = await engine.discovery("discover", {}, owner);
+  expect(ui).toMatchObject({ kind: "active", mode: "ui-polish" });
+  if (!("id" in ui)) throw new Error("Expected a UI pass");
+  const finish = () =>
+    engine.discovery(
+      "settle-discovery",
+      {
+        pass: ui.id,
+        result: {
+          ...result,
+          uiType: "cosmetic",
+          state: "Default",
+          rendering: "Card overflows its container at 320px.",
+        },
+      },
+      owner,
+    );
+  await edit({ discovery: undefined });
+  await rejects(finish(), /opt-in/);
+  await edit({ discovery: { cooldownMs: 1000 } });
+  git("commit", "--allow-empty", "-qm", "New revision");
+  expect(await finish()).toEqual({ kind: "expired" });
+  await engine.tick("pause", owner);
+  await rejects(engine.discovery("discover", {}, owner), /unpaused/);
+  expect(factoryRecords(engine.directory)?.tickets).toEqual([]);
+});
+
+test.each(["feature-creation", "ui-polish"])(
+  "discovery admits only pinned evidence in %s",
+  async (mode) => {
+    const { engine, owner, result } = await discoveryFixture(mode);
+    const pass = await engine.discovery("discover", {}, owner);
+    if (!("id" in pass)) throw new Error("Expected a pass");
+    const work = {
+      ...result,
+      ...(mode === "feature-creation"
+        ? { prdLine: 1, userStory: "As a reader, I want to locate the card." }
+        : {
+            uiType: "cosmetic",
+            state: "Default",
+            rendering: "The card overflows its container at 320px.",
+          }),
+    };
+    await rejects(
+      engine.discovery(
+        "settle-discovery",
+        { pass: pass.id, result: { ...work, path: "prd.md" } },
+        owner,
+      ),
+      /in-scope/,
+    );
+    expect(
+      await engine.discovery(
+        "settle-discovery",
+        { pass: pass.id, result: work },
+        owner,
+      ),
+    ).toMatchObject({ kind: "admitted" });
+    expect(factoryRecords(engine.directory)?.tickets).toHaveLength(1);
+  },
+);
+
+test("discovery records defensive security for investigation without admitted work or repeat passes", async () => {
+  const { engine, owner, advance } = await discoveryFixture();
+  const pass = await engine.discovery("discover", {}, owner);
+  if (!("id" in pass)) throw new Error("Expected a pass");
+  const outcome = await engine.discovery(
+    "settle-discovery",
+    {
+      pass: pass.id,
+      result: {
+        kind: "investigation",
+        path: "src/card.ts",
+        category: "defensive-security",
+        question:
+          "Does the shared renderer apply the intended escaping policy?",
+        blastRadius: "Every renderer consumer",
+      },
+    },
+    owner,
+  );
+  expect(outcome).toMatchObject({
+    kind: "investigation",
+    question: expect.stringContaining("Every renderer consumer"),
+  });
+  expect(factoryRecords(engine.directory)?.tickets).toEqual([]);
+  advance(1000);
+  expect(await engine.discovery("discover", {}, owner)).toEqual(outcome);
+});
 
 async function auditGateOutcome(
   directory: string,
