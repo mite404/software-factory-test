@@ -996,15 +996,16 @@ Only three files under `projects/<projectKey>/` are staged:
 - `state.sqlite` contains the consistent coordinator state, including lessons and their history.
 - `evidence.json` maps recorded SHA-256 digests to the exact evidence bytes encoded as base64.
   Backup reads only the digests named by the captured SQLite rows and verifies their size and hash.
-  A missing or corrupt file, or a recognized credential signature in evidence, refuses publication.
+  A missing or corrupt evidence file refuses publication.
 - `manifest.json` records the manifest and schema versions, stable project key, application
   revision, evidence and lesson identities with source revisions, and both payload hashes.
 
 SQLite `VACUUM INTO` captures a consistent snapshot, then `integrity_check` validates it. Both run
 outside the plugin process in the installed `bun` executable. The operation supports rollback
 journals and WAL without changing settings. Rollback mode can contend with concurrent writers.
-Never record credentials in coordinator state or evidence. Signature checks cannot detect all
-secrets. Configuration files, authentication files, unrelated files, and unrecorded evidence are not
+Before staging, backup refuses recognized credential signatures in the frozen database or evidence.
+This check cannot detect all secrets. Never record credentials in coordinator state or evidence.
+Configuration files, authentication files, unrelated files, and unrecorded evidence are not
 collected. Nothing is written to the application Git history.
 
 The Git directory contains `factory/backup/receipt.json` and a retained publication workspace.
@@ -1013,7 +1014,8 @@ confirmed remote revision, manifest SHA-256, application revision, and confirmat
 receipt covers that snapshot, not later local progress. Older receipts without a manifest hash do
 not prove evidence coverage. Receipts stay outside SQLite so unchanged input produces no new commit.
 A checkpoint whose lesson is already in the last remotely confirmed manifest returns that receipt
-without publishing newer local progress. Use a manual backup to preserve newer progress.
+before capturing newer local progress, even if later evidence is missing. Use a manual backup to
+preserve newer progress.
 
 A filesystem lock rejects overlapping manual and checkpoint requests. After an interrupted process,
 inspect its receipt and confirm no backup is running before removing `factory/backup/lock` and

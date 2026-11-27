@@ -367,10 +367,15 @@ async function readEvidence(directory: string, digest: string, bytes: number) {
   }
 }
 
-async function fileDigest(path: string) {
-  const hasher = new Bun.CryptoHasher("sha256");
-  for await (const bytes of Bun.file(path).stream()) hasher.update(bytes);
-  return hasher.digest("hex");
+async function screenedStateDigest(path: string) {
+  // ponytail: one buffer keeps signatures intact across read boundaries; use a streaming
+  // matcher if snapshot size makes this allocation a problem.
+  const bytes = await readFile(path);
+  if (credentialSignature.test(bytes.toString("utf8")))
+    throw new BackupRefusal(
+      "SQLite snapshot may contain credentials; backup refused",
+    );
+  return sha256(bytes);
 }
 
 async function coversLesson(
@@ -413,13 +418,14 @@ async function capture(
     throw new BackupRefusal(
       "Checkpoint lesson is not recorded in the snapshot",
     );
+  const stateSHA256 = await screenedStateDigest(snapshot);
   const archive = await evidenceArchive(dirname(directory), coverage.evidence);
   const manifest = JSON.stringify({
     manifestVersion: 1,
     projectKey: target.projectKey,
     schemaVersion,
     applicationRevision,
-    stateSHA256: await fileDigest(snapshot),
+    stateSHA256,
     evidenceSHA256: sha256(archive),
     ...coverage,
   });
@@ -558,13 +564,13 @@ export async function backup(
       );
     if (!(await reconcilePublication(workspace, destination, receipt, save)))
       return receipt;
+    const previous = sameDestination(receipt.lastConfirmed, destination);
+    if (await coversLesson(workspace, previous, lessonID))
+      return { status: "confirmed", lastConfirmed: previous };
     await fetch();
     const identity = await commitIdentity(workspace);
     await rebaseBackup(workspace, branch, identity);
     const captured = await capture(root, directory, target, lessonID);
-    const previous = sameDestination(receipt.lastConfirmed, destination);
-    if (await coversLesson(workspace, previous, lessonID))
-      return { status: "confirmed", lastConfirmed: previous };
     const publication = {
       ...destination,
       revision: await commitSnapshot(

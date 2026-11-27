@@ -694,13 +694,38 @@ try {
     expect(backup(project)).rejects.toThrow("evidence");
     expect(git(remote, "rev-parse", "main")).toBe(beforeCheckpoint);
     await writeFile(evidencePath, content);
-    await writeFile(modePath, "lost");
+    await rm(`${pushes}.sent`, { force: true });
+    await writeFile(modePath, "unavailable");
+    const delivered = JSON.parse(String(await execute(checkpoint, foreman)));
+    expect(delivered.status).toBe("uncertain");
+    const checkpointHead = git(remote, "rev-parse", "main");
+    expect(delivered.publication.revision).toBe(checkpointHead);
+    const later = openPersistence(directory, []);
+    const laterContent = "Unrelated gate after checkpoint delivery.";
+    later.record("later", [
+      {
+        attempt: 1,
+        revision,
+        kind: "gate",
+        outcome: "gate-passed",
+        definition: null,
+        tool: "bun test",
+        content: laterContent,
+      },
+    ]);
+    later.close();
+    const laterPath = join(directory, "evidence", hash(laterContent));
+    await rm(laterPath);
+    const beforeRecovery = await readFile(pushes, "utf8");
+    await writeFile(modePath, "");
     const checkpointResult = JSON.parse(
       String(await execute(checkpoint, foreman)),
     );
-    await writeFile(modePath, "");
     expect(checkpointResult.status).toBe("confirmed");
-    const checkpointHead = git(remote, "rev-parse", "main");
+    expect(await receipt()).toEqual(checkpointResult);
+    expect(await readFile(pushes, "utf8")).toBe(beforeRecovery);
+    expect(git(remote, "rev-parse", "main")).toBe(checkpointHead);
+    await writeFile(laterPath, laterContent);
     expect(checkpointResult.lastConfirmed.revision).toBe(checkpointHead);
     const manifestBytes = execFileSync(gitExecutable, [
       "-C",
@@ -947,6 +972,24 @@ try {
     );
     const safeHead = git(remote, "rev-parse", "main");
     const safeReceipt = (await receipt()).lastConfirmed;
+    const safePushes = await readFile(pushes, "utf8");
+    const sqliteCanary = "github_pat_fixtureSqliteCanary123456";
+    const privateState = openPersistence(directory, []);
+    privateState.event(
+      "factory",
+      "sqlite-canary",
+      `Accidental token: ${sqliteCanary}`,
+    );
+    privateState.close();
+    expect(backup(project)).rejects.toThrow(
+      "SQLite snapshot may contain credentials",
+    );
+    expect(await readFile(pushes, "utf8")).toBe(safePushes);
+    expect(git(remote, "rev-parse", "main")).toBe(safeHead);
+    expect((await receipt()).lastConfirmed).toEqual(safeReceipt);
+    const fixtureDatabase = new Database(join(directory, "state.sqlite"));
+    fixtureDatabase.run("DELETE FROM events WHERE action = 'sqlite-canary'");
+    fixtureDatabase.close();
     const secret = "ghp_fixturecredentialcanary1234567890";
     const unsafe = openPersistence(directory, []);
     unsafe.record("protected", [
