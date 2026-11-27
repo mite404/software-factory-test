@@ -17,7 +17,7 @@ nonempty `decision` explaining the takeover. This is explicit recovery, never au
 The current owner must be observed idle, stopped on an error, or awaiting approval. Running and
 unknown activity are refused. Workers and reviewers, including retained checkpoints, cannot take
 ownership. An uncertain schedule effect must be resolved on its recorded thread first. A changed
-root or Git storage fingerprint is refused; cross-orb restore and fencing remain separate work.
+root or Git storage fingerprint is refused; this procedure cannot release a replacement restore.
 
 The existing coordinator lock serializes the transfer. One SQLite commit changes the owner,
 records the decision, and reassigns open incidents without changing their IDs. Runs, workers,
@@ -1032,8 +1032,41 @@ A same-path conflict aborts the rebase and refuses publication without discardin
 Workspace changes outside the three generated paths fail without discarding files. Preserve the
 workspace for inspection. Safety refusals identify the cause without exposing external diagnostics.
 
-Restore is not implemented. Raw report and log paths, worktrees, the poteto ledger, and dashboard
-observations are not included. Tests use disposable local remotes, never GitHub writes.
+Raw report and log paths, worktrees, the poteto ledger, and dashboard observations are not included.
+Tests use disposable local remotes, never GitHub writes.
+
+### Restore on a replacement checkout
+
+Before loading the factory plugin or running `--refresh`, check out the application with the
+snapshot's application revision in its history. Keep the same `backup.repository`,
+`backup.projectKey`, and `permissions.backup` in its definition. Run:
+
+```sh
+bun factory/setup-factory.ts --repo /local/project/root --restore
+```
+
+Restore reads the configured private repository's default branch. Its latest commit changing the
+project's snapshot files must contain all three files and pass manifest, SQLite, and evidence
+validation. Evidence and lesson source revisions must resolve to commits in the replacement
+checkout, but need not be ancestors of its `HEAD`. Restore does not fall back to an older snapshot,
+write to the remote, or replace existing files under the local Git directory's `factory/`. Use a
+clean replacement checkout; keep existing state, legacy files, and journals for inspection.
+
+The database, evidence and `restore-pending.json` hold appear together after validation. If the
+process is interrupted before installation, a retry uses a fresh staging directory and ignores the
+abandoned `factory-install-*` directory in Git metadata. These directories may contain private
+data. If interruption occurs after installation, a retry refuses existing state.
+
+The restored owner, workers, and pending actions remain unchanged. Status can inspect the snapshot,
+but startup, dispatch and effect replay are held. A missing retained worktree is a recovery blocker,
+not permission to start another worker. There is no release command in this ticket. Do not remove
+the hold to start the factory; cross-orb ownership reconciliation is tracked in `v1-ticket8`.
+
+Missing local state with a configured backup is an error at runtime, not an empty queue. For a
+genuinely new project with an authored definition and no local state, use `--initialize` instead of
+`--restore`, before `--refresh`. It creates stopped local state and never probes the backup remote.
+Do not use it to recover an existing project. Existing installations without backup configuration
+retain their legacy local startup behavior.
 
 ## Worker settings
 

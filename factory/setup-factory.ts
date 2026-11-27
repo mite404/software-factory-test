@@ -28,8 +28,14 @@ import {
   parseWorkerEffort,
 } from "./native";
 import { hasConfigDefinition, type Check } from "./config";
-import { reviewerModel } from "./persistence";
+import {
+  initializedStateFile,
+  installFactoryStorage,
+  openPersistence,
+  reviewerModel,
+} from "./persistence";
 import { installControlToken } from "./control-token";
+import { restoreBackup } from "./backup";
 
 function discoverStore() {
   const skill = execFileSync("amp", ["skill", "info", "poteto-mode"], {
@@ -225,7 +231,11 @@ async function existingSetup(
   pluginPath: string,
   values: ReturnType<typeof options>,
 ) {
-  if (await definitionOperation(root, values)) return true;
+  if (
+    (await definitionOperation(root, values)) ||
+    (await storageOperation(root, values))
+  )
+    return true;
   if (values.refresh) {
     await configuration(root);
     return false;
@@ -328,6 +338,8 @@ function options() {
       refresh: { type: "boolean", default: false },
       migrate: { type: "boolean", default: false },
       effective: { type: "boolean", default: false },
+      restore: { type: "boolean", default: false },
+      initialize: { type: "boolean", default: false },
     },
   });
   if (values.review) reviewerModel(values["worker-model"]);
@@ -384,17 +396,53 @@ async function excludeGenerated(root: string) {
   await appendFile(exclude, `${gap}${missing.join("\n")}\n`);
 }
 
+async function storageOperation(
+  root: string,
+  values: ReturnType<typeof options>,
+) {
+  if (values.restore || values.initialize) {
+    const directory = join(
+      execFileSync("git", ["-C", root, "rev-parse", "--absolute-git-dir"], {
+        encoding: "utf8",
+      }).trim(),
+      "factory",
+    );
+    if (values.restore) {
+      const receipt = await restoreBackup(root, directory);
+      process.stdout.write(
+        `RESTORE OK ${JSON.stringify(receipt)}; ownership reconciliation required before execution.\n`,
+      );
+    } else {
+      await configuration(root);
+      await installFactoryStorage(directory, async (staged) => {
+        openPersistence(staged, []).close();
+        await writeFile(join(staged, initializedStateFile), "");
+      });
+      process.stdout.write(
+        "INITIALIZE OK; factory state is empty and execution is stopped.\n",
+      );
+    }
+    return true;
+  }
+  return false;
+}
+
 async function definitionOperation(
   root: string,
   values: ReturnType<typeof options>,
 ) {
   if (
-    [values.check, values.refresh, values.migrate, values.effective].filter(
-      Boolean,
-    ).length > 1
+    [
+      values.check,
+      values.refresh,
+      values.migrate,
+      values.effective,
+      values.restore,
+      values.initialize,
+    ].filter(Boolean).length > 1
   )
     throw new Error(
-      "Choose only one of --check, --refresh, --migrate, --effective",
+      "Choose only one of --check, --refresh, --migrate, --effective, --restore, --initialize",
     );
   if (values.migrate) {
     await migrateDefinition(root);

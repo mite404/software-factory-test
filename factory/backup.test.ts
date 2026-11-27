@@ -223,6 +223,8 @@ process.exit(code);
     }
     config.backup.projectKey = "alpha";
     await configure();
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, "state.sqlite"), "corrupt");
     for (const invalid of [
       { ...metadata, visibility: "INTERNAL" },
       { ...metadata, visibility: "PUBLIC" },
@@ -260,6 +262,7 @@ process.exit(code);
       "Backup failed; inspect local configuration, database, and repository access\n",
     );
     await writeFile(modePath, "");
+    await rm(join(directory, "state.sqlite"));
     expect(backup(project)).rejects.toThrow("Factory database does not exist");
     await writeFile(join(directory, "state.sqlite"), "corrupt");
     expect(backup(project)).rejects.toThrow("Backup failed");

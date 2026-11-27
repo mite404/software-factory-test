@@ -3,12 +3,14 @@ import type { AgentReasoningEffort } from "@ampcode/plugin";
 import { createHash, randomUUID } from "node:crypto";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   renameSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { mkdir, mkdtemp, readdir, rename, rm } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
   validNativeHooks,
@@ -1179,6 +1181,10 @@ export function enqueueAutomationRequest(
   action: AutomationAction,
   at = Date.now(),
 ) {
+  if (hasRestoreHold(directory))
+    throw new Error(
+      "Restored factory requires ownership reconciliation before queueing requests",
+    );
   const db = database(directory, false);
   try {
     return db.transaction(() => {
@@ -2598,9 +2604,10 @@ function legacy(directory: string) {
   return { state, events };
 }
 
-function database(directory: string, readonly: boolean) {
+function database(directory: string, readonly: boolean, check = "quick_check") {
   const db = new Database(join(directory, "state.sqlite"), {
     readonly,
+    create: false,
     strict: true,
   });
   try {
@@ -2610,15 +2617,59 @@ function database(directory: string, readonly: boolean) {
       .get()!.user_version;
     if (version !== 1 && version !== 2)
       throw new Error(`Unsupported factory schema version ${version}`);
-    const integrity = db
-      .query<{ quick_check: string }, []>("PRAGMA quick_check")
-      .all();
-    if (integrity.length !== 1 || integrity[0]!.quick_check !== "ok")
+    const integrity = db.query(`PRAGMA ${check}`).values();
+    if (integrity.length !== 1 || integrity[0]?.[0] !== "ok")
       throw new Error("Corrupt factory database");
     return db;
   } catch (error) {
     db.close();
     throw error;
+  }
+}
+
+/** Check a staged database's schema version and full SQLite integrity. @throws On invalid storage. */
+export function restoredSchema(directory: string) {
+  const db = database(directory, true, "integrity_check");
+  try {
+    return db.query<{ user_version: number }, []>("PRAGMA user_version").get()!
+      .user_version;
+  } finally {
+    db.close();
+  }
+}
+
+/** The durable hold installed alongside recovered database and evidence. */
+export const restoreHoldFile = "restore-pending.json";
+/** Records explicit initialization even if the database later disappears. */
+export const initializedStateFile = "state-initialized";
+
+/** Check for the local ownership hold without opening or changing SQLite. @throws On failed I/O. */
+export function hasRestoreHold(directory: string) {
+  return !!lstatSync(join(directory, restoreHoldFile), {
+    throwIfNoEntry: false,
+  });
+}
+
+/** Refuse replacement of any local data, including legacy files and SQLite journals.
+ * @throws On existing storage, preparation failure or failed installation.
+ */
+export async function installFactoryStorage<T>(
+  directory: string,
+  prepare: (staged: string, temporary: string) => Promise<T>,
+) {
+  const local = lstatSync(directory, { throwIfNoEntry: false });
+  if (local && (!local.isDirectory() || (await readdir(directory)).length))
+    throw new Error("Refusing to replace existing local factory files");
+  const temporary = await mkdtemp(join(dirname(directory), "factory-install-"));
+  try {
+    const staged = join(temporary, "factory");
+    await mkdir(staged, { mode: 0o700 });
+    const result = await prepare(staged, temporary);
+    // A concurrent initializer or restore leaves a nonempty destination, which rename refuses.
+    await rename(staged, directory);
+    return result;
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
   }
 }
 
@@ -2789,6 +2840,18 @@ function saveEvent(db: Database, event: Event) {
   db.query(
     "INSERT INTO events (at, ticket, action, detail) VALUES (?, ?, ?, ?)",
   ).run(event.at, event.ticket, event.action, event.detail);
+}
+
+/** Record a diagnostic without creating or migrating storage. @throws On failed I/O. */
+export function recordExistingFactoryEvent(directory: string, event: Event) {
+  if (hasRestoreHold(directory) || !existsSync(join(directory, "state.sqlite")))
+    return;
+  const db = database(directory, false);
+  try {
+    saveEvent(db, event);
+  } finally {
+    db.close();
+  }
 }
 
 function definitionTables(db: Database) {

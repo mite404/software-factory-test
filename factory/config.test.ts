@@ -33,6 +33,7 @@ import {
   factoryEvents,
   factoryEvidence,
   factoryStatus,
+  openPersistence,
 } from "./persistence";
 
 const roots: string[] = [];
@@ -478,6 +479,7 @@ async function engine(extra: Record<string, string> = {}) {
     watch() {},
   };
   const factory = createFactory(f.root, host, openStore);
+  openPersistence(factory.directory, []).close();
   const { tools } = watchdogFixture();
   const tick = (action: "start" | "reconcile" | "reload") =>
     factory.tick(action, "T-owner", host.state, undefined, tools);

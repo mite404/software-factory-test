@@ -9,8 +9,17 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { configuration } from "./native";
-import { backupCoverage, sha256 } from "./persistence";
+import {
+  backupCoverage,
+  factoryRecords,
+  hasRestoreHold,
+  installFactoryStorage,
+  restoredSchema,
+  restoreHoldFile,
+  sha256,
+} from "./persistence";
 
 type Target = { repository: string; projectKey: string };
 type Publication = Target & {
@@ -408,6 +417,224 @@ async function coversLesson(
 
 const git = (cwd: string, ...args: string[]) => command(cwd, "git", ...args);
 
+async function extractSnapshot(
+  workspace: string,
+  staged: string,
+  projectKey: string,
+) {
+  const paths = outputNames.map((name) => `projects/${projectKey}/${name}`);
+  const revision = await git(
+    workspace,
+    "log",
+    "-1",
+    "--first-parent",
+    "--format=%H",
+    "HEAD",
+    "--",
+    ...paths,
+  );
+  if (!revision)
+    throw new BackupRefusal("Expected project snapshot is missing");
+  const entries = (
+    await git(workspace, "ls-tree", "-r", revision, "--", ...paths)
+  ).split("\n");
+  if (
+    entries.length !== paths.length ||
+    entries.some((entry) => !entry.startsWith("100644 blob "))
+  )
+    throw new BackupRefusal(
+      "Required snapshot files are missing or not regular files",
+    );
+  for (const name of outputNames) {
+    const proc = Bun.spawn(
+      ["git", "cat-file", "blob", `${revision}:projects/${projectKey}/${name}`],
+      {
+        cwd: workspace,
+        stdout: "pipe",
+        stderr: "ignore",
+      },
+    );
+    const [status] = await Promise.all([
+      proc.exited,
+      Bun.write(join(staged, name), new Response(proc.stdout)),
+    ]);
+    if (status !== 0)
+      throw new BackupRefusal("Required snapshot file is unreadable");
+  }
+  return revision;
+}
+
+function snapshotObject(source: string) {
+  const value: unknown = JSON.parse(source);
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new BackupRefusal("Invalid snapshot metadata");
+  return value as Record<string, unknown>;
+}
+
+async function restoreEvidence(
+  staged: string,
+  archive: string,
+  evidence: Coverage["evidence"],
+) {
+  const decoded = snapshotObject(archive);
+  if (
+    Object.keys(decoded).length !==
+    new Set(evidence.map(({ sha256 }) => sha256)).size
+  )
+    throw new BackupRefusal(
+      "Snapshot evidence coverage is incomplete or unexpected",
+    );
+  const directory = join(staged, "evidence");
+  await mkdir(directory, { mode: 0o700 });
+  for (const { sha256: digest, bytes } of evidence) {
+    const encoded = decoded[digest];
+    if (typeof encoded !== "string")
+      throw new BackupRefusal("Required snapshot evidence is missing");
+    const content = Buffer.from(encoded, "base64");
+    if (
+      content.length !== bytes ||
+      content.toString("base64") !== encoded ||
+      sha256(content) !== digest
+    )
+      throw new BackupRefusal(
+        "Snapshot evidence digest or size does not match",
+      );
+    await writeFile(join(directory, digest), content, { mode: 0o600 });
+  }
+}
+
+function snapshotManifest(source: string, projectKey: string) {
+  const manifest = snapshotObject(source);
+  if (manifest.projectKey !== projectKey)
+    throw new BackupRefusal("Snapshot project identity does not match");
+  if (
+    manifest.manifestVersion !== 1 ||
+    (manifest.schemaVersion !== 1 && manifest.schemaVersion !== 2)
+  )
+    throw new BackupRefusal("Unsupported snapshot manifest or database schema");
+  if (
+    typeof manifest.applicationRevision !== "string" ||
+    !/^[a-f0-9]{40}$/.test(manifest.applicationRevision)
+  )
+    throw new BackupRefusal("Invalid snapshot application revision");
+  return {
+    manifest,
+    applicationRevision: manifest.applicationRevision,
+    schemaVersion: manifest.schemaVersion,
+  };
+}
+
+async function validateSourceRevisions(
+  root: string,
+  { evidence, lessons }: Coverage,
+) {
+  for (const revision of new Set(
+    [...evidence, ...lessons].map((item) => item.revision),
+  )) {
+    const type = await git(
+      root,
+      "--no-replace-objects",
+      "cat-file",
+      "-t",
+      revision,
+    ).catch(() => null);
+    if (type !== "commit")
+      throw new BackupRefusal(
+        `Snapshot source revision ${revision} is not a commit in this checkout`,
+      );
+  }
+}
+
+async function validateSnapshot(
+  root: string,
+  staged: string,
+  projectKey: string,
+) {
+  const manifestText = await readFile(join(staged, "manifest.json"), "utf8");
+  const { applicationRevision, schemaVersion, manifest } = snapshotManifest(
+    manifestText,
+    projectKey,
+  );
+  await git(
+    root,
+    "merge-base",
+    "--is-ancestor",
+    applicationRevision,
+    "HEAD",
+  ).catch(() => {
+    throw new BackupRefusal(
+      "Snapshot application revision is not in this checkout's history",
+    );
+  });
+  const snapshot = join(staged, "state.sqlite");
+  const archive = await readFile(join(staged, "evidence.json"), "utf8");
+  if (
+    (await fileDigest(snapshot)) !== manifest.stateSHA256 ||
+    sha256(archive) !== manifest.evidenceSHA256
+  )
+    throw new BackupRefusal("Snapshot payload digest does not match");
+  if (restoredSchema(staged) !== schemaVersion)
+    throw new BackupRefusal(
+      "Snapshot database schema does not match its manifest",
+    );
+  factoryRecords(staged);
+  const { evidence, lessons } = backupCoverage(snapshot);
+  if (
+    !isDeepStrictEqual(manifest.evidence, evidence) ||
+    !isDeepStrictEqual(manifest.lessons, lessons)
+  )
+    throw new BackupRefusal("Snapshot coverage does not match its database");
+  await validateSourceRevisions(root, { evidence, lessons });
+  await restoreEvidence(staged, archive, evidence);
+  return { applicationRevision, manifestSHA256: sha256(manifestText) };
+}
+
+/** Restore the configured project's latest remote snapshot without opening factory execution.
+ * @throws On invalid input, unavailable backup, or existing local factory files.
+ */
+export async function restoreBackup(root: string, directory: string) {
+  const { backup: target, backupAllowed } = await configuration(root);
+  if (!target || !backupAllowed)
+    throw new Error(
+      "Configure backup and grant permissions.backup before restoring",
+    );
+  return installFactoryStorage(directory, async (staged, temporary) => {
+    try {
+      const branch = await privateBranch(root, target.repository);
+      const workspace = join(temporary, "repository");
+      await git(
+        temporary,
+        "clone",
+        "--bare",
+        "--single-branch",
+        "--branch",
+        branch,
+        "--",
+        `https://github.com/${target.repository}.git`,
+        workspace,
+      );
+      const revision = await extractSnapshot(
+        workspace,
+        staged,
+        target.projectKey,
+      );
+      const source = await validateSnapshot(root, staged, target.projectKey);
+      const receipt = { ...target, branch, revision, ...source };
+      await rm(join(staged, "manifest.json"));
+      await rm(join(staged, "evidence.json"));
+      await writeFile(join(staged, restoreHoldFile), JSON.stringify(receipt), {
+        mode: 0o600,
+      });
+      return receipt;
+    } catch (error) {
+      if (error instanceof BackupRefusal) throw error;
+      throw new Error(
+        "Restore failed; inspect repository access and snapshot integrity",
+      );
+    }
+  });
+}
+
 async function capture(
   root: string,
   directory: string,
@@ -523,6 +750,22 @@ function sameDestination(
     : undefined;
 }
 
+async function backupDirectory(root: string) {
+  const directory = join(
+    await git(root, "rev-parse", "--absolute-git-dir"),
+    "factory",
+    "backup",
+  );
+  if (hasRestoreHold(dirname(directory)))
+    throw new Error(
+      "Restored factory requires ownership reconciliation before backup",
+    );
+  if (!existsSync(join(dirname(directory), "state.sqlite")))
+    throw new BackupRefusal("Factory database does not exist");
+  await mkdir(directory, { recursive: true });
+  return directory;
+}
+
 /** Save and confirm a consistent private snapshot. Subprocess diagnostics never leave this boundary.
  * @throws On denied configuration, contention, unsafe metadata, conflicts, or local I/O failure.
  */
@@ -537,12 +780,7 @@ export async function backup(
       "Configure backup and grant permissions.backup before backing up",
     );
   const target = config.backup;
-  const directory = join(
-    await git(root, "rev-parse", "--absolute-git-dir"),
-    "factory",
-    "backup",
-  );
-  await mkdir(directory, { recursive: true });
+  const directory = await backupDirectory(root);
   const lock = join(directory, "lock");
   try {
     await mkdir(lock);

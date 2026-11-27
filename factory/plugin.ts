@@ -24,6 +24,7 @@ import { validDeliveryIntent } from "./delivery";
 import {
   factoryDefinition,
   factoryStatus,
+  hasRestoreHold,
   lifecycleStatus,
   repairAttemptCap,
   runStage,
@@ -723,6 +724,10 @@ export default function registerFactory(
   ) {
     if (typeof message !== "string" || !message.trim())
       throw new Error("Message requires nonempty text");
+    if (hasRestoreHold(factory.directory))
+      throw new Error(
+        "Restored factory requires ownership reconciliation before forwarding messages",
+      );
     const state = factoryStatus(factory.directory);
     if (
       !state.owner ||
