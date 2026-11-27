@@ -1,22 +1,35 @@
-import { existsSync } from "node:fs";
+import { constants, existsSync } from "node:fs";
 import {
-  copyFile,
+  lstat,
   mkdir,
+  open,
   readFile,
   rename,
   rm,
   writeFile,
 } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { configuration } from "./native";
+import { backupCoverage, sha256 } from "./persistence";
 
 type Target = { repository: string; projectKey: string };
-type Publication = Target & { branch: string; revision: string };
+type Publication = Target & {
+  branch: string;
+  revision: string;
+  // Receipts written before coverage manifests lack these fields.
+  manifestSHA256?: string;
+  applicationRevision?: string;
+};
+type Confirmation = Publication & { confirmedAt?: string };
 type Receipt = {
   status: "pending" | "confirmed" | "failed" | "uncertain";
   publication?: Publication;
-  lastConfirmed?: Publication;
+  lastConfirmed?: Confirmation;
 };
+type Coverage = ReturnType<typeof backupCoverage>;
+const outputNames = ["state.sqlite", "manifest.json", "evidence.json"];
+const credentialSignature =
+  /\b(?:gh[pousr]_|github_pat_|sk[-_]|xox[baprs]-|AKIA)[\w-]{12,}|\bBearer\s+[\w.=-]{16,}|-----BEGIN (?:[A-Z]+ )*PRIVATE KEY-----|:\/\/[^\s/:]+:[^\s/]+@/i;
 
 class BackupRefusal extends Error {}
 
@@ -63,9 +76,7 @@ async function privateBranch(root: string, repository: string) {
 }
 
 async function restoreOutput(workspace: string, projectKey: string) {
-  const paths = ["state.sqlite", "manifest.json"].map(
-    (name) => `projects/${projectKey}/${name}`,
-  );
+  const paths = outputNames.map((name) => `projects/${projectKey}/${name}`);
   const changes = await command(
     workspace,
     "git",
@@ -73,6 +84,7 @@ async function restoreOutput(workspace: string, projectKey: string) {
     "--porcelain=v1",
     "-z",
     "--untracked-files=all",
+    "--ignored=matching",
   );
   if (
     changes
@@ -97,7 +109,7 @@ async function restoreOutput(workspace: string, projectKey: string) {
       "--",
       ...tracked,
     );
-  await command(workspace, "git", "clean", "-f", "--", ...paths);
+  await command(workspace, "git", "clean", "-fx", "--", ...paths);
 }
 
 async function prepareWorkspace(
@@ -207,7 +219,7 @@ async function rebaseBackup(
 async function publish(
   workspace: string,
   publication: Publication,
-  lastConfirmed: Publication | undefined,
+  lastConfirmed: Confirmation | undefined,
   save: (receipt: Receipt) => Promise<void>,
 ): Promise<Receipt> {
   let receipt: Receipt = { status: "pending", publication, lastConfirmed };
@@ -219,7 +231,7 @@ async function publish(
         "git",
         "push",
         "origin",
-        `HEAD:refs/heads/${publication.branch}`,
+        `${publication.revision}:refs/heads/${publication.branch}`,
       );
     } catch {
       /* Confirm even when the push response was lost. */
@@ -227,13 +239,20 @@ async function publish(
   }
   try {
     receipt = (await remoteContains(workspace, publication))
-      ? { status: "confirmed", lastConfirmed: publication }
+      ? confirmed(publication)
       : { ...receipt, status: "failed" };
   } catch {
     receipt.status = "uncertain";
   }
   await save(receipt);
   return receipt;
+}
+
+function confirmed(publication: Publication): Receipt {
+  return {
+    status: "confirmed",
+    lastConfirmed: { ...publication, confirmedAt: new Date().toISOString() },
+  };
 }
 
 async function reconcilePublication(
@@ -253,8 +272,11 @@ async function reconcilePublication(
       receipt.publication.branch !== target.branch
     )
       throw new BackupRefusal("Pending backup destination changed");
-    if (await remoteContains(workspace, receipt.publication))
-      await save({ status: "confirmed", lastConfirmed: receipt.publication });
+    await save(
+      (await remoteContains(workspace, receipt.publication))
+        ? confirmed(receipt.publication)
+        : { status: "failed", lastConfirmed: receipt.lastConfirmed },
+    );
     return true;
   } catch (error) {
     await save({ ...receipt, status: "uncertain" });
@@ -269,13 +291,12 @@ async function snapshotDatabase(root: string, directory: string) {
     throw new BackupRefusal("Factory database does not exist");
   const snapshot = join(directory, "snapshot.sqlite");
   await rm(snapshot, { force: true });
-  // VACUUM INTO runs in another process so SQLite work cannot block the plugin heartbeat.
-  const schemaVersion = Number(
-    await command(
-      root,
-      "bun",
-      "-e",
-      `
+  // Keep SQLite capture, integrity checks, and the field scan off the plugin's event loop.
+  const result = await command(
+    root,
+    "bun",
+    "-e",
+    `
       const {Database}=require("bun:sqlite");
       const source=new Database(process.argv[1],{readonly:true});
       source.run("PRAGMA busy_timeout=5000");
@@ -284,22 +305,231 @@ async function snapshotDatabase(root: string, directory: string) {
       const db=new Database(process.argv[2],{readonly:true});
       const integrity=db.query("PRAGMA integrity_check").all();
       if(integrity.length!==1 || integrity[0].integrity_check!=="ok") throw Error("Integrity check failed");
+      const signature=${credentialSignature};
+      const tables=db.query("SELECT name FROM pragma_table_list WHERE schema = 'main' AND type = 'table'").all();
+      for(const {name} of tables) {
+        const quoted='"'+name.replaceAll('"','""')+'"';
+        for(const row of db.query("SELECT * FROM main."+quoted).iterate()) {
+          if(Object.values(row).some(value=>typeof value==="string" && signature.test(value))) {
+            console.log("credential-signature");
+            db.close();
+            process.exit(0);
+          }
+        }
+      }
       console.log(db.query("PRAGMA user_version").get().user_version);
       db.close();
     `,
-      database,
-      snapshot,
-    ),
+    database,
+    snapshot,
   );
+  if (result === "credential-signature")
+    throw new BackupRefusal(
+      "SQLite snapshot may contain credentials; backup refused",
+    );
+  const schemaVersion = Number(result);
   if (schemaVersion !== 1 && schemaVersion !== 2)
     throw new BackupRefusal("Unsupported backup schema");
   return { snapshot, schemaVersion };
 }
 
+async function evidenceArchive(
+  directory: string,
+  evidence: Coverage["evidence"],
+) {
+  const archive = new Map<string, string>();
+  const evidenceDir = join(directory, "evidence");
+  try {
+    if (evidence.length && !(await lstat(evidenceDir)).isDirectory())
+      throw new Error("Not an evidence directory");
+    for (const { sha256: digest, bytes } of evidence) {
+      const saved = archive.get(digest);
+      if (saved !== undefined) {
+        if (Buffer.byteLength(saved, "base64") !== bytes)
+          throw new Error("Evidence size mismatch");
+        continue;
+      }
+      archive.set(digest, await readEvidence(evidenceDir, digest, bytes));
+    }
+  } catch (error) {
+    if (error instanceof BackupRefusal) throw error;
+    throw new BackupRefusal(
+      "Required evidence is missing or corrupt; backup refused",
+    );
+  }
+  return JSON.stringify(Object.fromEntries(archive));
+}
+
+async function readEvidence(directory: string, digest: string, bytes: number) {
+  const file = await open(
+    join(directory, digest),
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  );
+  try {
+    const stat = await file.stat();
+    if (!stat.isFile() || stat.size !== bytes)
+      throw new Error("Invalid evidence file");
+    const content = await file.readFile();
+    if (content.length !== bytes || sha256(content) !== digest)
+      throw new Error("Evidence digest mismatch");
+    if (credentialSignature.test(content.toString("utf8")))
+      throw new BackupRefusal(
+        "Required evidence may contain credentials; backup refused",
+      );
+    return content.toString("base64");
+  } finally {
+    await file.close();
+  }
+}
+
+async function fileDigest(path: string) {
+  const hasher = new Bun.CryptoHasher("sha256");
+  for await (const bytes of Bun.file(path).stream()) hasher.update(bytes);
+  return hasher.digest("hex");
+}
+
+async function coversLesson(
+  workspace: string,
+  publication: Confirmation | undefined,
+  lessonID: string | undefined,
+) {
+  if (lessonID === undefined || !publication?.manifestSHA256) return false;
+  if (!(await remoteContains(workspace, publication))) return false;
+  const manifest = await command(
+    workspace,
+    "git",
+    "show",
+    `${publication.revision}:projects/${publication.projectKey}/manifest.json`,
+  );
+  if (sha256(manifest) !== publication.manifestSHA256) return false;
+  const parsed: Pick<Coverage, "lessons"> = JSON.parse(manifest);
+  return parsed.lessons.some(({ id }) => id === lessonID);
+}
+
+const git = (cwd: string, ...args: string[]) => command(cwd, "git", ...args);
+
+async function capture(
+  root: string,
+  directory: string,
+  target: Target,
+  lessonID?: string,
+) {
+  const applicationRevision = await git(root, "rev-parse", "HEAD");
+  const { snapshot, schemaVersion } = await snapshotDatabase(root, directory);
+  if ((await git(root, "rev-parse", "HEAD")) !== applicationRevision)
+    throw new BackupRefusal(
+      "Application revision changed during backup; retry",
+    );
+  const coverage = backupCoverage(snapshot);
+  if (
+    lessonID !== undefined &&
+    !coverage.lessons.some(({ id }) => id === lessonID)
+  )
+    throw new BackupRefusal(
+      "Checkpoint lesson is not recorded in the snapshot",
+    );
+  const archive = await evidenceArchive(dirname(directory), coverage.evidence);
+  const manifest = JSON.stringify({
+    manifestVersion: 1,
+    projectKey: target.projectKey,
+    schemaVersion,
+    applicationRevision,
+    stateSHA256: await fileDigest(snapshot),
+    evidenceSHA256: sha256(archive),
+    ...coverage,
+  });
+  return { snapshot, manifest, archive, applicationRevision };
+}
+
+async function commitSnapshot(
+  workspace: string,
+  lock: string,
+  target: Target,
+  identity: string[],
+  { snapshot, manifest, archive }: Awaited<ReturnType<typeof capture>>,
+) {
+  const projectPath = `projects/${target.projectKey}`;
+  const path = join(workspace, projectPath);
+  const entries = await git(workspace, "ls-files", "--stage", "--", "projects");
+  if (entries.split("\n").some((line) => /^(120000|160000) /.test(line)))
+    throw new BackupRefusal(
+      "Backup repository contains project symlinks or submodules",
+    );
+  await mkdir(path, { recursive: true });
+  await rename(snapshot, join(path, "state.sqlite"));
+  for (const [name, content] of Object.entries({
+    "evidence.json": archive,
+    "manifest.json": manifest,
+  })) {
+    await writeFile(join(lock, name), content);
+    await rename(join(lock, name), join(path, name));
+  }
+  const paths = outputNames.map((name) => `${projectPath}/${name}`);
+  await git(workspace, "add", "--", ...paths);
+  const blobs = (
+    await Promise.all(
+      paths.map((file) => git(workspace, "hash-object", "--no-filters", file)),
+    )
+  ).join("\n");
+  if (
+    (await git(workspace, "rev-parse", ...paths.map((file) => `:${file}`))) !==
+    blobs
+  )
+    throw new BackupRefusal(
+      "Git attributes changed snapshot bytes; backup refused",
+    );
+  if (await git(workspace, "diff", "--cached", "--name-only")) {
+    await git(
+      workspace,
+      ...identity,
+      "commit",
+      "-m",
+      "Back up factory state",
+    ).catch(() => {
+      throw new BackupRefusal(
+        "Backup commit was refused; inspect commit identity and signing configuration",
+      );
+    });
+  }
+  const revision = await git(
+    workspace,
+    "log",
+    "-1",
+    "--format=%H",
+    "HEAD",
+    "--",
+    ...paths,
+  );
+  if (
+    (await git(
+      workspace,
+      "rev-parse",
+      ...paths.map((file) => `${revision}:${file}`),
+    )) !== blobs
+  )
+    throw new BackupRefusal("Committed snapshot bytes differ; backup refused");
+  return revision;
+}
+
+function sameDestination(
+  previous: Confirmation | undefined,
+  target: Target & { branch: string },
+) {
+  return previous &&
+    previous.repository === target.repository &&
+    previous.projectKey === target.projectKey &&
+    previous.branch === target.branch
+    ? previous
+    : undefined;
+}
+
 /** Save and confirm a consistent private snapshot. Subprocess diagnostics never leave this boundary.
  * @throws On denied configuration, contention, unsafe metadata, conflicts, or local I/O failure.
  */
-export async function backup(root: string): Promise<Receipt> {
+export async function backup(
+  root: string,
+  lessonID?: string,
+): Promise<Receipt> {
   root = resolve(root);
   const config = await configuration(root);
   if (!config.backup || !config.backupAllowed)
@@ -307,7 +537,6 @@ export async function backup(root: string): Promise<Receipt> {
       "Configure backup and grant permissions.backup before backing up",
     );
   const target = config.backup;
-  const git = (cwd: string, ...args: string[]) => command(cwd, "git", ...args);
   const directory = join(
     await git(root, "rev-parse", "--absolute-git-dir"),
     "factory",
@@ -333,6 +562,7 @@ export async function backup(root: string): Promise<Receipt> {
     if (existsSync(receiptPath))
       receipt = JSON.parse(await readFile(receiptPath, "utf8"));
     const branch = await privateBranch(root, target.repository);
+    const destination = { ...target, branch };
     const workspace = await prepareWorkspace(directory, target, branch);
     const fetch = () =>
       git(
@@ -341,65 +571,34 @@ export async function backup(root: string): Promise<Receipt> {
         "origin",
         `+refs/heads/${branch}:refs/remotes/origin/${branch}`,
       );
-    if (
-      !(await reconcilePublication(
-        workspace,
-        { ...target, branch },
-        receipt,
-        save,
-      ))
-    )
+    if (!(await reconcilePublication(workspace, destination, receipt, save)))
       return receipt;
+    const previous = sameDestination(receipt.lastConfirmed, destination);
+    if (await coversLesson(workspace, previous, lessonID))
+      return { status: "confirmed", lastConfirmed: previous };
     await fetch();
     const identity = await commitIdentity(workspace);
     await rebaseBackup(workspace, branch, identity);
-    const { snapshot, schemaVersion } = await snapshotDatabase(root, directory);
-    const path = join(workspace, "projects", target.projectKey);
-    // Reject remote symlinks before writing the allowlisted project files.
-    const entries = await git(
-      workspace,
-      "ls-files",
-      "--stage",
-      "--",
-      "projects",
-    );
-    if (entries.split("\n").some((line) => line.startsWith("120000 ")))
-      throw new BackupRefusal("Backup repository contains project symlinks");
-    await mkdir(path, { recursive: true });
-    await copyFile(snapshot, join(path, "state.sqlite"));
-    await writeFile(
-      join(path, "manifest.json"),
-      JSON.stringify({
-        projectKey: target.projectKey,
-        schemaVersion,
-        applicationRevision: await git(root, "rev-parse", "HEAD"),
-      }) + "\n",
-    );
-    await git(
-      workspace,
-      "add",
-      "--",
-      `projects/${target.projectKey}/state.sqlite`,
-      `projects/${target.projectKey}/manifest.json`,
-    );
-    if (await git(workspace, "diff", "--cached", "--name-only")) {
-      await git(
-        workspace,
-        ...identity,
-        "commit",
-        "-m",
-        "Back up factory state",
-      ).catch(() => {
-        throw new BackupRefusal(
-          "Backup commit was refused; inspect commit identity and signing configuration",
-        );
-      });
-    }
+    const captured = await capture(root, directory, target, lessonID);
     const publication = {
-      ...target,
-      branch,
-      revision: await git(workspace, "rev-parse", "HEAD"),
+      ...destination,
+      revision: await commitSnapshot(
+        workspace,
+        lock,
+        target,
+        identity,
+        captured,
+      ),
+      manifestSHA256: sha256(captured.manifest),
+      applicationRevision: captured.applicationRevision,
     };
+    if (
+      receipt.status === "confirmed" &&
+      previous?.revision === publication.revision &&
+      previous.manifestSHA256 === publication.manifestSHA256 &&
+      (await remoteContains(workspace, previous))
+    )
+      return receipt;
     return await publish(workspace, publication, receipt.lastConfirmed, save);
   } catch (error) {
     receipt =

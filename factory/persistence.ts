@@ -1456,7 +1456,15 @@ function gitRevision(value: unknown): value is string {
   return typeof value === "string" && /^[a-f0-9]{40}$/.test(value);
 }
 
-function lessonProof(db: Database, directory: string, lesson: PhaseLesson) {
+function lessonIdentity({ project, ticket, phase, revision }: PhaseLesson) {
+  return sha256(JSON.stringify([project, ticket, phase, revision]));
+}
+
+function lessonProof(
+  db: Database,
+  lesson: PhaseLesson,
+  hasContent: (digest: string) => boolean,
+) {
   const rows = db
     .query<
       Pick<EvidenceRecord, "sha256" | "outcome">,
@@ -1468,7 +1476,7 @@ function lessonProof(db: Database, directory: string, lesson: PhaseLesson) {
   return (
     lesson.evidence.every(
       (digest) =>
-        rows.some((row) => row.sha256 === digest) && intact(directory, digest),
+        rows.some((row) => row.sha256 === digest) && hasContent(digest),
     ) &&
     (!lesson.findings.length ||
       rows.some(
@@ -1552,7 +1560,7 @@ function preparedEvidence(
   }));
 }
 
-function validEvidence(item: Evidence) {
+function validEvidence(item: Omit<Evidence, "content">) {
   return (
     positiveInteger(item.attempt) &&
     Object.hasOwn(evidenceOutcomes, item.kind) &&
@@ -1563,12 +1571,58 @@ function validEvidence(item: Evidence) {
   );
 }
 
-function hasEvidenceTable(db: Database) {
+function hasTable(db: Database, name: "evidence" | "lessons") {
   return !!db
-    .query(
-      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'evidence'",
-    )
-    .get();
+    .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(name);
+}
+
+/** Enumerate required backup identities from the frozen database, not the live directory.
+ * @throws On invalid evidence or lesson references.
+ */
+export function backupCoverage(snapshot: string) {
+  const db = new Database(snapshot, { readonly: true, strict: true });
+  try {
+    const evidence = hasTable(db, "evidence")
+      ? db
+          .query<EvidenceRecord, []>(
+            `SELECT ${evidenceColumns} FROM evidence ORDER BY ticket, attempt, kind, revision, outcome, sha256`,
+          )
+          .all()
+          .map((row) => {
+            const { ticket, attempt, kind, revision, outcome, sha256, bytes } =
+              row;
+            if (
+              !validEvidence(row) ||
+              !validDigest(sha256) ||
+              !Number.isSafeInteger(bytes) ||
+              bytes < 0
+            )
+              throw new Error("Invalid evidence digest or size");
+            return { ticket, attempt, kind, revision, outcome, sha256, bytes };
+          })
+      : [];
+    const lessons = hasTable(db, "lessons")
+      ? db
+          .query<{ id: string; data: string }, []>(
+            "SELECT id, data FROM lessons ORDER BY id",
+          )
+          .all()
+          .map(({ id, data }) => {
+            const lesson = parseLesson(JSON.parse(data));
+            const { project, ticket, phase, attempt, revision } = lesson;
+            if (
+              id !== lessonIdentity(lesson) ||
+              !lessonProof(db, lesson, () => true)
+            )
+              throw new Error("Invalid lesson backup coverage");
+            return { id, project, ticket, phase, attempt, revision };
+          })
+      : [];
+    return { evidence, lessons };
+  } finally {
+    db.close();
+  }
 }
 
 function saveEvidence(db: Database, record: EvidenceRecord) {
@@ -2857,7 +2911,7 @@ export function factoryRecords(directory: string) {
 }
 
 function ticketEvidence(db: Database, directory: string, ticket: string) {
-  if (!hasEvidenceTable(db)) return [];
+  if (!hasTable(db, "evidence")) return [];
   return db
     .query<EvidenceRecord, [string]>(
       `SELECT ${evidenceColumns} FROM evidence WHERE ticket = ? ORDER BY rowid`,
@@ -3246,8 +3300,8 @@ export function openPersistence(
       ): SavedLesson {
         const lesson = parseLesson(value);
         authorize?.(lesson);
-        const { project, ticket, phase, revision, supersedes } = lesson;
-        const id = sha256(JSON.stringify([project, ticket, phase, revision]));
+        const { project, ticket, phase, supersedes } = lesson;
+        const id = lessonIdentity(lesson);
         return db.transaction(() => {
           const history = lessonHistory(db, project, ticket);
           const saved = history.find((item) => item.id === id);
@@ -3257,7 +3311,7 @@ export function openPersistence(
               throw new Error("Conflicting phase lesson");
             return saved;
           }
-          if (!lessonProof(db, directory, lesson))
+          if (!lessonProof(db, lesson, (digest) => intact(directory, digest)))
             throw new Error(
               "Missing intact lesson evidence for this attempt and revision",
             );
@@ -3315,7 +3369,7 @@ export function openPersistence(
               lesson.scope.some((a) =>
                 scope.some((b) => overlapsLessonScope(a, b)),
               )) &&
-            lessonProof(db, directory, lesson)
+            lessonProof(db, lesson, (digest) => intact(directory, digest))
           )
             selected.push({ ...lesson, id });
           if (selected.length === 3) break;
@@ -3336,7 +3390,7 @@ export function openPersistence(
           .get(id);
         if (!row) return undefined;
         const lesson = parseLesson(JSON.parse(row.data));
-        return lessonProof(db, directory, lesson)
+        return lessonProof(db, lesson, (digest) => intact(directory, digest))
           ? { ...lesson, id }
           : undefined;
       },

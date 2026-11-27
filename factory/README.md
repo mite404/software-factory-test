@@ -634,8 +634,8 @@ as `blocked` with reason `evidence-missing` and recovery `inspect`; the Foreman 
 `record-landing`. Tickets accepted before this record existed keep their done state unchanged; a
 review already in flight at upgrade has no gate record and stops this way rather than landing.
 The owner reads private content with `evidenceContent(directory, ticket, sha256)`, which refuses
-digests the ticket never recorded and missing or corrupt files. Evidence files are not included
-in private backup yet.
+digests the ticket never recorded and missing or corrupt files. Private backup preserves recorded
+evidence by digest, not the original report or log paths.
 
 ### Phase lessons
 
@@ -974,7 +974,10 @@ Do not put tokens in configuration or repository URLs. The destination must have
 with an initial commit. Setup does not provision it or grant backup permission.
 
 Run `bun factory/backup.ts /local/project/root`, or invoke the registered factory control tool with
-`action: "backup"`. Both call the same backend. The command accepts no destination overrides.
+`action: "backup"`. For an explicitly authorized phase checkpoint, the owning Foreman calls the
+same tool with `action: "backup"` and the `lessonID` returned by `record-lesson`. Recording a lesson
+does not publish on its own. An unknown lesson or missing required evidence blocks the checkpoint.
+Both paths call the same backend. The command accepts no destination overrides.
 Metadata must identify the configured repository as private on GitHub.com before publication
 proceeds, with explicit `PRIVATE` visibility. Enterprise-internal repositories are refused.
 Both the metadata lookup and publication target GitHub.com, regardless of `GH_HOST`.
@@ -988,22 +991,37 @@ and signing configuration`, retains the last confirmed receipt, and leaves gener
 for inspection. Fix the identity or signing configuration and retry. Raw Git diagnostics stay
 hidden.
 
-Only `projects/<projectKey>/state.sqlite` and `manifest.json` are staged. The manifest contains the
-stable project key, schema version, and application revision. SQLite `VACUUM INTO` creates a
-consistent snapshot, then `integrity_check` validates it. Both run asynchronously outside the
-plugin process. The operation works with rollback journals and WAL. In rollback mode, concurrent
-writers can encounter SQLite's normal read-lock contention. It does not change database settings.
-The snapshot subprocess uses the installed `bun` executable on `PATH`, including inside Amp's
-compiled plugin host. It does not depend on `process.execPath` being Bun or on `BUN_BE_BUN`.
+Only three files under `projects/<projectKey>/` are staged:
+
+- `state.sqlite` contains the consistent coordinator state, including lessons and their history.
+- `evidence.json` maps recorded SHA-256 digests to the exact evidence bytes encoded as base64.
+  Backup reads only the digests named by the captured SQLite rows and verifies their size and hash.
+  A missing or corrupt evidence file refuses publication.
+- `manifest.json` records the manifest and schema versions, stable project key, application
+  revision, evidence and lesson identities with source revisions, and both payload hashes.
+
+SQLite `VACUUM INTO` captures a consistent snapshot, then `integrity_check` validates it. Both run
+outside the plugin process in the installed `bun` executable. The operation supports rollback
+journals and WAL without changing settings. Rollback mode can contend with concurrent writers.
+Before staging, backup checks each text field in the frozen database and each evidence file for
+recognized credential signatures. This cannot detect all secrets. Never record credentials in
+coordinator state or evidence.
+Configuration files, authentication files, unrelated files, and unrecorded evidence are not
+collected. Nothing is written to the application Git history.
 
 The Git directory contains `factory/backup/receipt.json` and a retained publication workspace.
 The receipt records pending, confirmed, failed, or uncertain publication and preserves the last
-confirmed remote revision. That revision describes its snapshot, not later coordinator changes.
-Receipts stay outside SQLite so unchanged input produces no new commit. A filesystem lock rejects
-overlapping requests. After an interrupted process, inspect its receipt and confirm no backup is
-running before removing `factory/backup/lock` and retrying. Retry restores only the selected project
-key's generated snapshot and manifest to their committed versions, removing untracked copies.
-It then regenerates both files, so an interrupted staging or failed commit does not block recovery.
+confirmed remote revision, manifest SHA-256, application revision, and confirmation time. This
+receipt covers that snapshot, not later local progress. Older receipts without a manifest hash do
+not prove evidence coverage. Receipts stay outside SQLite so unchanged input produces no new commit.
+A checkpoint whose lesson is already in the last remotely confirmed manifest returns that receipt
+before capturing newer local progress, even if later evidence is missing. Use a manual backup to
+preserve newer progress.
+
+A filesystem lock rejects overlapping manual and checkpoint requests. After an interrupted process,
+inspect its receipt and confirm no backup is running before removing `factory/backup/lock` and
+retrying. Retry restores only the selected project's three generated paths to their committed
+versions and regenerates them, so interrupted staging or a refused commit does not block recovery.
 
 Pushes never force the branch. Confirmation fetches the remote and checks that it contains the
 intended commit, including when a push response is lost. If confirmation is unavailable, the
@@ -1011,12 +1029,11 @@ receipt stays uncertain. Retry inspects the remote before another push. After a 
 a pending revision missing from a recreated workspace is not published on that branch.
 Unpublished local backup commits rebase onto the fetched tip, preserving unrelated project changes.
 A same-path conflict aborts the rebase and refuses publication without discarding either side.
-Changes outside the two generated paths also fail without discarding files. Preserve the workspace
-for inspection. Known safety refusals identify the cause; external diagnostics stay hidden.
+Workspace changes outside the three generated paths fail without discarding files. Preserve the
+workspace for inspection. Safety refusals identify the cause without exposing external diagnostics.
 
-Restore is not implemented. A snapshot covers only SQLite coordinator state. Private candidate
-reports, worktrees, lessons, the poteto ledger, and dashboard observations are not included.
-They require separate recovery evidence. Tests use disposable local remotes, never GitHub writes.
+Restore is not implemented. Raw report and log paths, worktrees, the poteto ledger, and dashboard
+observations are not included. Tests use disposable local remotes, never GitHub writes.
 
 ## Worker settings
 
