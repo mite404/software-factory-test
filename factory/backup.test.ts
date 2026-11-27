@@ -975,15 +975,12 @@ try {
     const safePushes = await readFile(pushes, "utf8");
     const sqliteCanary = "github_pat_fixtureSqliteCanary123456";
     const privateState = openPersistence(directory, []);
-    privateState.event(
-      "factory",
-      "sqlite-canary",
-      `Accidental token: ${sqliteCanary}`,
-    );
+    privateState.event("factory", "sqlite-canary", sqliteCanary);
     privateState.close();
     expect(backup(project)).rejects.toThrow(
       "SQLite snapshot may contain credentials",
     );
+    expect(git(workspace, "status", "--porcelain")).toBe("");
     expect(await readFile(pushes, "utf8")).toBe(safePushes);
     expect(git(remote, "rev-parse", "main")).toBe(safeHead);
     expect((await receipt()).lastConfirmed).toEqual(safeReceipt);

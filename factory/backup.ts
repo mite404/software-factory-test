@@ -291,13 +291,12 @@ async function snapshotDatabase(root: string, directory: string) {
     throw new BackupRefusal("Factory database does not exist");
   const snapshot = join(directory, "snapshot.sqlite");
   await rm(snapshot, { force: true });
-  // VACUUM INTO runs in another process so SQLite work cannot block the plugin heartbeat.
-  const schemaVersion = Number(
-    await command(
-      root,
-      "bun",
-      "-e",
-      `
+  // Keep SQLite capture, integrity checks, and the field scan off the plugin's event loop.
+  const result = await command(
+    root,
+    "bun",
+    "-e",
+    `
       const {Database}=require("bun:sqlite");
       const source=new Database(process.argv[1],{readonly:true});
       source.run("PRAGMA busy_timeout=5000");
@@ -306,13 +305,29 @@ async function snapshotDatabase(root: string, directory: string) {
       const db=new Database(process.argv[2],{readonly:true});
       const integrity=db.query("PRAGMA integrity_check").all();
       if(integrity.length!==1 || integrity[0].integrity_check!=="ok") throw Error("Integrity check failed");
+      const signature=${credentialSignature};
+      const tables=db.query("SELECT name FROM pragma_table_list WHERE schema = 'main' AND type = 'table'").all();
+      for(const {name} of tables) {
+        const quoted='"'+name.replaceAll('"','""')+'"';
+        for(const row of db.query("SELECT * FROM main."+quoted).iterate()) {
+          if(Object.values(row).some(value=>typeof value==="string" && signature.test(value))) {
+            console.log("credential-signature");
+            db.close();
+            process.exit(0);
+          }
+        }
+      }
       console.log(db.query("PRAGMA user_version").get().user_version);
       db.close();
     `,
-      database,
-      snapshot,
-    ),
+    database,
+    snapshot,
   );
+  if (result === "credential-signature")
+    throw new BackupRefusal(
+      "SQLite snapshot may contain credentials; backup refused",
+    );
+  const schemaVersion = Number(result);
   if (schemaVersion !== 1 && schemaVersion !== 2)
     throw new BackupRefusal("Unsupported backup schema");
   return { snapshot, schemaVersion };
@@ -367,15 +382,10 @@ async function readEvidence(directory: string, digest: string, bytes: number) {
   }
 }
 
-async function screenedStateDigest(path: string) {
-  // ponytail: one buffer keeps signatures intact across read boundaries; use a streaming
-  // matcher if snapshot size makes this allocation a problem.
-  const bytes = await readFile(path);
-  if (credentialSignature.test(bytes.toString("utf8")))
-    throw new BackupRefusal(
-      "SQLite snapshot may contain credentials; backup refused",
-    );
-  return sha256(bytes);
+async function fileDigest(path: string) {
+  const hasher = new Bun.CryptoHasher("sha256");
+  for await (const bytes of Bun.file(path).stream()) hasher.update(bytes);
+  return hasher.digest("hex");
 }
 
 async function coversLesson(
@@ -418,14 +428,13 @@ async function capture(
     throw new BackupRefusal(
       "Checkpoint lesson is not recorded in the snapshot",
     );
-  const stateSHA256 = await screenedStateDigest(snapshot);
   const archive = await evidenceArchive(dirname(directory), coverage.evidence);
   const manifest = JSON.stringify({
     manifestVersion: 1,
     projectKey: target.projectKey,
     schemaVersion,
     applicationRevision,
-    stateSHA256,
+    stateSHA256: await fileDigest(snapshot),
     evidenceSHA256: sha256(archive),
     ...coverage,
   });

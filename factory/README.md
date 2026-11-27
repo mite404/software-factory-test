@@ -1003,8 +1003,9 @@ Only three files under `projects/<projectKey>/` are staged:
 SQLite `VACUUM INTO` captures a consistent snapshot, then `integrity_check` validates it. Both run
 outside the plugin process in the installed `bun` executable. The operation supports rollback
 journals and WAL without changing settings. Rollback mode can contend with concurrent writers.
-Before staging, backup refuses recognized credential signatures in the frozen database or evidence.
-This check cannot detect all secrets. Never record credentials in coordinator state or evidence.
+Before staging, backup checks each text field in the frozen database and each evidence file for
+recognized credential signatures. This cannot detect all secrets. Never record credentials in
+coordinator state or evidence.
 Configuration files, authentication files, unrelated files, and unrecorded evidence are not
 collected. Nothing is written to the application Git history.
 
