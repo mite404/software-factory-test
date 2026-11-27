@@ -94,6 +94,7 @@ import {
   runStage,
   publicSummary,
   rejectionReasons,
+  type reviewSkipReasons,
   providerResetAt,
   laneHeld,
   runLane,
@@ -2714,6 +2715,21 @@ function requireIncident(
     throw new Error("Resume requires the exact current stop incident");
 }
 
+function transitionDetail(
+  action: string,
+  detail: string,
+  run: Run | undefined,
+) {
+  const incident = run?.incident;
+  if (!incident || !["escalated", "parked"].includes(action)) return detail;
+  return JSON.stringify({
+    evidence: detail,
+    attempt: incident.attempt,
+    reason: incident.reason,
+    incident: incident.id,
+  });
+}
+
 function stopCause(run: Run | undefined): StopIncident["cause"] {
   const source = runCheckpoint(run);
   if (!source) return undefined;
@@ -3244,7 +3260,14 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
             });
         }
         try {
-          persistence!.commit(state, ticket, action, detail, evidence, handoff);
+          persistence!.commit(
+            state,
+            ticket,
+            action,
+            transitionDetail(action, detail, run),
+            evidence,
+            handoff,
+          );
         } catch (error) {
           // A failed transition must not be repersisted by notice recovery.
           flushNotices = async () => {};
@@ -4166,11 +4189,21 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         return policy && !config.scheduleGates;
       }
 
-      function requiresReview(task: Task, run: Run, attempt: number) {
-        return (
-          runDefinition(run, config, directory).review &&
-          (task.size !== "small" || task.risky || attempt > 1)
-        );
+      function skipReview(
+        task: Task,
+        run: Extract<Run, { kind: "running" }>,
+      ): (typeof reviewSkipReasons)[number] | null {
+        if (!runDefinition(run, config, directory).review)
+          return "review-disabled";
+        return task.size === "small" && !task.risky && run.attempt === 1
+          ? "small-low-risk"
+          : null;
+      }
+
+      function recordOnce(ticket: string, action: string, facts: object) {
+        const detail = JSON.stringify(facts);
+        if (persistence!.lastEvent(ticket, action) !== detail)
+          commit(ticket, action, detail);
       }
 
       async function checkCandidate(
@@ -4206,7 +4239,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
               commit(
                 task.id,
                 "gate-returned",
-                outcome,
+                JSON.stringify({ attempt: run.attempt, gateOutcome: outcome }),
                 undefined,
                 undefined,
                 records,
@@ -4222,9 +4255,18 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
               JSON.stringify({ log, rerunLog }),
             );
           const evidence = rerunLog ?? log;
-          if (requiresReview(task, run, run.attempt)) {
+          const reason = skipReview(task, run);
+          if (!reason) {
             await beginReview(task, run, report, revision, evidence);
-          } else await accept(task, run, report, revision, evidence);
+          } else {
+            recordOnce(task.id, "review-skipped", {
+              attempt: run.attempt,
+              revision,
+              base: run.base,
+              skipReason: reason,
+            });
+            await accept(task, run, report, revision, evidence);
+          }
         } else await reject(task, run, log, "gate", feedback);
       }
 
@@ -4268,6 +4310,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           const rejected = {
             reason: rejectionReasons[rejectedBy],
             attempt: run.attempt,
+            nextAttempt: run.attempt + 1,
             evidence,
           };
           run.rejectedAttempt = run.attempt;
@@ -4861,6 +4904,22 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         );
         if (!report) return;
         if (report.kind === "malformed") return rejectReport(task, run, report);
+        return settleReport(task, run, report);
+      }
+
+      async function settleReport(
+        task: Task,
+        run: Extract<Run, { kind: "running" }>,
+        report: Exclude<
+          Awaited<ReturnType<typeof currentReport>>,
+          { kind: "malformed" } | null
+        >,
+      ) {
+        recordOnce(task.id, "report-received", {
+          attempt: run.attempt,
+          reportKind: report.kind,
+          ...(report.kind === "candidate" ? { revision: report.revision } : {}),
+        });
         if (report.kind === "blocked") {
           state.runs[task.id] = {
             kind: "blocked",

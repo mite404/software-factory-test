@@ -1037,12 +1037,19 @@ function heldBy(run: Run): [string, LifecycleStop] | undefined {
 
 type StageStep = [Stage, PipelineStep | null];
 
+function postBuildStage(run: Extract<Run, { kind: "running" }>): StageStep {
+  if (run.review) return ["reviewing", "review"];
+  return run.checks?.attempt === run.attempt
+    ? ["gating", "gate"]
+    : ["building", "builder"];
+}
+
 function runningStage(run: Extract<Run, { kind: "running" }>): StageStep {
   const step = run.review ? "review" : "builder";
   if (run.gate) return ["gating", "gate"];
   if (run.incident?.reason === "provider-limit") return ["rate-limited", step];
   if (run.incident?.reason === "disconnected") return ["disconnected", step];
-  return [run.review ? "reviewing" : "building", step];
+  return postBuildStage(run);
 }
 
 /** Whether a run can satisfy an acceptance dependency. Landing proof alone never qualifies. */
@@ -1262,6 +1269,9 @@ export type State = {
   };
 };
 type Event = { at: string; ticket: string; action: string; detail: string };
+
+/** Closed reasons for a recorded decision not to run cold review. */
+export const reviewSkipReasons = ["review-disabled", "small-low-risk"] as const;
 
 /** Closed outcomes per evidence kind; anything else is refused at write and read. */
 export const evidenceOutcomes = {
@@ -2939,7 +2949,7 @@ export function factoryEvents(directory: string, after = 0, limit = 100) {
   }
 }
 
-/** Read curated SQLite tickets, state and review events in one snapshot; never import legacy files. @throws On invalid storage. */
+/** Read tickets, runs and their lifecycle references in one snapshot, without importing legacy files. @throws On invalid storage. */
 export function factoryRecords(directory: string) {
   if (!existsSync(join(directory, "state.sqlite"))) return null;
   const db = database(directory, true);
@@ -2962,11 +2972,27 @@ export function factoryRecords(directory: string) {
           };
         });
       const reviews = db
-        .query<Pick<Event, "ticket" | "action" | "detail">, []>(
-          "SELECT ticket, action, detail FROM events WHERE action IN ('review-created', 'review-verdict') ORDER BY id",
+        .query<Event & { id: number }, []>(
+          `SELECT id, at, ticket, action, detail FROM events
+           WHERE action IN ('review-created', 'review-verdict', 'review-skipped', 'report-received')
+           ORDER BY id`,
         )
         .all();
-      return { state, tickets, reviews, requests: readAutomationRequests(db) };
+      const nudges = db
+        .query<{ ticket: string; count: number }, []>(
+          `SELECT events.ticket, COUNT(*) AS count FROM events
+           JOIN runs ON runs.ticket = events.ticket
+             AND json_extract(runs.data, '$.watchdog.episode') = events.detail
+           WHERE events.action = 'watchdog-nudge-intended' GROUP BY events.ticket`,
+        )
+        .all();
+      return {
+        state,
+        tickets,
+        reviews,
+        nudges,
+        requests: readAutomationRequests(db),
+      };
     })();
   } finally {
     db.close();

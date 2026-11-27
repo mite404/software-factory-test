@@ -4335,6 +4335,36 @@ test("watchdog bounds suspicion across reload, diagnostics, unknown activity and
   expect(second.watchdog!.alerts).toEqual(suspected.watchdog!.alerts);
   expect(second.watchdog!.progressAt).toBe(1000);
   expect(f.counts()).toEqual({ creates: 1, sends: 1 });
+  const diagnostic = openPersistence(engine.directory, [], clock);
+  diagnostic.event("A", "error", "PRIVATE-WATCHDOG-CANARY");
+  diagnostic.close();
+  const stalledDashboard = startDashboard({ root: f.root, port: 0 });
+  try {
+    const database = join(engine.directory, "state.sqlite");
+    const before = await readFile(database);
+    const url = `http://127.0.0.1:${stalledDashboard.port}/api`;
+    const feed = await (await fetch(`${url}/status`)).json();
+    expect(feed.tasks[0]).toMatchObject({
+      stage: "building",
+      attempt: 1,
+      waitingForForeman: false,
+      stall: {
+        id: second.watchdog!.episode,
+        reason: "no-lifecycle-progress",
+        since: new Date(1000).toISOString(),
+        detectedAt: new Date(1_801_000).toISOString(),
+        lastNudgedAt: new Date(3_601_000).toISOString(),
+        nudgeCount: 2,
+      },
+    });
+    expect(await (await fetch(`${url}/events`)).text()).not.toContain(
+      "PRIVATE-WATCHDOG-CANARY",
+    );
+    expect(await readFile(database)).toEqual(before);
+    expect(nudges).toHaveLength(2);
+  } finally {
+    await stalledDashboard.stop(true);
+  }
   await engine.tick("pause");
   at += 3_600_000;
   await f.factory(clock).tick("reconcile");
@@ -4557,6 +4587,221 @@ test("acceptance caps insight and discards unknown report keys from evidence and
     const feed = await response.text();
     expect(feed).toContain(report.summary);
     expect(feed).not.toContain("PRIVATE-CANARY");
+    expect(JSON.parse(feed).tasks[0]).toMatchObject({
+      stage: "accepted",
+      attempt: 1,
+      waitingForForeman: false,
+      reportReceipt: { attempt: 1, kind: "candidate", revision },
+      reviewDecision: {
+        outcome: "skipped",
+        reason: "review-disabled",
+        attempt: 1,
+        revision,
+      },
+    });
+    const events = await (
+      await fetch(`http://localhost:${server.port}/api/events`)
+    ).json();
+    expect(events.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: "report-received",
+          attempt: 1,
+          revision,
+        }),
+        expect.objectContaining({
+          action: "gate-returned",
+          attempt: 1,
+          gateOutcome: "gate-passed",
+        }),
+        expect.objectContaining({
+          action: "review-skipped",
+          attempt: 1,
+          reviewOutcome: "skipped",
+        }),
+      ]),
+    );
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("slow dashboard readers retain cold review decisions through repair and restart", async () => {
+  const f = await preparationFixture(() => "");
+  const configPath = join(f.root, ".factory.json");
+  const config = await Bun.file(configPath).json();
+  await writeFile(configPath, JSON.stringify({ ...config, review: true }));
+  f.git("commit", "-qam", "require cold review");
+  const clock = () => 1000;
+  const engine = f.factory(clock);
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const create = f.host.create.bind(f.host);
+  let reviewers = 0;
+  f.host.create = async (...args) => {
+    if (args[3] !== "reviewer") return create(...args);
+    if (++reviewers === 1) {
+      entered.resolve();
+      await release.promise;
+    }
+    return `T-reviewer-${reviewers}`;
+  };
+  await engine.tick("start", "T-owner");
+  f.host.state = async () => "idle";
+  let server = startDashboard({ root: f.root, port: 0 });
+  const read = async (path: string) => {
+    const response = await fetch(`http://localhost:${server.port}/api/${path}`);
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).not.toContain("PRIVATE-REPLAY-CANARY");
+    return JSON.parse(body);
+  };
+  try {
+    expect((await read("status")).tasks[0]).toMatchObject({
+      stage: "building",
+      attempt: 1,
+    });
+    for (const attempt of [1, 2, 3]) {
+      await mkdir(join(f.worktree, "src"), { recursive: true });
+      await writeFile(join(f.worktree, "src/value"), String(attempt));
+      f.git("-C", f.worktree, "add", "src");
+      f.git("-C", f.worktree, "commit", "-qm", `candidate ${attempt}`);
+      const revision = f.git("-C", f.worktree, "rev-parse", "HEAD");
+      await writeFile(
+        join(engine.directory, "A.report.json"),
+        JSON.stringify({
+          kind: "candidate",
+          attempt,
+          revision,
+          insight: "PRIVATE-REPLAY-CANARY",
+        }),
+      );
+      const reviewStart = engine.tick("reconcile");
+      if (attempt === 1) {
+        try {
+          await Promise.race([entered.promise, reviewStart]);
+          expect((await read("status")).tasks[0]).toMatchObject({
+            stage: "reviewing",
+            attempt: 1,
+            activity: null,
+            reviewDecision: null,
+            workerThread: "T-prepared",
+            reviewerThread: null,
+            checks: {
+              attempt: 1,
+              results: [{ name: "verify", required: true, status: "pass" }],
+            },
+          });
+        } finally {
+          release.resolve();
+          await reviewStart;
+        }
+      }
+      const run = (await reviewStart).runs.A;
+      if (run?.kind !== "running" || !run.review)
+        throw new Error("Missing review fixture");
+      const { ticket, base, stage, report } = run.review;
+      await writeFile(
+        report,
+        JSON.stringify({
+          ticket,
+          attempt,
+          revision,
+          base,
+          stage,
+          kind: attempt === 3 ? "pass" : "issues",
+          findings:
+            attempt === 3
+              ? []
+              : [
+                  {
+                    severity: "warning",
+                    location: "src/value:1",
+                    evidence: "PRIVATE-REPLAY-CANARY",
+                    correction: "Repair fixture candidate",
+                  },
+                ],
+        }),
+      );
+      const settled = (await engine.tick("reconcile")).runs.A!;
+      if (attempt === 2) {
+        const incident = settled.incident!.id;
+        expect((await read("status")).tasks[0]).toMatchObject({
+          stage: "escalated",
+          waitingForForeman: true,
+          attempt: 2,
+          activity: null,
+          stop: {
+            id: incident,
+            reason: "verification-rejected",
+            owner: "T-owner",
+          },
+        });
+        await engine.tick("resume", "T-owner", f.host.state, {
+          ticket: "A",
+          incident,
+          decision: "Resume fixture repair",
+        });
+      }
+    }
+    expect((await read("status")).tasks[0]).toMatchObject({
+      stage: "accepted",
+      attempt: 3,
+      waitingForForeman: false,
+      workerThread: "T-prepared",
+      reviewerThread: "T-reviewer-3",
+      reviewDecision: { attempt: 3, outcome: "pass", reason: null },
+    });
+    const first = (await read("events?limit=2")).events;
+    await server.stop(true);
+    server = startDashboard({ root: f.root, port: 0 });
+    const database = join(engine.directory, "state.sqlite");
+    const before = await readFile(database);
+    const rest = (await read(`events?after=${first.at(-1).id}&limit=500`))
+      .events;
+    expect([...first, ...rest]).toEqual(
+      (await read("events?limit=500")).events,
+    );
+    expect(
+      rest.filter((event: { action: string }) =>
+        [
+          "review-verdict",
+          "rejected",
+          "escalated",
+          "repair-resumed",
+          "accepted",
+        ].includes(event.action),
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        action: "review-verdict",
+        attempt: 1,
+        reviewOutcome: "issues",
+      }),
+      expect.objectContaining({
+        action: "rejected",
+        attempt: 1,
+        nextAttempt: 2,
+      }),
+      expect.objectContaining({
+        action: "review-verdict",
+        attempt: 2,
+        reviewOutcome: "issues",
+      }),
+      expect.objectContaining({
+        action: "escalated",
+        attempt: 2,
+        incident: expect.any(String),
+      }),
+      expect.objectContaining({ action: "repair-resumed", attempt: 3 }),
+      expect.objectContaining({
+        action: "review-verdict",
+        attempt: 3,
+        reviewOutcome: "pass",
+      }),
+      expect.objectContaining({ action: "accepted" }),
+    ]);
+    expect(await readFile(database)).toEqual(before);
   } finally {
     await server.stop(true);
   }
@@ -6908,7 +7153,9 @@ test.each([
           )
           .all()
           .map((row) => JSON.parse(row.detail)),
-      ).toEqual([{ reason: "gate-failed", attempt: 1, evidence: log }]);
+      ).toEqual([
+        { reason: "gate-failed", attempt: 1, nextAttempt: 2, evidence: log },
+      ]);
     } finally {
       db.close();
     }

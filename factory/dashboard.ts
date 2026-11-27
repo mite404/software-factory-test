@@ -17,6 +17,7 @@ import {
   projectFullGate,
   lifecycleStatus,
   rejectionReasons,
+  reviewSkipReasons,
   runCheckpoint,
   runStage,
   stages,
@@ -37,6 +38,12 @@ export type DashboardEvent = {
   thread?: string;
   /** A first rejection's closed reason code; its evidence never crosses. */
   reason?: StopIncident["reason"];
+  nextAttempt?: number;
+  incident?: string;
+  reportKind?: "candidate" | "blocked";
+  gateOutcome?: (typeof evidenceOutcomes.gate)[number];
+  reviewOutcome?: "pass" | "issues" | "skipped";
+  skipReason?: (typeof reviewSkipReasons)[number];
 };
 
 const DETAIL_ACTIONS = new Set([
@@ -48,7 +55,13 @@ const DETAIL_ACTIONS = new Set([
   "review-created",
   "review-sending",
   "review-sent",
+  "report-received",
+  "review-skipped",
+  "gate-returned",
+  "escalated",
+  "parked",
 ]);
+const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const THREAD_ACTIONS = new Set([
   "created",
   "sending",
@@ -58,6 +71,13 @@ const THREAD_ACTIONS = new Set([
   "provider-continuation-sent",
   "provider-recovered",
 ]);
+const INCIDENT_ACTIONS = new Set([
+  "notice-sent",
+  "watchdog-nudge-intended",
+  "watchdog-alert-intended",
+  "watchdog-nudge-sent",
+]);
+const GATE_ATTEMPT_ACTIONS = new Set(["gate-started", "gate-interrupted"]);
 
 function jsonDetail(detail: string): Record<string, unknown> {
   try {
@@ -69,6 +89,14 @@ function jsonDetail(detail: string): Record<string, unknown> {
 
 function eventDetail(action: string, detail: string): Record<string, unknown> {
   if (action === "accepted") return { revision: detail };
+  if (GATE_ATTEMPT_ACTIONS.has(action))
+    return { attempt: matchingString(detail, /^\d+$/) ? Number(detail) : null };
+  if (INCIDENT_ACTIONS.has(action)) return { incident: detail };
+  if (
+    action === "gate-returned" &&
+    evidenceOutcomes.gate.some((outcome) => outcome === detail)
+  )
+    return { gateOutcome: detail };
   if (THREAD_ACTIONS.has(action)) return { thread: detail };
   return DETAIL_ACTIONS.has(action) ? jsonDetail(detail) : {};
 }
@@ -85,6 +113,80 @@ function durableFailure(error: unknown) {
     : "invalid";
 }
 
+function positiveAttempt(value: unknown) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
+    ? value
+    : undefined;
+}
+
+function verdictFields(
+  detail: Record<string, unknown>,
+  ticket: string,
+): {
+  attempt: number;
+  revision: string;
+  base: string;
+  outcome: "pass" | "issues";
+} | null {
+  const attempt = positiveAttempt(detail.attempt);
+  const revision = matchingString(detail.revision, /^[a-f0-9]{40}$/);
+  const base = matchingString(detail.base, /^[a-f0-9]{40}$/);
+  const outcome = detail.kind;
+  if (
+    detail.ticket !== ticket ||
+    detail.stage !== "post-graft" ||
+    !attempt ||
+    !revision ||
+    !base ||
+    (outcome !== "pass" && outcome !== "issues")
+  )
+    return null;
+  return { attempt, revision, base, outcome };
+}
+
+const eventFacts = new Map<
+  string,
+  (event: DashboardEvent, detail: Record<string, unknown>) => void
+>([
+  [
+    "report-received",
+    (event, detail) => {
+      if (
+        detail.reportKind === "blocked" ||
+        (detail.reportKind === "candidate" && event.revision)
+      )
+        event.reportKind = detail.reportKind;
+    },
+  ],
+  [
+    "review-skipped",
+    (event, detail) => {
+      event.skipReason = reviewSkipReasons.find(
+        (reason) => reason === detail.skipReason,
+      );
+      if (event.skipReason && event.attempt && event.revision)
+        event.reviewOutcome = "skipped";
+    },
+  ],
+  [
+    "gate-returned",
+    (event, detail) => {
+      event.gateOutcome = evidenceOutcomes.gate.find(
+        (outcome) => outcome === detail.gateOutcome,
+      );
+    },
+  ],
+  [
+    "rejected",
+    (event, detail) => {
+      event.nextAttempt = positiveAttempt(detail.nextAttempt);
+      event.reason = Object.values(rejectionReasons).find(
+        (reason) => reason === detail.reason,
+      );
+    },
+  ],
+]);
+
 function publicEvent(
   row: NonNullable<ReturnType<typeof factoryEvents>>[number],
 ): DashboardEvent {
@@ -94,25 +196,41 @@ function publicEvent(
     ticket: row.ticket,
     action: row.action,
   };
+  if (row.action === "review-verdict") {
+    const verdict = verdictFields(jsonDetail(row.detail), row.ticket);
+    return verdict
+      ? {
+          ...event,
+          attempt: verdict.attempt,
+          revision: verdict.revision,
+          reviewOutcome: verdict.outcome,
+        }
+      : event;
+  }
   const detail = eventDetail(row.action, row.detail);
-  if (
-    typeof detail.attempt === "number" &&
-    Number.isSafeInteger(detail.attempt) &&
-    detail.attempt > 0
-  )
-    event.attempt = detail.attempt;
+  event.attempt = positiveAttempt(detail.attempt);
   event.revision = matchingString(detail.revision, /^[a-f0-9]{40}$/);
   event.thread = matchingString(detail.thread, /^T-[\w-]+$/);
-  event.reason = Object.values(rejectionReasons).find(
-    (reason) => reason === detail.reason,
-  );
+  event.incident = matchingString(detail.incident, uuid);
+  eventFacts.get(row.action)?.(event, detail);
+  if (event.incident && detail.reason === "verification-rejected")
+    event.reason = detail.reason;
   return event;
+}
+
+function validEventKeys(params: URLSearchParams) {
+  const keys = [...params.keys()];
+  return (
+    new Set(keys).size === keys.length &&
+    keys.every((key) => key === "after" || key === "limit")
+  );
 }
 
 function eventBounds(url: URL) {
   const after = url.searchParams.get("after") ?? "0";
   const limit = url.searchParams.get("limit") ?? "100";
   if (
+    !validEventKeys(url.searchParams) ||
     !matchingString(after, /^\d+$/) ||
     !Number.isSafeInteger(Number(after)) ||
     !matchingString(limit, /^\d+$/) ||
@@ -424,6 +542,47 @@ function rejectedReviews(
   );
 }
 
+function matchesSkippedReview(
+  event: DashboardEvent,
+  work: Run | undefined,
+  base: unknown,
+) {
+  if (work?.kind === "done")
+    return work.revision === event.revision && work.acceptedBase === base;
+  return work?.kind === "running" && work.base === base;
+}
+
+function matchesDecision(
+  event: DashboardEvent,
+  work: Run | undefined,
+  base: unknown,
+) {
+  if (!event.reviewOutcome) return false;
+  const review = reviewFor(event.ticket, work);
+  if (event.reviewOutcome !== "skipped")
+    return review?.revision === event.revision && review?.base === base;
+  return !review && matchesSkippedReview(event, work, base);
+}
+
+function recordedReferences(
+  records: NonNullable<ReturnType<typeof factoryRecords>>,
+) {
+  const receipts = new Map<string, DashboardEvent>();
+  const decisions = new Map<string, DashboardEvent>();
+  for (const row of records.reviews) {
+    if (row.action === "review-created") continue;
+    const run = Object.hasOwn(records.state.runs, row.ticket)
+      ? records.state.runs[row.ticket]
+      : undefined;
+    const event = publicEvent(row);
+    if (!event.attempt || event.attempt !== attemptOf(run)) continue;
+    if (event.reportKind) receipts.set(row.ticket, event);
+    if (matchesDecision(event, runCheckpoint(run), jsonDetail(row.detail).base))
+      decisions.set(row.ticket, event);
+  }
+  return { receipts, decisions };
+}
+
 // The first rejection that sent this attempt back, until its repair message is sent. A resume
 // of a later stop raises the attempt past it, so an older rejection is never reused.
 function projectRepair(run: Run | undefined) {
@@ -454,8 +613,6 @@ function durableTask(id: string, steps: string[], run: Run | undefined) {
   if ("thread" in run) row.thread = reference(run.thread ?? null, /^T-[\w-]+$/);
   if (run.kind === "done")
     row.revision = reference(run.revision, /^[a-f0-9]{40}$/);
-  if (run.kind === "running" && run.delivery !== "sent")
-    row.activity = projectRepair(run) ? "working" : "blocked";
   return row;
 }
 
@@ -473,7 +630,12 @@ function applyObservation(
 }
 
 function attemptOf(run: Run | undefined): number | null {
-  return run && "attempt" in run ? (run.attempt ?? null) : null;
+  const work = runCheckpoint(run);
+  return (
+    (work && "attempt" in work ? work.attempt : undefined) ??
+    positiveAttempt(run?.incident?.attempt) ??
+    null
+  );
 }
 
 function projectMerge(run: Run | undefined, repository: string | null) {
@@ -491,9 +653,12 @@ function projectMerge(run: Run | undefined, repository: string | null) {
 function projectStop(incident: Run["incident"]) {
   if (!incident) return null;
   return {
+    id: matchingString(incident.id, uuid) ?? null,
+    owner: reference(incident.owner, /^T-[\w-]+$/),
     reason: incident.reason,
     role: incident.cause?.role ?? null,
     thread: reference(incident.cause?.thread ?? null, /^T-[\w-]+$/),
+    notifiedAt: iso(incident.notifiedAt),
   };
 }
 
@@ -506,12 +671,48 @@ function projectRunLinks(id: string, run: Run | undefined) {
     repair: projectRepair(run),
     parked: runStage(run).stage === "parked",
     // The owning worker's attempt; a repair after rejection raises it.
-    attempt: attemptOf(checkpoint),
+    attempt: attemptOf(run),
+    waitingForForeman: runStage(run).stage === "escalated",
   };
 }
 
 function iso(at: number | null | undefined) {
   return typeof at === "number" ? new Date(at).toISOString() : null;
+}
+
+function stallTiming(run: Run | undefined) {
+  if (run?.incident?.reason === "disconnected")
+    return {
+      reason: "disconnected",
+      since: run.kind === "running" ? run.stallSample?.since : undefined,
+      detectedAt: run.stageAt,
+    };
+  const timing = run?.watchdog;
+  if (!timing) return null;
+  const open = timing.alerts.find(
+    (alert) => alert.kind === "unresolved" && alert.episode === timing.episode,
+  );
+  return open
+    ? {
+        reason: "no-lifecycle-progress",
+        since: timing.progressAt,
+        detectedAt: open.intendedAt,
+      }
+    : null;
+}
+
+function projectStall(run: Run | undefined, nudgeCount: number) {
+  const stall = stallTiming(run);
+  if (!stall) return null;
+  const timing = run?.watchdog;
+  return {
+    id: matchingString(timing?.episode ?? run?.incident?.id, uuid) ?? null,
+    reason: stall.reason,
+    since: iso(stall.since),
+    detectedAt: iso(stall.detectedAt),
+    lastNudgedAt: iso(timing?.nudgedAt),
+    nudgeCount,
+  };
 }
 
 // Curated at acceptance; the raw report insight never leaves storage.
@@ -558,6 +759,12 @@ function projectStage(run: Run | undefined, intake: Task["intake"]) {
   };
 }
 
+function delivered(run: Run | undefined, review: ReturnType<typeof reviewFor>) {
+  return (
+    run?.kind === "running" && (review?.delivery ?? run.delivery) === "sent"
+  );
+}
+
 function projectTask(
   id: string,
   steps: string[],
@@ -572,7 +779,7 @@ function projectTask(
   const workerThread = row.thread;
   // The declared status of the run's stage; only runs still in flight take a live activity.
   const declared = runStage(run, intake).status;
-  const open = declared === "unknown";
+  const open = declared === "unknown" && delivered(run, review);
   const pending = declared !== "accepted";
   let gate = null;
   let reviewEvidence = null;
@@ -585,7 +792,6 @@ function projectTask(
       row.thread = thread;
     }
     row.revision = revision;
-    if (open && review.delivery !== "sent") row.activity = "blocked";
     gate = { revision, base, stage: review.stage };
     reviewEvidence = {
       ...gate,
@@ -631,6 +837,31 @@ async function readObservation(directory: string) {
       fresh: false,
     };
   }
+}
+
+function receiptReference(event: DashboardEvent | undefined) {
+  return event
+    ? {
+        eventId: event.id,
+        at: event.at,
+        attempt: event.attempt,
+        kind: event.reportKind,
+        revision: event.revision ?? null,
+      }
+    : null;
+}
+
+function decisionReference(event: DashboardEvent | undefined) {
+  return event
+    ? {
+        eventId: event.id,
+        at: event.at,
+        attempt: event.attempt,
+        outcome: event.reviewOutcome,
+        revision: event.revision,
+        reason: event.skipReason ?? null,
+      }
+    : null;
 }
 
 function targetBranch(root: string) {
@@ -797,14 +1028,21 @@ export function startDashboard({
         const publicTickets = new Map(tickets.map((task) => [task.id, task]));
         const repository = githubRepository(root);
         const rejections = rejectedReviews(reviews);
+        const { receipts, decisions } = recordedReferences(records);
+        const nudges = new Map(
+          records.nudges.map(({ ticket, count }) => [ticket, count]),
+        );
         const tasks = [
           ...new Set([...steps.keys(), ...Object.keys(state.runs)]),
         ].map((id) => {
           const ticket = publicTickets.get(id);
+          const run = Object.hasOwn(state.runs, id)
+            ? state.runs[id]
+            : undefined;
           const row = projectTask(
             id,
             steps.get(id) ?? [],
-            Object.hasOwn(state.runs, id) ? state.runs[id] : undefined,
+            run,
             ticket?.intake,
             observed.get(id),
             fresh,
@@ -814,6 +1052,9 @@ export function startDashboard({
             ...row,
             outcome: ticket?.outcome ?? null,
             rejections: rejections.get(id) ?? [],
+            stall: projectStall(run, nudges.get(id) ?? 0),
+            reportReceipt: receiptReference(receipts.get(id)),
+            reviewDecision: decisionReference(decisions.get(id)),
           };
         });
         const counts = {

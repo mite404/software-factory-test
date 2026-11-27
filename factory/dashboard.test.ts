@@ -312,6 +312,8 @@ test("events are cursor ordered, bounded, read-only and expose only validated re
       "limit=Infinity",
       "limit=",
       "limit=1%0a",
+      "after=1&after=2",
+      "ticket=missing",
     ])
       expect((await fetch(`${url}?${query}`)).status).toBe(400);
     expect((await fetch(url, { method: "POST" })).status).toBe(405);
@@ -745,6 +747,10 @@ test("HTTP reads durable acceptance without a heartbeat and never discloses priv
         title: "A",
         stage: "accepted",
         thread: "T-worker",
+        workerThread: "T-worker",
+        reviewerThread: "T-cold-review",
+        attempt: null,
+        reviewDecision: null,
         revision,
         evidence: {
           acceptance: { revision },
@@ -756,6 +762,8 @@ test("HTTP reads durable acceptance without a heartbeat and never discloses priv
         id: "B",
         activity: null,
         thread: "T-review",
+        workerThread: "T-original",
+        reviewDecision: null,
         revision,
         attempt: 1,
         evidence: {

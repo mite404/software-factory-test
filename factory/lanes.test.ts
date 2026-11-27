@@ -804,7 +804,7 @@ const rejectedIn = (text: string) =>
     (event: { action: string }) => event.action === "rejected",
   );
 
-test("a first gate rejection reads as working with its code and attempt, and no private text crosses", async () => {
+test("a first gate rejection records repair without claiming live activity", async () => {
   const gateCanary = "CANARY-GATE-LOG";
   const blockedCanary = "CANARY-BLOCKED-REPORT";
   const f = await fixture([{ id: "A" }, { id: "B", lane: "light" }], {
@@ -826,7 +826,7 @@ test("a first gate rejection reads as working with its code and attempt, and no 
     );
     expect(feed.during).toHaveLength(1);
     expect(taskIn(feed.during[0]!, "A")).toMatchObject({
-      activity: "working",
+      activity: null,
       stop: null,
       repair: { reason: "gate-failed", attempt: 1 },
       attempt: 2,
@@ -842,11 +842,13 @@ test("a first gate rejection reads as working with its code and attempt, and no 
         ticket: "A",
         action: "rejected",
         attempt: 1,
+        nextAttempt: 2,
         reason: "gate-failed",
       },
     ]);
     expect(taskIn(delivered, "B")).toMatchObject({
       stop: { reason: "worker-blocked" },
+      reportReceipt: { kind: "blocked", attempt: 1, revision: null },
       repair: null,
     });
     await f.submit("A", "a", `still bad ${gateCanary}\n`, 2);
@@ -874,7 +876,7 @@ test("a first gate rejection reads as working with its code and attempt, and no 
   }
 });
 
-test("a first review rejection reads as working with review-rejected until its repair message is delivered", async () => {
+test("a first review rejection remains visible until its repair message is delivered", async () => {
   const reviewCanary = "CANARY-REVIEW-FINDING";
   const f = await fixture([{ id: "A" }], { review: true });
   const feed = feedDuringRepair(f);
@@ -908,7 +910,7 @@ test("a first review rejection reads as working with review-rejected until its r
     expect(f.messages.at(-1)!.message).toContain(reviewCanary);
     expect(feed.during).toHaveLength(1);
     expect(taskIn(feed.during[0]!, "A")).toMatchObject({
-      activity: "working",
+      activity: null,
       stop: null,
       repair: { reason: "review-rejected", attempt: 1 },
     });

@@ -535,12 +535,12 @@ and saves only the result on the done run. The feed publishes that field or `nul
 older runs omit it.
 A first rejection sends the same worker back with no stop. `reject` saves the failed attempt as
 `rejectedAttempt` and records a `rejected` event whose detail is
-`{ reason, attempt, evidence }`: `report-invalid`, `gate-failed`, `review-rejected` or
+`{ reason, attempt, nextAttempt, evidence }`: `report-invalid`, `gate-failed`, `review-rejected` or
 `target-changed` (a merge rejection) from `rejectionReasons`, the failed attempt, and private
-evidence. Until the repair message is sent, the feed reads the ticket as `working` and
-publishes `repair: { reason, attempt }`. It is `null` otherwise, so delivery and acceptance clear
-it, and a later resume, whose attempt has moved past `rejectedAttempt`, never reuses it. The page
-words every reason code in one fixed sentence.
+evidence. `nextAttempt` records the new worker attempt. Until the repair message is sent, the feed
+publishes `repair: { reason, attempt }` without claiming live activity. Delivery and acceptance
+clear it to `null`. A later resume has moved past `rejectedAttempt` and never reuses the repair.
+The page words every reason code in one fixed sentence.
 
 The walking test pins four exitless stops by name: `blocked.withoutWorker`,
 `running.reviewerDeliveryLegacy`, `running.workerDeliveryLegacy` and `uncertain.legacy`. They stay
@@ -1757,7 +1757,8 @@ The section is read-only; `web/replay.ts` frames 19 to
 opening private state. The response is `{ durable, events }`. Rows are oldest first, strictly after
 the integer `id` cursor. `after` defaults to 0 and must be a nonnegative safe integer. `limit`
 defaults to 100 and must be an integer from 1 through 500. Invalid bounds return HTTP 400.
-Pass the last returned `id` as `after` on the next request.
+Pass the last returned `id` as `after` on the next request. Keep your cursor if the page is empty.
+IDs, not timestamps, order events across equal timestamps and dashboard restarts.
 
 Each row has `id`, `at` (the stored timestamp), `ticket`, and `action`. Optional fields are
 `attempt` (a positive safe integer), `revision` (40 lowercase hexadecimal characters), and `thread`
@@ -1766,7 +1767,12 @@ one of its closed codes. JSON details for preparation, setup-spawned, rejected, 
 and review creation or delivery supply only these validated fields.
 Legacy accepted revisions and created, sent, sending, or provider-continuation thread references
 are validated too. Unknown actions remain visible without any detail-derived fields.
-Briefs, paths, verdicts, arbitrary text, nested objects, and all other detail fields stay private.
+`report-received` adds `reportKind` (`candidate` or `blocked`), and `gate-returned` adds
+`gateOutcome`. A recorded `review-verdict` adds `reviewOutcome: "pass"` or `"issues"`.
+`review-skipped` adds `reviewOutcome: "skipped"` and `skipReason` (`review-disabled` or
+`small-low-risk`). A new `rejected` row also supplies `nextAttempt`. Escalation, parking and
+watchdog rows can include `incident`, an opaque reference. Older events can lack these fields.
+Briefs, paths, verdict findings, arbitrary text, and all other detail fields stay private.
 
 Missing storage returns HTTP 200 with `durable: "missing"` and `events: []`, like `/api/status`.
 Invalid storage returns HTTP 503 with `durable: "invalid"`; exhausted lock waits return 503 with
@@ -1785,8 +1791,8 @@ The ticket selector filters locally. New rows arrive on the existing five-second
 into view only while the reader is at the end. Scrolling up keeps the reading position.
 The drawer and filter reset on reload. Notices use received events, not inferred poll differences.
 The replay includes labelled illustrative event rows; it is not a private event-log export.
-A first rejection's notice prints its reason sentence and the failed attempt.
-Stage-change events are not available yet. Replay guarantees remain future work.
+A first rejection's notice prints its reason sentence and the failed attempt. Polling clients can
+replay the recorded rejection and next attempt after the worker has already started its repair.
 
 ### Pipeline motion
 
@@ -1862,6 +1868,45 @@ coordinator commits wait for ordinary lock overlap. An exhausted lock wait retur
 
 Each task adds `attempt`, the owning worker's current attempt from its durable run, or `null` when
 no worker run carries one. A repair after a rejection raises it; it is not a review verdict.
+`waitingForForeman` marks a saved escalation checkpoint, not a failed heartbeat or an even
+attempt number. `workerThread` stays tied to the builder while `reviewerThread` names the assigned
+reviewer. Pending reviewer creation has no live `activity` and does not mean a rejection.
+`checks` lists the last recorded gate's `attempt` and `results` (check `name`, `required`, and
+`status`). `stop` includes the incident `id`, owning Foreman `owner`, closed `reason`, optional
+cause `role` and `thread`, and `notifiedAt`. A missing stop is `null`.
+`stall` is `null` unless storage records a watchdog suspicion or disconnection. Otherwise it
+contains `id`, `reason` (`no-lifecycle-progress` or `disconnected`), `since`, `detectedAt`,
+`lastNudgedAt`, and `nudgeCount` for the current episode. Counts are reservations, not confirmed
+deliveries. Reads do not issue alerts or nudges.
+
+For example, the native HTTP fixture that accepts an attempt with review disabled produces these
+task fields (event IDs, timestamps, and revision shown as examples):
+
+```json
+{
+  "attempt": 1,
+  "waitingForForeman": false,
+  "reportReceipt": {
+    "eventId": 12,
+    "at": "2026-11-27T00:00:00.000Z",
+    "attempt": 1,
+    "kind": "candidate",
+    "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "reviewDecision": {
+    "eventId": 15,
+    "at": "2026-11-27T00:00:00.000Z",
+    "attempt": 1,
+    "outcome": "skipped",
+    "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "reason": "review-disabled"
+  }
+}
+```
+
+The receipt names the submitted revision, which may differ from the rebased review revision.
+Its revision is `null` for a blocked report. `reportReceipt` and `reviewDecision` are `null`
+without a matching recorded fact. A legacy acceptance without a decision is unknown, not skipped.
 Each task adds `evidence`: an `acceptance` revision when done, and `gate`/`review` references only
 when a bound review record exists. References include revision, base, and post-graft stage; review
 also includes attempt, pending state, and the available reviewer thread. An absent reference is

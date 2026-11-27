@@ -363,10 +363,11 @@ async function gateExcerpt(path: string) {
   }
 }
 
-// A first rejection saves its private evidence beside its public reason code; older rejections
-// saved the evidence alone.
+// Rejection transitions may wrap their private evidence in decision metadata.
 function evidenceOf(event: { action: string; detail: string }) {
-  const wrapped = event.action === "rejected" ? json(event.detail) : {};
+  const wrapped = ["rejected", "escalated", "parked"].includes(event.action)
+    ? json(event.detail)
+    : {};
   return typeof wrapped.evidence === "string" ? wrapped.evidence : event.detail;
 }
 
