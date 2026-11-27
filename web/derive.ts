@@ -106,7 +106,19 @@ export function eventRows(events: DashboardEvent[], ticket = ""): EventRow[] {
 // is recorded, which on an accepted task is not proof that review was skipped.
 export type FeedTask = DashboardSnapshot["tasks"][number] & {
   attempt?: number | null; // the worker's current attempt, null before a worker exists
-  evidence?: { review: { pending?: boolean; attempt?: number } | null };
+  evidence?: {
+    acceptance?: { revision: string | null } | null;
+    review: { pending?: boolean; attempt?: number } | null;
+  };
+  reviewDecision?: {
+    outcome: DashboardEvent["reviewOutcome"];
+    attempt?: number;
+  } | null;
+  fullGate?: {
+    landedRevision: string;
+    verifiedRevision: string | null;
+    status: string;
+  };
   merge?: { pr: number; url: string | null } | null;
   workerThread?: string | null;
   reviewerThread?: string | null;
@@ -166,6 +178,7 @@ type Chip = { text: string; x: number; width: number };
 // What GET /api/status returns: the snapshot plus freshness, or an empty feed before first run.
 export type Feed = {
   project: string;
+  sample?: boolean;
   automations?: DashboardAutomation[];
   target: string; // branch the integrator fast-forwards onto
   observedAt: string | null;
@@ -193,7 +206,8 @@ export type Ticket = Cell & {
   plan: string[]; // the ticket's own authored steps, uncut
   revision: string; // short hash, "" until the ticket lands
   pullRequest: { number: number; href: string | null } | null;
-  review: "pending" | "recorded" | "none"; // the cold review record on its current revision
+  review: string;
+  acceptance: string;
   attempt: number | null;
   stageLinks: (string | null)[];
   stop: { role: "worker" | "reviewer" | null; href: string | null } | null;
@@ -266,7 +280,8 @@ type News = {
 
 // Everything the page paints, fully resolved so main.ts only copies values into the SVG.
 export type View = {
-  state: "live" | "paused" | "stale";
+  state: "live" | "paused" | "stale" | "offline";
+  sample: boolean;
   automations: DashboardAutomation[];
   project: string;
   target: string; // merge target branch, cut to fit its pill
@@ -281,6 +296,7 @@ export type View = {
   next: string;
   reviewing: boolean; // a fresh pending review, including the first and repeated polls
   reviewFinished: "passed" | "failed" | null; // release once on an observed review outcome
+  reviewWatch: ReviewWatch | null;
   waiting: string;
   slots: number; // lit submission slots: idle builders whose work is not accepted yet
   builders: Cell[]; // 4 rows: tickets that had not landed one poll ago
@@ -482,6 +498,37 @@ function lifecycle({ stage, actor, clearsAt }: FeedTask): string {
   return `${stage} · ${actor ?? "nobody"}${clears}`;
 }
 
+function reviewPending(task: FeedTask) {
+  const review = task.evidence?.review;
+  if (!review?.pending || task.fullGate?.landedRevision) return false;
+  const decision = task.reviewDecision;
+  return !decision || decision.attempt !== review.attempt;
+}
+
+function activeReview(task: Shown) {
+  return task.status === "working" && reviewPending(task);
+}
+
+function hasLanded(task: Shown | undefined) {
+  return task?.status === "accepted" || !!task?.fullGate?.landedRevision;
+}
+
+function reviewLabel(task: FeedTask) {
+  if (reviewPending(task)) return "Pending";
+  switch (task.reviewDecision?.outcome) {
+    case "pass":
+      return "Recorded pass";
+    case "issues":
+      return "Recorded issues";
+    case "skipped":
+      return "Recorded skip";
+    default:
+      return task.evidence?.review
+        ? "Review recorded · verdict not recorded"
+        : "No recorded review";
+  }
+}
+
 function ticket(
   task: Shown,
   stages: NonNullable<Feed["pipelineSteps"]>,
@@ -500,7 +547,9 @@ function ticket(
     plan: task.steps,
     revision: task.revision?.slice(0, 7) ?? "",
     pullRequest: pullRequest(task.merge),
-    review: review?.pending ? "pending" : review ? "recorded" : "none",
+    review: reviewLabel(task),
+    acceptance:
+      task.evidence?.acceptance?.revision ?? "No recorded acceptance proof",
     // Older feeds carry the attempt only on a pending review record.
     attempt: task.attempt ?? review?.attempt ?? null,
     checks: checkResults(task),
@@ -591,7 +640,7 @@ function settle(feed: Feed): Omit<Feed, "tasks"> & { tasks: Shown[] } {
     ...task,
     status: task.stop
       ? "blocked"
-      : task.evidence?.review?.pending
+      : reviewPending(task)
         ? "working"
         : (task.activity ?? declared.get(task.stage)!),
   }));
@@ -849,6 +898,71 @@ function nextLabel(active: Shown | undefined, total: number): string {
   return total ? "EVERY TICKET LANDED" : "NO TICKETS";
 }
 
+type ReviewWatch = { id: string; attempt: number; rejected: boolean };
+
+function pendingWatch(tasks: FeedTask[]): ReviewWatch | null {
+  const task = tasks.find(reviewPending);
+  const attempt = task?.evidence?.review?.attempt ?? task?.attempt;
+  return task && attempt != null
+    ? { id: task.id, attempt, rejected: false }
+    : null;
+}
+
+function rejectedReview(watch: ReviewWatch, events: DashboardEvent[]) {
+  return events.some(
+    (event) =>
+      event.ticket === watch.id &&
+      event.attempt === watch.attempt &&
+      event.action === "rejected" &&
+      event.reason === "review-rejected",
+  );
+}
+
+function reviewRelease(
+  task: Shown,
+  watch: ReviewWatch,
+): View["reviewFinished"] {
+  if (reviewPending(task)) return null;
+  const decision = task.reviewDecision;
+  if (decision?.attempt === watch.attempt) {
+    if (decision.outcome === "pass") return hasLanded(task) ? "passed" : null;
+    if (decision.outcome === "issues") return "failed";
+  }
+  if (task.status !== "accepted" && watch.rejected) return "failed";
+  return null;
+}
+
+function trackReview(
+  current: ReviewWatch | null,
+  tasks: Shown[],
+  events: DashboardEvent[],
+) {
+  const pending = pendingWatch(tasks);
+  if (!current)
+    return {
+      watch: pending && {
+        ...pending,
+        rejected: rejectedReview(pending, events),
+      },
+      release: null,
+    };
+  const task = tasks.find((task) => task.id === current.id);
+  if (!task) return { watch: pending, release: null };
+  const watch = {
+    ...current,
+    rejected: current.rejected || rejectedReview(current, events),
+  };
+  const outcome = reviewRelease(task, watch);
+  if (outcome) return { watch: pending, release: { id: task.id, outcome } };
+  if (pending && (pending.id !== watch.id || pending.attempt !== watch.attempt))
+    return { watch: pending, release: null };
+  return { watch, release: null };
+}
+
+function previousReview(feed: Feed | null) {
+  return feed?.fresh ? pendingWatch(feed.tasks) : null;
+}
+
 /**
  * Turn two consecutive status polls into what the page shows. Transitions come from diffing
  * polls, so a ticket that lands keeps its builder row for one poll while its packet travels.
@@ -860,19 +974,16 @@ export function derive(
   raw: Feed,
   now: number,
   events: DashboardEvent[] = [],
+  reviewWatch = previousReview(prev),
 ): View {
   const next = settle(raw);
   const tasks = next.tasks;
   const earlier = settle(prev ?? raw).tasks;
   const before = new Map(earlier.map((t) => [t.id, t.status]));
-  // A review record that disappears without a landing is a rejection. The feed's own "blocked"
-  // lasts about 2 s, shorter than a poll, so the status alone misses it.
-  const reviewed = new Set(
-    earlier.filter((t) => t.evidence?.review).map((t) => t.id),
-  );
-  const rejected = tasks.find(
-    (t) => t.status !== "accepted" && !t.evidence?.review && reviewed.has(t.id),
-  )?.id;
+  const review = next.fresh
+    ? trackReview(reviewWatch, tasks, events)
+    : { watch: null, release: null };
+  const { release } = review;
   const became = (status: Status) =>
     tasks.find(
       (t) =>
@@ -898,7 +1009,11 @@ export function derive(
       tasks.length - QUEUE_DOTS,
     ),
   );
-  const landing = became("accepted");
+  const accepted = became("accepted");
+  const landing = hasLanded(earlier.find((task) => task.id === accepted))
+    ? undefined
+    : accepted;
+  const landedTask = tasks.find((t) => t.id === landing);
   const label = nextLabel(pending[0], tasks.length);
   // A blocked ticket that resumes was handed back by the foreman, same as a first brief.
   const started = tasks.find(
@@ -909,12 +1024,14 @@ export function derive(
         (prior) => prior.id === t.id && prior.stage === "disconnected",
       ),
   )?.id;
-  const blocked = rejected ?? became("blocked");
+  const blocked =
+    release?.outcome === "failed" ? release.id : became("blocked");
   const stages = next.pipelineSteps ?? pipelineSteps;
   const tickets = tasks.map((task) => ticket(task, stages));
   const count = counts(tasks);
   return {
     state: !next.fresh ? "stale" : next.enabled ? "live" : "paused",
+    sample: next.sample === true,
     automations: next.automations ?? [],
     project: next.project.toUpperCase(),
     target: cut(next.target, 24),
@@ -937,18 +1054,9 @@ export function derive(
     })),
     head: main[0]?.revision?.slice(0, 7) ?? "nothing landed yet",
     next: label,
-    reviewing: next.fresh && pending[0]?.evidence?.review?.pending === true,
-    reviewFinished:
-      next.fresh &&
-      earlier.some(
-        (task) =>
-          task.evidence?.review?.pending &&
-          (task.id === landing || task.id === rejected),
-      )
-        ? landing
-          ? "passed"
-          : "failed"
-        : null,
+    reviewing: next.fresh && tasks.some(activeReview),
+    reviewFinished: release?.outcome ?? null,
+    reviewWatch: review.watch,
     waiting: idle[0] ? `${idle[0].id} · idle` : "",
     slots: idle.length,
     builders: pad(rows, ROWS).map(cell),
@@ -974,7 +1082,7 @@ export function derive(
     ),
     startRow: rowOf(started),
     landed: !!landing,
-    reviewed: !!tasks.find((t) => t.id === landing)?.evidence?.review,
+    reviewed: !!landedTask?.evidence?.review,
     outRow: rowOf(landing),
     backRow: rowOf(blocked),
   };

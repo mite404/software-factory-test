@@ -1785,6 +1785,10 @@ Invalid storage returns HTTP 503 with `durable: "invalid"`; exhausted lock waits
 missing or no longer matches its digest. Content, paths and producing tools are never served.
 A missing or malformed ticket, or any other query parameter, returns HTTP 400; an unknown ticket
 returns 404. No request value names a file. Storage failures follow the event trace's 503 rules.
+Choose a ticket in the workbench and open **Inspect evidence** with Enter, Space or a click.
+The panel reads only this ticket's curated metadata. Close and reopen it to refresh. A recorded
+outcome does not mean its artifact is still preserved. Missing acceptance or review proof is not
+a pass. The replay serves illustrative evidence; `?demo` has no recorded evidence.
 
 The bottom **Event log** bar opens upward with a click, Enter, or Space. Escape closes it and
 returns focus to the bar. The list shows time, ticket, action, attempt, and available thread links.
@@ -1803,6 +1807,13 @@ red packet back to its builder, and a queued one that starts work gets a brief f
 layer through the hand-off. The dashed lane from the return loop up to the foreman is a
 placeholder that only the replay button animates. Stale observations stop all motion. Append
 `?demo` for labeled sample data.
+**Reduce motion** stops the workbench animations without stopping polling or hiding records.
+The workbench also honors the system reduced-motion setting and disables sample playback in
+either reduced-motion mode. A pending review disappearing does not establish a rejection;
+the release animation needs a recorded outcome for the pending attempt. It can match a rejection
+before or after the corresponding status change. A scheduled gate on a landed revision does not
+keep cold review pending. If the first status read fails, the workbench does not show queue counts;
+after a successful read, an outage keeps the last known state visible with an offline warning.
 The `replay` button reruns these animations for review without touching factory state. It also
 plays a cold review that returns fixes and a green and a red full gate; the feed reports none of
 those yet. Cold review runs before the merge and is skipped for small low-risk first attempts.

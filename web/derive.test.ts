@@ -458,9 +458,7 @@ test("a title equal to the ticket id is not printed a second time", () => {
   );
 });
 
-// Real sequence from backup-adoption-ticket1: "blocked" while its review is dispatched, then a
-// rejection whose own "blocked" falls between two polls.
-test("a pending review is never drawn blocked, and a vanished review is a rejection", () => {
+test("review release needs a recorded outcome for the pending attempt", () => {
   const working = feed(["accepted", "working"]);
   const dispatching = feed(["accepted", "blocked"]);
   dispatching.tasks[1]!.evidence = { review: { pending: true } };
@@ -476,14 +474,29 @@ test("a pending review is never drawn blocked, and a vanished review is a reject
   ).toBe(false);
 
   const first = derive(dispatching, working, NOW);
-  expect(first.backRow).toBe(1); // review gone, not landed
+  expect(first.backRow).toBe(0);
   expect(first.reviewing).toBe(false);
-  expect(first.reviewFinished).toBe("failed");
+  expect(first.reviewFinished).toBe(null);
   expect(derive(working, working, NOW).reviewFinished).toBe(null);
   expect(
     derive(dispatching, { ...working, fresh: false }, NOW).reviewFinished,
   ).toBe(null);
   dispatching.tasks[1]!.evidence = { review: { pending: true, attempt: 2 } };
+  const rejection = {
+    id: 1,
+    at: "2026-11-13T12:00:00Z",
+    ticket: "T2",
+    action: "rejected",
+    attempt: 2,
+    reason: "review-rejected",
+  } as const;
+  expect(derive(dispatching, working, NOW, [rejection]).reviewFinished).toBe(
+    "failed",
+  );
+  expect(
+    derive(dispatching, working, NOW, [{ ...rejection, attempt: 1 }])
+      .reviewFinished,
+  ).toBe(null);
   expect(derive(working, dispatching, NOW).next).toBe(
     "T2, WORKING · ATTEMPT 2",
   );
@@ -497,7 +510,7 @@ test("a pending review is never drawn blocked, and a vanished review is a reject
   const landed = feed(["accepted", "accepted"]);
   expect(derive(dispatching, landed, NOW).backRow).toBe(0);
   expect(derive(dispatching, landed, NOW).reviewing).toBe(false);
-  expect(derive(dispatching, landed, NOW).reviewFinished).toBe("passed");
+  expect(derive(dispatching, landed, NOW).reviewFinished).toBe(null);
   expect(derive(landed, landed, NOW).reviewFinished).toBe(null);
 });
 
@@ -508,7 +521,7 @@ test("the recorded replay draws a reviewed landing, rejections, a stopped review
   const polls = (hit: (view: (typeof views)[number]) => unknown) =>
     views.flatMap((view, n) => (hit(view) ? [n] : []));
   expect(polls((view) => view.landed && view.reviewed)).toEqual([6]);
-  expect(polls((view) => view.backRow)).toEqual([3, 9, 13, 14, 17, 21]);
+  expect(polls((view) => view.backRow)).toEqual([9, 13, 17, 21]);
   expect(
     [14, 15, 16, 17, 18].map((n) => views[n]!.tickets.at(-1)?.lifecycle),
   ).toEqual([
@@ -523,6 +536,11 @@ test("the recorded replay draws a reviewed landing, rejections, a stopped review
   expect(views[13]!.tickets.at(-1)?.stop?.href).toBe(
     "https://ampcode.com/threads/T-replay-review-2",
   );
+  expect(views[13]!.tickets.at(-1)?.review).toBe("Pending");
+  expect(views[13]).toMatchObject({
+    reviewing: false,
+    reviewWatch: { id: "v1-ticket2", attempt: 2 },
+  });
   expect(views[14]!.tickets.at(-1)?.parked).toBe(true);
   expect(feedAt(13).tasks.at(-1)?.rejections).toEqual([
     { attempt: 1, thread: "T-replay-review-1" },
@@ -555,6 +573,107 @@ test("the recorded replay draws a reviewed landing, rejections, a stopped review
   expect(eventsAt(100, 10)).toEqual([]);
 });
 
+test("a recorded review pass releases only on durable landing and never repeats", () => {
+  const pending = feedAt(2);
+  const review = pending.tasks.at(-1)!;
+  const replace = (fields: Partial<FeedTask>): Feed => ({
+    ...pending,
+    tasks: [...pending.tasks.slice(0, -1), { ...review, ...fields }],
+  });
+  const decision = { attempt: 5, outcome: "pass" } as const;
+  const passed = replace({ reviewDecision: decision });
+  const verdict = derive(pending, passed, NOW);
+  expect(verdict.tickets.at(-1)?.review).toBe("Recorded pass");
+  expect(verdict).toMatchObject({
+    reviewing: false,
+    reviewFinished: null,
+    landed: false,
+    reviewWatch: { id: review.id, attempt: 5 },
+  });
+  const waiting = derive(passed, passed, NOW, [], verdict.reviewWatch);
+  expect(waiting.reviewWatch).toEqual(verdict.reviewWatch);
+  expect(waiting.reviewFinished).toBe(null);
+
+  const revision = "a".repeat(40);
+  const gate = replace({
+    stage: "gating",
+    activity: null,
+    fullGate: {
+      status: "pending",
+      landedRevision: revision,
+      verifiedRevision: null,
+    },
+    reviewDecision: decision,
+  });
+  for (const stage of ["accepted", "merged"] as const) {
+    const landed = replace({ stage, activity: null, reviewDecision: decision });
+    for (const landedFirst of [gate, landed]) {
+      const release = derive(passed, landedFirst, NOW, [], waiting.reviewWatch);
+      expect(release).toMatchObject({
+        reviewing: false,
+        reviewFinished: "passed",
+        reviewWatch: null,
+      });
+      expect(
+        derive(landedFirst, landed, NOW, [], release.reviewWatch),
+      ).toMatchObject({
+        reviewFinished: null,
+        landed: false,
+      });
+    }
+  }
+});
+
+test("a review rejection joins status and event in either order, once and for the same attempt", () => {
+  const pending = feedAt(2);
+  const review = pending.tasks.at(-1)!;
+  const repair = {
+    ...pending,
+    tasks: [
+      ...pending.tasks.slice(0, -1),
+      {
+        ...review,
+        stage: "building",
+        attempt: 6,
+        evidence: { review: null },
+      },
+    ],
+  } satisfies Feed;
+  const event = {
+    id: 1,
+    at: new Date(NOW).toISOString(),
+    ticket: review.id,
+    action: "rejected",
+    attempt: 5,
+    reason: "review-rejected",
+  } as const;
+  const early = derive(pending, pending, NOW, [event]);
+  expect(early.reviewFinished).toBe(null);
+  const released = derive(pending, repair, NOW, [], early.reviewWatch);
+  expect(released.reviewFinished).toBe("failed");
+  const statusFirst = derive(pending, repair, NOW, [{ ...event, attempt: 4 }]);
+  expect(statusFirst.reviewFinished).toBe(null);
+  const late = derive(repair, repair, NOW, [event], statusFirst.reviewWatch);
+  expect(late.reviewFinished).toBe("failed");
+  expect(derive(repair, repair, NOW, [], late.reviewWatch).reviewFinished).toBe(
+    null,
+  );
+  const escalated = {
+    ...repair,
+    tasks: [
+      ...repair.tasks.slice(0, -1),
+      {
+        ...repair.tasks.at(-1)!,
+        stage: "escalated",
+        activity: null,
+        attempt: 5,
+        reviewDecision: { attempt: 5, outcome: "issues" },
+      },
+    ],
+  } satisfies Feed;
+  expect(derive(pending, escalated, NOW).reviewFinished).toBe("failed");
+});
+
 test("the kit device gets every ticket and only notifies from recorded events", () => {
   const before = feed(["accepted", "idle", "queued", "working"]);
   const after = feed(["accepted", "accepted", "working", "blocked"]);
@@ -565,7 +684,8 @@ test("the kit device gets every ticket and only notifies from recorded events", 
     id: "T2",
     title: "ticket 2",
     revision: "2222222",
-    review: "none",
+    review: "No recorded review",
+    acceptance: "No recorded acceptance proof",
     steps: Array(7).fill("done"),
   });
   expect(view.news).toEqual([]);

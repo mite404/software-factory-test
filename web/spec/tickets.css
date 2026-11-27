@@ -21,14 +21,26 @@
   overflow: auto;
 }
 
-:root[data-theme="spec"][data-kit] #play {
-  position: absolute;
-  top: calc(20px + var(--u) * 20);
-}
-
 #kit-stage {
   position: relative;
   flex: none;
+}
+
+.ticket-evidence {
+  grid-column: 1 / -1;
+  min-width: 0;
+  border: 1px solid var(--edge);
+  padding: 10px 14px;
+  overflow-wrap: anywhere;
+}
+
+.ticket-evidence summary {
+  cursor: pointer;
+  width: fit-content;
+}
+
+.ticket-evidence li + li {
+  margin-block-start: 12px;
 }
 
 /* The SVG is cropped under its return wire; mount() in tickets.tsx sets the aspect ratio to match. */
@@ -82,6 +94,9 @@
   left: 0;
   line-height: 1.5;
   translate: 0 4px;
+  max-width: min(300px, 70vw);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 #kit [data-kit="tooltip-legend"]:not(#_):not(#_) {
@@ -308,10 +323,11 @@
 
 #kit [data-dash-detail] {
   padding-top: 0;
+  overflow-wrap: anywhere;
 }
 
-#kit [data-dash-detail] strong {
-  overflow-wrap: anywhere;
+#kit [data-dash-detail] [data-status] {
+  white-space: normal;
 }
 
 #kit [data-dash-detail] p {
@@ -418,6 +434,10 @@
 
 #kit [data-size="lg"] > [data-kit="lcd-body"] {
   font-size: 11px;
+}
+
+#kit [data-kit="lcd-tag"] {
+  overflow-wrap: anywhere;
 }
 
 #kit [data-kit="lcd"] dl {
@@ -892,6 +912,7 @@
     grid-column: 1 / -1;
     grid-row: 1;
     font-weight: 600;
+    overflow-wrap: anywhere;
   }
   .event-log time {
     grid-column: 1;

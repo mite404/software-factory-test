@@ -37,6 +37,14 @@ const builders = all(".builder");
 const slots = all(".slot");
 const dots = all(".landed");
 const paintKit = mount(stage);
+const motion = document.querySelector<HTMLInputElement>("#reduce-motion")!;
+const replay = document.querySelector<HTMLButtonElement>("#play")!;
+const systemMotion = matchMedia("(prefers-reduced-motion: reduce)");
+const replayTimers: ReturnType<typeof setTimeout>[] = [];
+let manualReduced = false;
+let lastView: View | null = null;
+let reviewWatch: View["reviewWatch"] = null;
+const unread = document.querySelector<HTMLElement>("#status-unread")!;
 
 const DEMO_STEPS = [
   ["add steps to queue entry", "pass steps through feed", "render step chips"],
@@ -65,6 +73,7 @@ function demoFeed(tick: number): Feed {
   ] as const;
   return {
     project: "sample data, not a running factory",
+    sample: true,
     target: "main",
     observedAt: new Date().toISOString(),
     enabled: true,
@@ -100,6 +109,29 @@ function cycle(element: Element, name: string, ms: number) {
   setTimeout(() => element.classList.remove(name), ms);
 }
 
+function stopMotion() {
+  replayTimers.splice(0).forEach((timer) => clearTimeout(timer));
+  stage.classList.remove(
+    "landing",
+    "review-passed",
+    "review-failed",
+    "reporting",
+    "reviewing",
+    "passing",
+    "gating",
+  );
+  stage.querySelectorAll(".go").forEach((el) => el.classList.remove("go"));
+}
+
+function syncMotion() {
+  const reduced = systemMotion.matches || manualReduced;
+  motion.checked = reduced;
+  motion.disabled = systemMotion.matches;
+  replay.disabled = reduced;
+  document.documentElement.toggleAttribute("data-reduce-motion", reduced);
+  if (reduced) stopMotion();
+}
+
 // A landing without a recorded cold review runs straight along the gate-to-main wire.
 function land(reviewed: boolean) {
   stage.classList.toggle("direct", !reviewed);
@@ -116,7 +148,11 @@ function paintBuilders(view: View) {
   builders.forEach((row, i) => {
     const cell = view.builders[i]!;
     row.dataset.status = cell.status;
-    write(row, ".id", cell.id);
+    write(
+      row,
+      ".id",
+      cell.id.length > 30 ? `${cell.id.slice(0, 29)}…` : cell.id,
+    );
     row.dataset.tip = cell.label;
     link(one(".card", row), cell.href);
   });
@@ -143,7 +179,22 @@ function animate(view: View) {
     if (row) cycle(one(`.${kind}.r${row}`), "go", ms);
 }
 
+function paintMotion(view: View) {
+  if (["stale", "offline"].includes(view.state)) {
+    stopMotion();
+    return;
+  }
+  if (replay.disabled) return;
+  if (view.reviewFinished)
+    cycle(stage, `review-${view.reviewFinished}`, RETURN_MS + 240);
+  else animate(view);
+}
+
 function render(view: View, events: DashboardEvent[], eventStatus: string) {
+  lastView = view;
+  reviewWatch = view.reviewWatch;
+  stage.removeAttribute("hidden");
+  unread.hidden = true;
   stage.dataset.state = view.state;
   stage.toggleAttribute("data-reviewing", view.reviewing);
   write(document, "#state", DEMO ? "DEMO" : view.state.toUpperCase());
@@ -157,9 +208,7 @@ function render(view: View, events: DashboardEvent[], eventStatus: string) {
   paintBuilders(view);
   paintMain(view);
   paintKit(view, eventRows(events), eventStatus);
-  if (view.reviewFinished)
-    cycle(stage, `review-${view.reviewFinished}`, RETURN_MS + 240);
-  else animate(view);
+  paintMotion(view);
 }
 
 let previous: Feed | null = null;
@@ -192,6 +241,32 @@ async function pollEvents() {
   return { received: batch.news, status };
 }
 
+function eventStatus(feed: Feed, status: string) {
+  return feed.sample && status === "available"
+    ? "Illustrative event rows · not live"
+    : status;
+}
+
+function renderOffline() {
+  const message = "Status service unreachable.";
+  if (!lastView) {
+    unread.textContent = `${message} No status has been received.`;
+    return;
+  }
+  render(
+    {
+      ...lastView,
+      state: "offline",
+      observed: `${message} Showing last known state.`,
+      reviewing: false,
+      reviewWatch: null,
+      news: [],
+    },
+    events,
+    "Status service unreachable · retained rows",
+  );
+}
+
 async function poll() {
   try {
     // Feed validated by factory/dashboard.ts before it is served.
@@ -200,16 +275,14 @@ async function poll() {
       ? { received: [], status: "Sample data has no recorded events" }
       : await pollEvents();
     render(
-      derive(previous, feed, Date.now(), log.received),
+      derive(previous, feed, Date.now(), log.received, reviewWatch),
       events,
-      log.status,
+      eventStatus(feed, log.status),
     );
     previous = feed;
   } catch {
-    stage.dataset.state = "offline";
-    stage.removeAttribute("data-reviewing");
-    write(document, "#state", "OFFLINE");
-    write(document, "#observed", "status service unreachable");
+    renderOffline();
+    previous = null;
   } finally {
     setTimeout(() => void poll(), POLL_MS);
   }
@@ -229,7 +302,15 @@ function scatter(event: Event) {
 }
 one(".mist").addEventListener("animationstart", scatter);
 
-one("#play").addEventListener("click", () => {
+motion.addEventListener("change", () => {
+  manualReduced = motion.checked;
+  syncMotion();
+});
+systemMotion.addEventListener("change", syncMotion);
+syncMotion();
+
+replay.addEventListener("click", () => {
+  stopMotion();
   const steps = [
     [one(".brief.r1"), "go", BRIEF_MS],
     [stage, "landing", LANDING_MS], // through cold review
@@ -240,10 +321,12 @@ one("#play").addEventListener("click", () => {
     [stage, "gating", GATE_MS],
   ] as const;
   stage.classList.remove("direct");
-  setTimeout(() => cycle(one(".out.r1"), "go", LANDING_MS), BRIEF_MS);
+  replayTimers.push(
+    setTimeout(() => cycle(one(".out.r1"), "go", LANDING_MS), BRIEF_MS),
+  );
   let at = 0;
   for (const [element, name, ms] of steps) {
-    setTimeout(() => cycle(element, name, ms), at);
+    replayTimers.push(setTimeout(() => cycle(element, name, ms), at));
     at += ms;
   }
 });
