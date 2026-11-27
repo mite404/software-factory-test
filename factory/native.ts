@@ -7,7 +7,13 @@ import type {
 } from "@ampcode/plugin";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, constants, existsSync, readFileSync } from "node:fs";
+import {
+  appendFileSync,
+  constants,
+  existsSync,
+  lstatSync,
+  readFileSync,
+} from "node:fs";
 import {
   lstat,
   mkdir,
@@ -67,6 +73,9 @@ import {
   evidenceContent,
   factoryDefinition,
   openPersistence,
+  recordExistingFactoryEvent,
+  hasRestoreHold,
+  initializedStateFile,
   taskSteps,
   taskLessonScope,
   ticketIntake,
@@ -2932,6 +2941,39 @@ export function createFactory(
   const watched = new Set<ThreadID>();
   let pending = Promise.resolve<unknown>(undefined);
 
+  async function assertOperational(inspecting = false) {
+    const restored = hasRestoreHold(directory);
+    if (
+      !existsSync(join(directory, "state.sqlite")) &&
+      (restored ||
+        lstatSync(join(directory, initializedStateFile), {
+          throwIfNoEntry: false,
+        }) ||
+        (await configuration(root)).backup)
+    )
+      throw new Error(
+        "Expected factory state is missing; use --restore or explicitly --initialize a new project",
+      );
+    if (inspecting || !restored) return;
+    const worktrees = new Set(
+      git(root, "worktree", "list", "--porcelain", "-z").split("\0"),
+    );
+    const missing = Object.values(factoryStatus(directory).runs).some((run) => {
+      const checkpoint = runCheckpoint(run) ?? run;
+      const paths = [
+        "worktree" in checkpoint ? checkpoint.worktree : undefined,
+        "review" in checkpoint ? checkpoint.review?.worktree : undefined,
+      ];
+      return paths.some(
+        (path) =>
+          path && (!worktrees.has(`worktree ${path}`) || !existsSync(path)),
+      );
+    });
+    throw new Error(
+      `Restored factory requires ownership reconciliation before execution; ${missing ? "missing worktree or checkout; " : ""}retained owners and uncertain actions are unchanged`,
+    );
+  }
+
   async function permitsHook(owner: ThreadID, hook: NativeHook) {
     if (!host.requireExecution) return false;
     try {
@@ -2945,6 +2987,7 @@ export function createFactory(
 
   async function runNativeHook(id: string, owner: ThreadID) {
     if (!factoryDefinition(directory)?.hooks?.length) return;
+    await assertOperational();
     const store = openStore(join(directory, "bookkeeping"));
     try {
       await store.init();
@@ -2984,13 +3027,13 @@ export function createFactory(
     return result;
   }
 
-  async function event(ticket: string, action: string, detail: string) {
-    const persistence = openPersistence(directory, [], now);
-    try {
-      persistence.event(ticket, action, detail);
-    } finally {
-      persistence.close();
-    }
+  function event(ticket: string, action: string, detail: string) {
+    recordExistingFactoryEvent(directory, {
+      at: new Date(now()).toISOString(),
+      ticket,
+      action,
+      detail,
+    });
   }
 
   async function prompt(
@@ -3668,23 +3711,23 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
           event("factory", "error", String(error)),
         );
       };
-      const watch = async (thread: ThreadID) => {
+      const watch = (thread: ThreadID) => {
         if (watched.has(thread)) return;
         try {
           host.watch(thread, wake);
           watched.add(thread);
         } catch (error) {
-          await event("factory", "observation-unavailable", String(error));
+          event("factory", "observation-unavailable", String(error));
         }
       };
-      async function watchRunning() {
+      function watchRunning() {
         for (const run of Object.values(state.runs))
           if (run.kind === "running") {
-            await watch(run.thread);
-            if (run.review?.thread) await watch(run.review.thread);
+            watch(run.thread);
+            if (run.review?.thread) watch(run.review.thread);
           }
       }
-      await watchRunning();
+      watchRunning();
       // The Foreman's decision that no thread exists is the only license to repeat a creation.
       async function retryCreate() {
         const request = repairRequest ?? {
@@ -3849,7 +3892,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         delete run.incident;
         state.runs[task.id] = run;
         commit(task.id, "sent", run.thread);
-        await watch(run.thread);
+        watch(run.thread);
         await deliverWorkerLessons(persistence!, task);
         return true;
       }
@@ -4357,7 +4400,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         recordChild(state, review.thread, task.id, "reviewer");
         review.delivery = "queued";
         commit(task.id, "review-created", JSON.stringify(review));
-        await watch(review.thread);
+        watch(review.thread);
         await deliverReview(task, run);
       }
 
@@ -4876,7 +4919,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
         state.runs[task.id] = run;
         recordChild(state, thread, task.id, "worker");
         commit(task.id, "created", thread);
-        await watch(thread);
+        watch(thread);
         await send(task, run, await prompt(task, run, config));
         return state;
       }
@@ -5402,6 +5445,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
     const initial = factoryStatus(directory);
     assertControlCaller(initial, owner, action);
     if (action !== "handoff") assertOwner(initial, owner);
+    await assertOperational();
     const store = openStore(join(directory, "bookkeeping"));
     try {
       await store.init();
@@ -6103,6 +6147,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
     // Status reads the committed snapshot without queueing behind a running gate or reconcile.
     if (action === "status")
       return (async () => {
+        await assertOperational(true);
         assertWatchdogCaller(
           factoryStatus(directory),
           action,
@@ -6115,6 +6160,7 @@ Work only in your worktree ${run.worktree}. Ticket ${task.id}: ${task.brief}\nAl
     const result = pending
       .catch(() => {})
       .then(async () => {
+        await assertOperational();
         tools = currentTools(tools);
         const initial = factoryStatus(directory);
         assertControlCaller(initial, owner, action);

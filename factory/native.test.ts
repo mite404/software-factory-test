@@ -246,6 +246,31 @@ afterEach(async () => {
     await rm(root, { recursive: true, force: true });
 });
 
+test("a rejected worker wake does not recreate missing backed-up state", async () => {
+  const f = await preparationFixture(() => "true; ");
+  const engine = f.factory();
+  let wake: (() => void) | undefined;
+  f.host.watch = (thread, callback) => {
+    if (thread === "T-prepared") wake = callback;
+  };
+  await engine.tick("start");
+  await engine.tick("reconcile");
+  expect(wake).toBeDefined();
+  const config = join(f.root, ".factory.json");
+  await writeFile(
+    config,
+    JSON.stringify({
+      ...(await Bun.file(config).json()),
+      backup: { repository: "owner/memory", projectKey: "wake" },
+    }),
+  );
+  const statePath = join(engine.directory, "state.sqlite");
+  await rename(statePath, `${statePath}.saved`);
+  wake!();
+  await engine.tick("reconcile").catch(() => {});
+  expect(await Bun.file(statePath).exists()).toBe(false);
+});
+
 async function markerFixture(
   timeoutMs: number,
   requireExecution: () => Promise<void>,
@@ -6444,6 +6469,7 @@ test("reload pins future definitions while active checks, scope and instructions
     messages.push(message);
   };
   const first = f.factory();
+  openPersistence(first.directory, []).close();
   const started = await first.tick("start", "T-owner");
   const pin = started.runs.A?.definition;
   expect(pin).toBe(original.digest);

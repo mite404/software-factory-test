@@ -2837,6 +2837,13 @@ test("plugin and HTTP keep private briefs and native titles out of public titles
       thread: null,
     });
     expect(admitted.enabled).toBe(false);
+    await writeFile(join(directory, "restore-pending.json"), "{}");
+    expect(
+      await execute(contact, worker).catch((error: unknown) => error),
+    ).toMatchObject({
+      message: expect.stringMatching(/ownership reconciliation/i),
+    });
+    expect(forwarded).toHaveLength(1);
   } finally {
     dispose();
     await server?.stop(true);
